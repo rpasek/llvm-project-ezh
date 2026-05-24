@@ -1,0 +1,953 @@
+
+================================================================================
+=== EZH COMPREHENSIVE DEBUGGER VERIFICATION SUITE (PURE INTERACTIVE)         ===
+================================================================================
+
+=== Building target binaries ===
+settings set use-color false
+settings set use-color false
+(lldb) target create "out/ezh_debug_test.elf"
+
+=== PHASE 1: Reset & Ignition Verification (stepi vs continue) ===
+
+process connect -p ezh-remote connect://localhost:3333
+Current executable set to '/usr/local/google/home/rpasek/smartdma-llvm/llvm-project/ezh/debug_test/out/ezh_debug_test.elf' (ezh).
+(lldb) (lldb) process connect -p ezh-remote connect://localhost:3333
+warning: the debug server supports Target Description XML but LLDB does not have XML parsing enabled. Using "qRegisterInfo" was also not possible. Register information may be incorrect or missing
+(lldb) Process 1 stopped
+* thread #1, stop reason = trace
+       frame #0: 0x00000000 
+->  0x0: add_lsl r3, r0, r0, 0
+    0x4: mov    r0, r0
+    0x8: mov    r0, r6
+    0xc: <unknown> 
+memory write -s 4 0x40027024 0xC0DE0000
+memory write -s 4 0x40027024 0xC0DE0000
+(lldb) expr *(volatile int *)0x40000010 |= (1 << 30)
+expr *(volatile int *)0x40000010 |= (1 << 30)
+(volatile int) $0 = 2097152264
+(lldb) expr *(volatile int *)0x40000010 &= ~(1 << 30)
+expr *(volatile int *)0x40000010 &= ~(1 << 30)
+(volatile int) $1 = 1023410440
+(lldb) target modules load --load --file ezh_debug_test.elf --slide 0
+target modules load --load --file ezh_debug_test.elf --slide 0
+(lldb) expr exc_signal = 0
+expr exc_signal = 0
+(volatile int) $2 = 0
+(lldb) memory write -s 4 0x40027048 0x00000080
+memory write -s 4 0x40027048 0x00000080
+(lldb) memory write -s 4 0x40027024 0xC0DE0010
+memory write -s 4 0x40027024 0xC0DE0010
+(lldb) 
+[Test 1A: Cold-Stepping Safety Protection]
+si
+si
+Cannot step, stepi, next or finish a non running core (Start = 0) because the stack pointer (SP) has not been initialized yet. Please set a breakpoint after stack initialization and use 'continue' to start the core.
+(lldb) --> [PASS] Stepping from reset correctly blocked with safety message!
+
+[Test 1B: Target Ignition via Breakpoint Continue]
+b test_1b_1c_ignition_and_corruption
+b test_1b_1c_ignition_and_corruption
+Breakpoint 1: where = ezh_debug_test.elf`test_1b_1c_ignition_and_corruption + 28 at ezh_debug_test.c:51:3, address = 0x001005f0
+(lldb) continue
+continue
+Process 1 resuming
+(lldb) Process 1 stopped
+* thread #1, stop reason = breakpoint 1.1
+       frame #0: 0x001005f0 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+breakpoint disable
+breakpoint disable
+All breakpoints disabled. (1 breakpoints)
+(lldb) --> [PASS] Halted target ignited successfully via continue!
+
+[Test 1C: Step Over Register Immediate Loads]
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001005f0, inst=0x01140000 -> Predicted next_pc=0x001005f4 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x001005f4 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001005f4, inst=0x02240400 -> Predicted next_pc=0x001005f8 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x001005f8 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001005f8, inst=0x03340800 -> Predicted next_pc=0x001005fc (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x001005fc ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001005fc, inst=0x04440c00 -> Predicted next_pc=0x00100600 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x00100600 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100600, inst=0x05541000 -> Predicted next_pc=0x00100604 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x00100604 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100604, inst=0x06641400 -> Predicted next_pc=0x00100608 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x00100608 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100608, inst=0x07741800 -> Predicted next_pc=0x0010060c (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x0010060c ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x0010060c, inst=0x09942000 -> Predicted next_pc=0x00100610 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x00100610 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100610, inst=0x0aa42400 -> Predicted next_pc=0x00100614 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x00100614 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+register read r0 r1 r2 r3 r4 r5 r6 gpo gpd
+register read r0 r1 r2 r3 r4 r5 r6 gpo gpd
+      r0 = 0x00000011
+      r1 = 0x00000022
+      r2 = 0x00000033
+      r3 = 0x00000044
+      r4 = 0x00000055
+      r5 = 0x00000066
+      r6 = 0x00000077
+     gpo = 0x00000099
+     gpd = 0x000000aa
+(lldb) --> [PASS] Register modification tracking via stepi & register read successful!
+
+=== PHASE 3: Subroutine Flow Control (step, next, finish) ===
+
+b test_3_subroutine_step
+b test_3_subroutine_step
+Breakpoint 2: where = ezh_debug_test.elf`test_3_subroutine_step + 16 at ezh_debug_test.c:34:3, address = 0x00100780
+continue
+(lldb) continue
+Process 1 resuming
+(lldb) Process 1 stopped
+* thread #1, stop reason = breakpoint 2.1
+       frame #0: 0x00100780 ezh_debug_test.elf`test_3_subroutine_step at ezh_debug_test.c:34:3
+   31  	// [Phase 3 - Step 1: step over function-entry synchronization NOPs to
+   32  	// exc_signal line]
+   33  	static __attribute__((noinline, optnone)) void test_3_subroutine_step() {
+-> 34  	  __asm__ volatile("nop\n\t"
+    	  ^
+   35  	                   "nop\n\t");
+   36  	  // [Phase 3 - Step 2: step over exc_signal line to
+   37  	  // test_3_subroutine_step_target() call line]
+breakpoint disable
+breakpoint disable
+All breakpoints disabled. (2 breakpoints)
+(lldb) step
+step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100780, inst=0x00000012 -> Predicted next_pc=0x00100784 (sp_init=0x001012b4, rn_wb=0, rn_val=0x00000000)
+(lldb) [ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100784, inst=0x00000012 -> Predicted next_pc=0x00100788 (sp_init=0x001012b4, rn_wb=0, rn_val=0x00000000)
+Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x00100788 ezh_debug_test.elf`test_3_subroutine_step at ezh_debug_test.c:38:14
+   35  	                   "nop\n\t");
+   36  	  // [Phase 3 - Step 2: step over exc_signal line to
+   37  	  // test_3_subroutine_step_target() call line]
+-> 38  	  exc_signal = 0x88888888; // First subroutine entry signature
+    	             ^
+   39  	  test_3_subroutine_step_target();
+   40  	}
+   41  	
+step
+step
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x00100794 ezh_debug_test.elf`test_3_subroutine_step at ezh_debug_test.c:39:3
+   36  	  // [Phase 3 - Step 2: step over exc_signal line to
+   37  	  // test_3_subroutine_step_target() call line]
+   38  	  exc_signal = 0x88888888; // First subroutine entry signature
+-> 39  	  test_3_subroutine_step_target();
+    	  ^
+   40  	}
+   41  	
+   42  	// =============================================================================
+print/x exc_signal
+print/x exc_signal
+(volatile int) 0x88888888
+--> [PASS] C-level stepping over assignment correctly updated exc_signal to 0x88888888!
+step
+(lldb) step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100794, inst=0x200187d5 -> Predicted next_pc=0x00100798 (sp_init=0x001012b4, rn_wb=0, rn_val=0x00000000)
+(lldb) [ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100798, inst=0x001007b3 -> Predicted next_pc=0x001007b0 (sp_init=0x001012b4, rn_wb=0, rn_val=0x00000000)
+Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x001007b0 ezh_debug_test.elf`test_3_subroutine_step_target at ezh_debug_test.c:27
+   24  	
+   25  	// [Phase 3 - Step 3: step over test_3_subroutine_step_target() call line
+   26  	// directly into subroutine!]
+-> 27  	static __attribute__((noinline, optnone)) void test_3_subroutine_step_target() {
+   28  	  exc_signal = 0x99999999; // Second breakpoint target signature!
+   29  	}
+   30  	
+step
+step
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x001007c0 ezh_debug_test.elf`test_3_subroutine_step_target at ezh_debug_test.c:28:14
+   25  	// [Phase 3 - Step 3: step over test_3_subroutine_step_target() call line
+   26  	// directly into subroutine!]
+   27  	static __attribute__((noinline, optnone)) void test_3_subroutine_step_target() {
+-> 28  	  exc_signal = 0x99999999; // Second breakpoint target signature!
+    	             ^
+   29  	}
+   30  	
+   31  	// [Phase 3 - Step 1: step over function-entry synchronization NOPs to
+step
+step
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x001007cc ezh_debug_test.elf`test_3_subroutine_step_target at ezh_debug_test.c:29:1
+   26  	// directly into subroutine!]
+   27  	static __attribute__((noinline, optnone)) void test_3_subroutine_step_target() {
+   28  	  exc_signal = 0x99999999; // Second breakpoint target signature!
+-> 29  	}
+    	^
+   30  	
+   31  	// [Phase 3 - Step 1: step over function-entry synchronization NOPs to
+   32  	// exc_signal line]
+print/x exc_signal
+print/x exc_signal
+(volatile int) 0x99999999
+--> [PASS] Stepping inside subroutine correctly updated exc_signal to 0x99999999!
+finish
+(lldb) finish
+(lldb) Process 1 stopped
+* thread #1, stop reason = step out
+       frame #0: 0x0010079c ezh_debug_test.elf`test_3_subroutine_step at ezh_debug_test.c:40:1
+   37  	  // test_3_subroutine_step_target() call line]
+   38  	  exc_signal = 0x88888888; // First subroutine entry signature
+   39  	  test_3_subroutine_step_target();
+-> 40  	}
+    	^
+   41  	
+   42  	// =============================================================================
+   43  	// PHASE 1: Connecting, Resets, Ignition, and Register Tracking
+next
+next
+(lldb) Process 1 stopped
+* thread #1, stop reason = step over
+       frame #0: 0x001007a4 ezh_debug_test.elf`test_3_subroutine_step at ezh_debug_test.c:40:1
+   37  	  // test_3_subroutine_step_target() call line]
+   38  	  exc_signal = 0x88888888; // First subroutine entry signature
+   39  	  test_3_subroutine_step_target();
+-> 40  	}
+    	^
+   41  	
+   42  	// =============================================================================
+   43  	// PHASE 1: Connecting, Resets, Ignition, and Register Tracking
+
+=== PHASE 3B: Consecutive Stepping inside Clean C Conditional Branches ===
+
+b test_4_c_stepping
+b test_4_c_stepping
+Breakpoint 3: where = ezh_debug_test.elf`test_4_c_stepping + 16 at ezh_debug_test.c:206:3, address = 0x001007f0
+continue
+(lldb) continue
+Process 1 resuming
+(lldb) Process 1 stopped
+* thread #1, stop reason = breakpoint 3.1
+       frame #0: 0x001007f0 ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:206:3
+   203 	// =============================================================================
+   204 	
+   205 	static __attribute__((noinline, optnone)) void test_4_c_stepping() {
+-> 206 	  __asm__ volatile("nop\n\t"
+    	  ^
+   207 	                   "nop\n\t");
+   208 	  volatile int x = 1;
+   209 	
+breakpoint disable
+breakpoint disable
+All breakpoints disabled. (3 breakpoints)
+(lldb) step
+step
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x001007fc ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:208:16
+   205 	static __attribute__((noinline, optnone)) void test_4_c_stepping() {
+   206 	  __asm__ volatile("nop\n\t"
+   207 	                   "nop\n\t");
+-> 208 	  volatile int x = 1;
+    	               ^
+   209 	
+   210 	  if (x == 1) {
+   211 	    exc_signal = 0xaaaa0001; // Taken!
+step
+step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001007fc, inst=0x00140400 -> Predicted next_pc=0x00100800 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+(lldb) [ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100800, inst=0x00140002 -> Predicted next_pc=0x00100804 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x00100804 ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:210:7
+   207 	                   "nop\n\t");
+   208 	  volatile int x = 1;
+   209 	
+-> 210 	  if (x == 1) {
+    	      ^
+   211 	    exc_signal = 0xaaaa0001; // Taken!
+   212 	  } else {
+   213 	    exc_signal = 0xaaaa0002; // Not Taken!
+
+[Test 3B: Consecutive Stepping inside C Conditional Branches (6 times)]
+step
+step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100804, inst=0x00040001 -> Predicted next_pc=0x00100808 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+(lldb) [ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100808, inst=0x00140208 -> Predicted next_pc=0x0010080c (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x0010080c, inst=0x200187d5 -> Predicted next_pc=0x00100810 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100810, inst=0x20105255 -> Predicted next_pc=0x00100814 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x00100814 ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:211:16
+   208 	  volatile int x = 1;
+   209 	
+   210 	  if (x == 1) {
+-> 211 	    exc_signal = 0xaaaa0001; // Taken!
+    	               ^
+   212 	  } else {
+   213 	    exc_signal = 0xaaaa0002; // Not Taken!
+   214 	  }
+--> [PASS] Step 1/6 (ZE=1 Taken Branch into True block) successful!
+step
+step
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x00100820 ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:212:3
+   209 	
+   210 	  if (x == 1) {
+   211 	    exc_signal = 0xaaaa0001; // Taken!
+-> 212 	  } else {
+    	  ^
+   213 	    exc_signal = 0xaaaa0002; // Not Taken!
+   214 	  }
+   215 	
+print/x exc_signal
+--> [PASS] C-level conditional step correctly wrote exc_signal to 0xaaaa0001!
+step
+print/x exc_signal
+(volatile int) 0xaaaa0001
+(lldb) step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100820, inst=0x200187d5 -> Predicted next_pc=0x00100824 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+(lldb) [ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100824, inst=0x20106a15 -> Predicted next_pc=0x00100834 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100834, inst=0xff85c006 -> Predicted next_pc=0x00100838 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x00100838 ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:216:7
+   213 	    exc_signal = 0xaaaa0002; // Not Taken!
+   214 	  }
+   215 	
+-> 216 	  if (x == 2) {
+    	      ^
+   217 	    exc_signal = 0xaaaa0003; // Not Taken!
+   218 	  } else {
+   219 	    exc_signal = 0xaaaa0004; // Taken!
+--> [PASS] Step 2/6 (Exit Taken Block to next branch) successful!
+step
+step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100838, inst=0x00040001 -> Predicted next_pc=0x0010083c (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+(lldb) [ProcessEZH::DoResume] SINGLE_STEP: PC=0x0010083c, inst=0x00240208 -> Predicted next_pc=0x00100840 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100840, inst=0x200187d5 -> Predicted next_pc=0x00100844 (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100844, inst=0x2010ba55 -> Predicted next_pc=0x0010085c (sp_init=0x001012b0, rn_wb=0, rn_val=0x00000000)
+Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x0010085c ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:219:16
+   216 	  if (x == 2) {
+   217 	    exc_signal = 0xaaaa0003; // Not Taken!
+   218 	  } else {
+-> 219 	    exc_signal = 0xaaaa0004; // Taken!
+    	               ^
+   220 	  }
+   221 	}
+   222 	
+--> [PASS] Step 3/6 (ZE=0 Not Taken Branch into False block) successful!
+step
+step
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x00100868 ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:221:1
+   218 	  } else {
+   219 	    exc_signal = 0xaaaa0004; // Taken!
+   220 	  }
+-> 221 	}
+    	^
+   222 	
+   223 	// =============================================================================
+   224 	// PHASE 7: Breakpoint Stepping and Resuming Verification
+print/x exc_signal
+print/x exc_signal
+(volatile int) 0xaaaa0004
+--> [PASS] C-level conditional step correctly wrote exc_signal to 0xaaaa0004!
+--> [PASS] Step 4/6 (Exit False Block) successful!
+quit
+Y
+(lldb) quit
+Quitting LLDB will detach from one or more processes. Do you really want to proceed: [Y/n] Y
+--> [PASS] Subroutine Flow Control and C Conditional stepping Successful!
+
+=== PHASE 4: Asynchronous Interrupt (Ctrl-C) ===
+
+settings set use-color false
+settings set use-color false
+(lldb) target create "out/ezh_debug_test.elf"
+process connect -p ezh-remote connect://localhost:3333
+Current executable set to '/usr/local/google/home/rpasek/smartdma-llvm/llvm-project/ezh/debug_test/out/ezh_debug_test.elf' (ezh).
+(lldb) (lldb) process connect -p ezh-remote connect://localhost:3333
+expr *(volatile int *)0x40000010 |= (1 << 30)
+expr *(volatile int *)0x40000010 &= ~(1 << 30)
+warning: the debug server supports Target Description XML but LLDB does not have XML parsing enabled. Using "qRegisterInfo" was also not possible. Register information may be incorrect or missing
+expr *(volatile int *)0x40000010 |= (1 << 30)
+(lldb) expr *(volatile int *)0x40000010 &= ~(1 << 30)
+expr exc_signal = 0
+Process 1 stopped
+* thread #1, stop reason = trace
+       frame #0: 0x00100868 ezh_debug_test.elf`test_4_c_stepping at ezh_debug_test.c:221:1
+   218 	  } else {
+   219 	    exc_signal = 0xaaaa0004; // Taken!
+   220 	  }
+-> 221 	}
+    	^
+   222 	
+   223 	// =============================================================================
+   224 	// PHASE 7: Breakpoint Stepping and Resuming Verification
+expr exc_signal = 0
+(volatile int) $0 = 2097152264
+(lldb) target modules load --load --file ezh_debug_test.elf --slide 0
+(volatile int) $1 = 1023410440
+(lldb) (volatile int) $2 = 0
+(lldb) target modules load --load --file ezh_debug_test.elf --slide 0
+expr *(volatile int *)0x40027034 = (int)&debug_handler
+continue
+(lldb) expr *(volatile int *)0x40027034 = (int)&debug_handler
+                                                ˄
+                                                ╰─ error: use of undeclared identifier 'debug_handler'
+note: Expression evaluation in pure C not supported. Ran expression as 'ISO C++'.
+(lldb) continue
+Process 1 resuming
+(lldb) ^CProcess 1 stopped
+* thread #1, stop reason = trace
+       frame #0: 0x00100558 ezh_debug_test.elf`vector7 at crt0.c:887:1
+   884 	void __attribute__((weak)) vector6() {}
+   885 	void __attribute__((weak)) vector7() {
+   886 	    debug_call();
+-> 887 	}
+    	^
+   888 	
+   889 	void __attribute__((naked, section(".text.bitslice_interrupts"))) bitslice_handler() {
+   890 	    __asm__ volatile (
+
+[Test 4: Consecutive Stepping (5 times) inside bitslice_handler after Ctrl-C]
+step
+step
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x00100560 ezh_debug_test.elf`vector7 at crt0.c:887:1
+   884 	void __attribute__((weak)) vector6() {}
+   885 	void __attribute__((weak)) vector7() {
+   886 	    debug_call();
+-> 887 	}
+    	^
+   888 	
+   889 	void __attribute__((naked, section(".text.bitslice_interrupts"))) bitslice_handler() {
+   890 	    __asm__ volatile (
+--> [PASS] Step 1/5 inside bitslice_handler successful!
+step
+step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x00100560, inst=0x011f3401 -> Predicted next_pc=0x241002e8 (sp_init=0x001012a4, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x241002e8 ezh_debug_test.elf`bitslice_handler at crt0.c:890:5
+   887 	}
+   888 	
+   889 	void __attribute__((naked, section(".text.bitslice_interrupts"))) bitslice_handler() {
+-> 890 	    __asm__ volatile (
+    	    ^
+   891 	        ".cfi_startproc\n\t"
+   892 	        /* Save original RA (which is in RA because gotol saves PC to RA) */
+   893 	        /* Save original RA to stack offset -4 */
+--> [PASS] Step 2/5 inside bitslice_handler successful!
+step
+step
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x241002f4 ezh_debug_test.elf`bitslice_handler at crt0.c:890:5
+   887 	}
+   888 	
+   889 	void __attribute__((naked, section(".text.bitslice_interrupts"))) bitslice_handler() {
+-> 890 	    __asm__ volatile (
+    	    ^
+   891 	        ".cfi_startproc\n\t"
+   892 	        /* Save original RA (which is in RA because gotol saves PC to RA) */
+   893 	        /* Save original RA to stack offset -4 */
+--> [PASS] Step 3/5 inside bitslice_handler successful!
+step
+step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x241002f4, inst=0x20064a35 -> Predicted next_pc=0x241002f8 (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+(lldb) [ProcessEZH::DoResume] SINGLE_STEP: PC=0x241002f8, inst=0x00140208 -> Predicted next_pc=0x241002fc (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x241002fc, inst=0x20065a35 -> Predicted next_pc=0x24100300 (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x24100300, inst=0x00140208 -> Predicted next_pc=0x24100304 (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x24100304, inst=0x20066a35 -> Predicted next_pc=0x24100308 (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x24100308, inst=0x00240208 -> Predicted next_pc=0x2410030c (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x2410030c, inst=0x20067a35 -> Predicted next_pc=0x24100310 (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x24100310, inst=0x00140208 -> Predicted next_pc=0x24100314 (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x24100314, inst=0x20068a35 -> Predicted next_pc=0x24100344 (sp_init=0x001012ac, rn_wb=0, rn_val=0x00000000)
+Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x24100368 ezh_debug_test.elf`bitslice_handler at crt0.c:890:5
+   887 	}
+   888 	
+   889 	void __attribute__((naked, section(".text.bitslice_interrupts"))) bitslice_handler() {
+-> 890 	    __asm__ volatile (
+    	    ^
+   891 	        ".cfi_startproc\n\t"
+   892 	        /* Save original RA (which is in RA because gotol saves PC to RA) */
+   893 	        /* Save original RA to stack offset -4 */
+--> [PASS] Step 4/5 inside bitslice_handler successful!
+step
+step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x24100368, inst=0x0003f400 -> Predicted next_pc=0x001005a8 (sp_init=0x001012c0, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x001005a8 ezh_debug_test.elf`main at ezh_debug_test.c:241:5
+   238 	    counter++;
+   239 	    exc_signal = 0x11112222; // Loop running signature
+   240 	    test_1b_1c_ignition_and_corruption();
+-> 241 	    test_cond_branches();
+    	    ^
+   242 	    test_3_subroutine_step();
+   243 	    test_4_c_stepping();
+   244 	    test_7_breakpoint_stepping_and_resuming();
+--> [PASS] Step 5/5 inside bitslice_handler successful!
+quit
+Y
+quit
+Quitting LLDB will detach from one or more processes. Do you really want to proceed: [Y/n] Y
+--> [PASS] Ctrl-C consecutive stepping test completed!
+--> [PASS] Ctrl-C asynchronous halt successful!
+
+=== PHASE 5: Connecting to an already executing target ===
+
+settings set use-color false
+settings set use-color false
+(lldb) target create "out/ezh_debug_test.elf"
+process connect -p ezh-remote connect://localhost:3333
+Current executable set to '/usr/local/google/home/rpasek/smartdma-llvm/llvm-project/ezh/debug_test/out/ezh_debug_test.elf' (ezh).
+(lldb) (lldb) process connect -p ezh-remote connect://localhost:3333
+continue
+quit
+Y
+warning: the debug server supports Target Description XML but LLDB does not have XML parsing enabled. Using "qRegisterInfo" was also not possible. Register information may be incorrect or missing
+continue
+(lldb) Process 1 resuming
+(lldb) Process 1 stopped
+* thread #1, stop reason = trace
+       frame #0: 0x001005a8 ezh_debug_test.elf`main at ezh_debug_test.c:241:5
+   238 	    counter++;
+   239 	    exc_signal = 0x11112222; // Loop running signature
+   240 	    test_1b_1c_ignition_and_corruption();
+-> 241 	    test_cond_branches();
+    	    ^
+   242 	    test_3_subroutine_step();
+   243 	    test_4_c_stepping();
+   244 	    test_7_breakpoint_stepping_and_resuming();
+quit
+Quitting LLDB will detach from one or more processes. Do you really want to proceed: [Y/n] Y
+settings set use-color false
+settings set use-color false
+(lldb) target create "out/ezh_debug_test.elf"
+process connect -p ezh-remote connect://localhost:3333
+Current executable set to '/usr/local/google/home/rpasek/smartdma-llvm/llvm-project/ezh/debug_test/out/ezh_debug_test.elf' (ezh).
+(lldb) (lldb) process connect -p ezh-remote connect://localhost:3333
+warning: the debug server supports Target Description XML but LLDB does not have XML parsing enabled. Using "qRegisterInfo" was also not possible. Register information may be incorrect or missing
+(lldb) Process 1 stopped
+* thread #1, stop reason = trace
+       frame #0: 0x00100558 ezh_debug_test.elf`vector7 at crt0.c:887:1
+   884 	void __attribute__((weak)) vector6() {}
+   885 	void __attribute__((weak)) vector7() {
+   886 	    debug_call();
+-> 887 	}
+    	^
+   888 	
+   889 	void __attribute__((naked, section(".text.bitslice_interrupts"))) bitslice_handler() {
+   890 	    __asm__ volatile (
+register read pc
+register read pc
+      pc = 0x00100558  ezh_debug_test.elf`vector7 + 24 at crt0.c:887:1
+quit
+Y
+(lldb) quit
+Quitting LLDB will detach from one or more processes. Do you really want to proceed: [Y/n] Y
+--> [PASS] Re-connecting to executing target successful!
+
+
+=== PHASE 6: Breakpoint Capacity & Slot Exhaustion ===
+
+settings set use-color false
+settings set use-color false
+(lldb) target create "out/ezh_debug_test.elf"
+process connect -p ezh-remote connect://localhost:3333
+Current executable set to '/usr/local/google/home/rpasek/smartdma-llvm/llvm-project/ezh/debug_test/out/ezh_debug_test.elf' (ezh).
+(lldb) (lldb) process connect -p ezh-remote connect://localhost:3333
+warning: the debug server supports Target Description XML but LLDB does not have XML parsing enabled. Using "qRegisterInfo" was also not possible. Register information may be incorrect or missing
+(lldb) Process 1 stopped
+* thread #1, stop reason = trace
+       frame #0: 0x00100558 ezh_debug_test.elf`vector7 at crt0.c:887:1
+   884 	void __attribute__((weak)) vector6() {}
+   885 	void __attribute__((weak)) vector7() {
+   886 	    debug_call();
+-> 887 	}
+    	^
+   888 	
+   889 	void __attribute__((naked, section(".text.bitslice_interrupts"))) bitslice_handler() {
+   890 	    __asm__ volatile (
+memory write -s 4 0x40027024 0xC0DE0000
+memory write -s 4 0x40027024 0xC0DE0000
+(lldb) expr *(volatile int *)0x40000010 |= (1 << 30)
+expr *(volatile int *)0x40000010 |= (1 << 30)
+(volatile int) $0 = 2097152264
+(lldb) expr *(volatile int *)0x40000010 &= ~(1 << 30)
+expr *(volatile int *)0x40000010 &= ~(1 << 30)
+(volatile int) $1 = 1023410440
+(lldb) target modules load --load --file ezh_debug_test.elf --slide 0
+target modules load --load --file ezh_debug_test.elf --slide 0
+(lldb) expr exc_signal = 0
+expr exc_signal = 0
+(volatile int) $2 = 0
+(lldb) memory write -s 4 0x40027048 0x00000080
+memory write -s 4 0x40027048 0x00000080
+(lldb) memory write -s 4 0x40027024 0xC0DE0010
+memory write -s 4 0x40027024 0xC0DE0010
+(lldb) breakpoint set -n test_1b_1c_ignition_and_corruption
+breakpoint set -n test_1b_1c_ignition_and_corruption
+Breakpoint 1: where = ezh_debug_test.elf`test_1b_1c_ignition_and_corruption + 28 at ezh_debug_test.c:51:3, address = 0x001005f0
+continue
+(lldb) continue
+Process 1 resuming
+(lldb) Process 1 stopped
+* thread #1, stop reason = breakpoint 1.1
+       frame #0: 0x001005f0 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+breakpoint delete 1
+breakpoint delete 1
+1 breakpoints deleted; 0 breakpoint locations disabled.
+(lldb) si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001005f0, inst=0x01140000 -> Predicted next_pc=0x001005f4 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x001005f4 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+[Step 1: Setting 16 software breakpoints]
+breakpoint set -a 0x241007d0
+breakpoint set -a 0x241007d0
+Breakpoint 2: address = 0x241007d0
+breakpoint set -a 0x241007d4
+(lldb) breakpoint set -a 0x241007d4
+Breakpoint 3: address = 0x241007d4
+breakpoint set -a 0x241007d8
+(lldb) breakpoint set -a 0x241007d8
+Breakpoint 4: address = 0x241007d8
+breakpoint set -a 0x241007dc
+(lldb) breakpoint set -a 0x241007dc
+Breakpoint 5: address = 0x241007dc
+breakpoint set -a 0x241007e0
+(lldb) breakpoint set -a 0x241007e0
+Breakpoint 6: address = 0x241007e0
+breakpoint set -a 0x241007e4
+(lldb) breakpoint set -a 0x241007e4
+Breakpoint 7: address = 0x241007e4
+breakpoint set -a 0x241007e8
+(lldb) breakpoint set -a 0x241007e8
+Breakpoint 8: address = 0x241007e8
+breakpoint set -a 0x241007f4
+(lldb) breakpoint set -a 0x241007f4
+Breakpoint 9: address = 0x241007f4
+breakpoint set -a 0x241007f8
+(lldb) breakpoint set -a 0x241007f8
+Breakpoint 10: address = 0x241007f8
+breakpoint set -a 0x24100804
+(lldb) breakpoint set -a 0x24100804
+Breakpoint 11: address = 0x24100804
+breakpoint set -a 0x24100808
+(lldb) breakpoint set -a 0x24100808
+Breakpoint 12: address = 0x24100808
+breakpoint set -a 0x2410080c
+(lldb) breakpoint set -a 0x2410080c
+Breakpoint 13: address = 0x2410080c
+(lldb) breakpoint set -a 0x24100810
+breakpoint set -a 0x24100810
+Breakpoint 14: address = 0x24100810
+breakpoint set -a 0x24100814
+(lldb) breakpoint set -a 0x24100814
+Breakpoint 15: address = 0x24100814
+breakpoint set -a 0x2410081c
+(lldb) breakpoint set -a 0x2410081c
+Breakpoint 16: address = 0x2410081c
+breakpoint set -a 0x24100820
+(lldb) breakpoint set -a 0x24100820
+Breakpoint 17: address = 0x24100820
+--> [PASS] Successfully enabled 16 software breakpoints!
+[Step 2: Attempting 17th software breakpoint (Must Fail)]
+breakpoint set -a 0x24100818
+(lldb) breakpoint set -a 0x24100818
+warning: failed to set breakpoint site at 0x24100818 for breakpoint 18.1: EZH only supports up to 16 active software breakpoints concurrently.
+--> [PASS] 17th breakpoint correctly rejected with slot capacity limit error!
+[Step 3: Attempting to step while 16 slots are full (Must Fail)]
+si
+Breakpoint 18: address = 0x24100818
+(lldb) si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001005f4, inst=0x02240400 -> Predicted next_pc=0x001005f8 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+Cannot single-step EZH target: All 16 software breakpoint slots are currently full. Please disable a breakpoint first.
+(lldb) --> [PASS] Single-stepping correctly blocked with slot exhaustion error!
+[Step 4: Deleting breakpoint 2 to free slot 0]
+breakpoint delete 2
+breakpoint delete 2
+1 breakpoints deleted; 0 breakpoint locations disabled.
+(lldb) --> [PASS] Breakpoint 2 deleted successfully!
+[Step 5: Attempting to step again (Must Succeed)]
+si
+si
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001005f4, inst=0x02240400 -> Predicted next_pc=0x001005f8 (sp_init=0x001012a8, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = instruction step into
+       frame #0: 0x001005f8 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+--> [PASS] Single-stepping succeeded after freeing a slot!
+quit
+Y
+quit
+Quitting LLDB will detach from one or more processes. Do you really want to proceed: [Y/n] Y
+--> [PASS] Breakpoint capacity limits verification successful!
+
+
+=== PHASE 7: Stepping & Continuing Over Breakpoints ===
+
+settings set use-color false
+settings set use-color false
+(lldb) target create "out/ezh_debug_test.elf"
+process connect -p ezh-remote connect://localhost:3333
+Current executable set to '/usr/local/google/home/rpasek/smartdma-llvm/llvm-project/ezh/debug_test/out/ezh_debug_test.elf' (ezh).
+(lldb) (lldb) process connect -p ezh-remote connect://localhost:3333
+warning: the debug server supports Target Description XML but LLDB does not have XML parsing enabled. Using "qRegisterInfo" was also not possible. Register information may be incorrect or missing
+(lldb) Process 1 stopped
+* thread #1, stop reason = trace
+       frame #0: 0x001005f8 ezh_debug_test.elf`test_1b_1c_ignition_and_corruption at ezh_debug_test.c:51:3
+   48  	static __attribute__((noinline, optnone)) void
+   49  	test_1b_1c_ignition_and_corruption() {
+   50  	
+-> 51  	  __asm__ volatile(
+    	  ^
+   52  	      // 1. Set registers r0-r7, gpo, gpd
+   53  	      "load_imm r0, 0x11\n\t"  /* [Test 1C - Step 4: e_load_imm r0] */
+   54  	      "load_imm r1, 0x22\n\t"  /* [Test 1C - Step 5: e_load_imm r1] */
+memory write -s 4 0x40027024 0xC0DE0000
+memory write -s 4 0x40027024 0xC0DE0000
+(lldb) expr *(volatile int *)0x40000010 |= (1 << 30)
+expr *(volatile int *)0x40000010 |= (1 << 30)
+(volatile int) $0 = 2097152264
+(lldb) expr *(volatile int *)0x40000010 &= ~(1 << 30)
+expr *(volatile int *)0x40000010 &= ~(1 << 30)
+(volatile int) $1 = 1023410440
+(lldb) target modules load --load --file ezh_debug_test.elf --slide 0
+target modules load --load --file ezh_debug_test.elf --slide 0
+(lldb) expr exc_signal = 0
+expr exc_signal = 0
+(volatile int) $2 = 0
+(lldb) memory write -s 4 0x40027048 0x00000080
+memory write -s 4 0x40027048 0x00000080
+(lldb) memory write -s 4 0x40027024 0xC0DE0010
+memory write -s 4 0x40027024 0xC0DE0010
+(lldb) [Step 1: Setting breakpoint on line 230 (Step Over Target)]
+breakpoint set --file ezh_debug_test.c --line 230
+breakpoint set --file ezh_debug_test.c --line 230
+Breakpoint 1: where = ezh_debug_test.elf`test_7_breakpoint_stepping_and_resuming + 24 at ezh_debug_test.c:230:14, address = 0x001008a0
+--> [PASS] Breakpoint on line 230 set successfully!
+[Step 2: Continuing past ignition to breakpoint on line 230]
+continue
+(lldb) continue
+Process 1 resuming
+(lldb) Process 1 stopped
+* thread #1, stop reason = breakpoint 1.1
+       frame #0: 0x001008a0 ezh_debug_test.elf`test_7_breakpoint_stepping_and_resuming at ezh_debug_test.c:230:14
+   227 	test_7_breakpoint_stepping_and_resuming() {
+   228 	  __asm__ volatile("nop\n\t"
+   229 	                   "nop\n\t");
+-> 230 	  exc_signal = 0x77770001; // Step over target!
+    	             ^
+   231 	  exc_signal = 0x77770002; // Continue over target!
+   232 	  exc_signal = 0x77770003; // Final target!
+   233 	}
+--> [PASS] Target successfully hit breakpoint on line 230!
+[Step 3: Stepping OVER the active breakpoint on line 230]
+step
+step
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001008a0, inst=0x08074001 -> Predicted next_pc=0x001008a4 (sp_init=0x001012b4, rn_wb=0, rn_val=0x00000000)
+(lldb) Process 1 stopped
+* thread #1, stop reason = step in
+       frame #0: 0x001008ac ezh_debug_test.elf`test_7_breakpoint_stepping_and_resuming at ezh_debug_test.c:231:14
+   228 	  __asm__ volatile("nop\n\t"
+   229 	                   "nop\n\t");
+   230 	  exc_signal = 0x77770001; // Step over target!
+-> 231 	  exc_signal = 0x77770002; // Continue over target!
+    	             ^
+   232 	  exc_signal = 0x77770003; // Final target!
+   233 	}
+   234 	
+--> [PASS] Stepped off breakpoint on line 230 successfully!
+[Step 4: Verifying exc_signal was written during the step]
+expr exc_signal
+--> [PASS] Verified exc_signal = 0x77770001! The instruction under the breakpoint executed perfectly during step!
+[Step 5: Setting breakpoint on line 231 (Continue Over Target)]
+breakpoint set --file ezh_debug_test.c --line 231
+expr exc_signal
+(volatile int) $3 = 2004287489
+(lldb) breakpoint set --file ezh_debug_test.c --line 231
+Breakpoint 2: where = ezh_debug_test.elf`test_7_breakpoint_stepping_and_resuming + 36 at ezh_debug_test.c:231:14, address = 0x001008ac
+--> [PASS] Breakpoint on line 231 set successfully!
+[Step 6: Setting breakpoint on line 232 to catch continue]
+breakpoint set --file ezh_debug_test.c --line 232
+(lldb) breakpoint set --file ezh_debug_test.c --line 232
+Breakpoint 3: where = ezh_debug_test.elf`test_7_breakpoint_stepping_and_resuming + 44 at ezh_debug_test.c:232:14, address = 0x001008b4
+[Step 7: Continuing OVER the active breakpoint on line 231]
+continue
+(lldb) continue
+[ProcessEZH::DoResume] SINGLE_STEP: PC=0x001008ac, inst=0x07074401 -> Predicted next_pc=0x001008b0 (sp_init=0x001012b4, rn_wb=0, rn_val=0x00000000)
+Process 1 resuming
+(lldb) Process 1 stopped
+* thread #1, stop reason = breakpoint 3.1
+       frame #0: 0x001008b4 ezh_debug_test.elf`test_7_breakpoint_stepping_and_resuming at ezh_debug_test.c:232:14
+   229 	                   "nop\n\t");
+   230 	  exc_signal = 0x77770001; // Step over target!
+   231 	  exc_signal = 0x77770002; // Continue over target!
+-> 232 	  exc_signal = 0x77770003; // Final target!
+    	             ^
+   233 	}
+   234 	
+   235 	int main() {
+--> [PASS] Successfully continued past breakpoint 2 and hit breakpoint 3 on line 232!
+[Step 8: Verifying exc_signal was written during continue]
+expr exc_signal
+--> [PASS] Verified exc_signal = 0x77770002! The instruction under breakpoint 2 executed perfectly during continue!
+quit
+Y
+expr exc_signal
+(volatile int) $4 = 2004287490
+(lldb) quit
+Quitting LLDB will detach from one or more processes. Do you really want to proceed: [Y/n] Y
+--> [PASS] Breakpoint stepping and resuming verification successful!
+

@@ -1,0 +1,29 @@
+================================================
+     EZH JTAG DYNAMIC REGRESSION RUN LOGGER      
+================================================
+ Discovered: 16 tests
+
+[1/16] [PASSED] ezh_shift.elf (exc_signal: 0xcafebabe)
+[2/16] [PASSED] ezh_comp_64.elf (exc_signal: 0xcafebabe)
+[3/16] [PASSED] ezh_arith.elf (exc_signal: 0xcafebabe)
+[4/16] [PASSED] ezh_arith_float.elf (exc_signal: 0xcafebabe)
+[5/16] [PASSED] ezh_bitslice_test.elf (exc_signal: 0xcafebabe)
+[6/16] [PASSED] ezh_other.elf (exc_signal: 0xcafebabe)
+[7/16] [PASSED] ezh_comp.elf (exc_signal: 0xcafebabe)
+[8/16] [PASSED] ezh_comp_double.elf (exc_signal: 0xcafebabe)
+[9/16] [PASSED] ezh_array.elf (exc_signal: 0xcafebabe)
+[10/16] [PASSED] ezh_print.elf (exc_signal: 0xcafebabe)
+[11/16] [PASSED] ezh_comp_float.elf (exc_signal: 0xcafebabe)
+[12/16] [PASSED] ezh_basic.elf (exc_signal: 0xcafebabe)
+[13/16] [PASSED] ezh_arith_double.elf (exc_signal: 0xcafebabe)
+[14/16] [PASSED] ezh_setjmp.elf (exc_signal: 0xcafebabe)
+[15/16] [PASSED] ezh_eh.elf (exc_signal: 0xcafebabe)
+[16/16] [PASSED] ezh_bit.elf (exc_signal: 0xcafebabe)
+
+================================================
+               RUN SUMMARY                      
+================================================
+ Discovered: 16 tests
+ Passed:     16
+ Failed:     0
+================================================

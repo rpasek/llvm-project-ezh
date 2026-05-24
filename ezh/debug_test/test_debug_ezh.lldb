@@ -1,0 +1,37 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# 1. Create EZH target (primes EZH architecture and DWARF symbols!)
+target create "out/ezh_debug_test.elf"
+
+# Disable LLDB target memory cache
+#settings set target.process.disable-memory-cache true
+
+# 2. Connect to remote OpenOCD JTAG server (instantiates ProcessEZH flawlessly!)
+process connect -p ezh-remote connect://localhost:3333
+
+# 3. Toggle SMARTDMA reset (assert/deassert) via JTAG memory writes (100% crash-proof!)
+memory write -s 4 0x40000010 0x7d000108
+memory write -s 4 0x40000010 0x3d000108
+
+# Clear variables in RAM using JTAG memory writes directly (Pristine registers!)
+memory write -s 4 0x004f8008 0
+memory write -s 4 0x004f8000 0
+
+# 4. Map EZH sections dynamically (triggers EZH C++ autoloader strictly AFTER hardware reset!)
+target modules load --load --file ezh_debug_test.elf --slide 0
+#log enable lldb step process unwind
+
+# Configure EZH CTRL to "initialized but halted" state (Start = 0, GPISYNCH = 1)
+memory write -s 4 0x40027024 0xC0DE0010

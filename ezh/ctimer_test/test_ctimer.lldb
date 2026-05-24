@@ -1,0 +1,50 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Disable ANSI colors
+settings set use-color false
+
+# Load symbols
+target create "out/ctimer_test.elf"
+
+# Connect to remote OpenOCD JTAG server
+process connect -p ezh-remote connect://localhost:3333
+
+# Halt EZH core to unlock RAM access
+memory write -s 4 0x40027024 0xC0DE0000
+
+# Toggle SMARTDMA reset
+expr *(volatile int *)0x40000010 |= (1 << 30)
+expr *(volatile int *)0x40000010 &= ~(1 << 30)
+
+# Clear exc_signal
+expr exc_signal = 0
+
+# Load ELF sections
+target modules load --load --file ctimer_test.elf --slide 0
+
+# Clear bit slice
+memory write -s 4 0x40027048 0x00000080
+
+# Start EZH execution
+expr *(volatile int *)0x40027020 = (int)(void (*)())_start
+memory write -s 4 0x40027024 0xC0DE0011
+
+# Wait for execution (ctimer_test takes 5 seconds)
+shell sleep 7.5
+
+# Print final core results
+p/x exc_signal
+process detach
+quit
