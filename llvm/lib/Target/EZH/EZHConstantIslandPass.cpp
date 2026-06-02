@@ -10,17 +10,25 @@
 // which are scattered through-out the function.  This is required due to the
 // limited pc-relative displacements that EZH has.
 //
+// Copied From:
+//   ARM target backend (llvm/lib/Target/ARM/ARMConstantIslandPass.cpp).
+//
+// Changes:
+//   Adapted PC-relative reachability limits to EZH's +508/-512 byte range for
+//   E_LDR instructions; replaced ARM constant pool emission with EZH
+//   CONSTPOOL_ENTRY pseudo-instructions; customized branch fixup and water
+//   block creation logic.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZH.h"
 #include "EZHBasicBlockInfo.h"
+#include "EZHCondCode.h"
+#include "EZHConstantPoolValue.h"
 #include "EZHInstrInfo.h"
 #include "EZHMachineFunctionInfo.h"
 #include "EZHSubtarget.h"
-#include "MCTargetDesc/EZHBaseInfo.h"
-#include "MVETailPredUtils.h"
-#include "Thumb2InstrInfo.h"
-#include "Utils/EZHBaseInfo.h"
+#include "MCTargetDesc/EZHMCTargetDesc.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -33,12 +41,14 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
@@ -63,27 +73,11 @@ STATISTIC(NumCPEs, "Number of constpool entries");
 STATISTIC(NumSplit, "Number of uncond branches inserted");
 STATISTIC(NumCBrFixed, "Number of cond branches fixed");
 STATISTIC(NumUBrFixed, "Number of uncond branches fixed");
-STATISTIC(NumTBs, "Number of table branches generated");
-STATISTIC(NumT2CPShrunk, "Number of Thumb2 constantpool instructions shrunk");
-STATISTIC(NumT2BrShrunk, "Number of Thumb2 immediate branches shrunk");
-STATISTIC(NumCBZ, "Number of CBZ / CBNZ formed");
-STATISTIC(NumJTMoved, "Number of jump table destination blocks moved");
-STATISTIC(NumJTInserted, "Number of jump table intermediate blocks inserted");
-STATISTIC(NumLEInserted, "Number of LE backwards branches inserted");
-
-static cl::opt<bool> AdjustJumpTableBlocks(
-    "ezh-adjust-jump-tables", cl::Hidden, cl::init(true),
-    cl::desc("Adjust basic block layout to better use TB[BH]"));
 
 static cl::opt<unsigned>
     CPMaxIteration("ezh-constant-island-max-iteration", cl::Hidden,
                    cl::init(30),
                    cl::desc("The max number of iteration for converge"));
-
-static cl::opt<bool> SynthesizeThumb1TBB(
-    "ezh-synthesize-thumb-1-tbb", cl::Hidden, cl::init(true),
-    cl::desc("Use compressed jump tables in Thumb-1 by synthesizing an "
-             "equivalent to the TBB/TBH instructions"));
 
 namespace {
 
@@ -140,11 +134,7 @@ class EZHConstantIslands : public MachineFunctionPass {
     }
 
     /// getMaxDisp - Returns the maximum displacement supported by MI.
-    /// Correct for unknown alignment.
-    /// Conservatively subtract 2 bytes to handle weird alignment effects.
-    unsigned getMaxDisp() const {
-      return (KnownAlignment ? MaxDisp : MaxDisp - 2) - 2;
-    }
+    unsigned getMaxDisp() const { return MaxDisp; }
   };
 
   /// CPUsers - Keep track of all of the machine instructions that use various
@@ -200,21 +190,12 @@ class EZHConstantIslands : public MachineFunctionPass {
   /// ImmBranches - Keep track of all the immediate branch instructions.
   std::vector<ImmBranch> ImmBranches;
 
-  /// PushPopMIs - Keep track of all the Thumb push / pop instructions.
-  SmallVector<MachineInstr *, 4> PushPopMIs;
-
-  /// T2JumpTables - Keep track of all the Thumb2 jumptable instructions.
-  SmallVector<MachineInstr *, 4> T2JumpTables;
-
   MachineFunction *MF;
   MachineConstantPool *MCP;
   const EZHInstrInfo *TII;
   const EZHSubtarget *STI;
-  EZHFunctionInfo *AFI;
+  EZHMachineFunctionInfo *AFI;
   MachineDominatorTree *DT = nullptr;
-  bool isThumb;
-  bool isThumb1;
-  bool isThumb2;
   bool isPositionIndependentOrROPI;
 
 public:
@@ -241,7 +222,6 @@ private:
   bool BBHasFallthrough(MachineBasicBlock *MBB);
   CPEntry *findConstPoolEntry(unsigned CPI, const MachineInstr *CPEMI);
   Align getCPEAlign(const MachineInstr *CPEMI);
-  void scanFunctionJumpTables();
   void initializeFunctionInfo(const std::vector<MachineInstr *> &CPEMIs);
   MachineBasicBlock *splitBlockBeforeInstr(MachineInstr *MI);
   void updateForInsertedWaterBlock(MachineBasicBlock *NewBB);
@@ -263,16 +243,6 @@ private:
   bool fixupImmediateBr(ImmBranch &Br);
   bool fixupConditionalBr(ImmBranch &Br);
   bool fixupUnconditionalBr(ImmBranch &Br);
-  bool optimizeThumb2Instructions();
-  bool optimizeThumb2Branches();
-  bool reorderThumb2JumpTables();
-  bool preserveBaseRegister(MachineInstr *JumpMI, MachineInstr *LEAMI,
-                            unsigned &DeadSize, bool &CanDeleteLEA,
-                            bool &BaseRegKill);
-  bool optimizeThumb2JumpTables();
-  MachineBasicBlock *adjustJTTargetBlockForward(unsigned JTI,
-                                                MachineBasicBlock *BB,
-                                                MachineBasicBlock *JTBB);
 
   unsigned getUserOffset(CPUser &) const;
   void dumpBBs();
@@ -326,57 +296,12 @@ LLVM_DUMP_METHOD void EZHConstantIslands::dumpBBs() {
     for (unsigned J = 0, E = BBInfo.size(); J != E; ++J) {
       const BasicBlockInfo &BBI = BBInfo[J];
       dbgs() << format("%08x %bb.%u\t", BBI.Offset, J)
-             << " kb=" << unsigned(BBI.KnownBits)
-             << " ua=" << unsigned(BBI.Unalign) << " pa=" << Log2(BBI.PostAlign)
+             << " pa=" << Log2(BBI.PostAlign)
              << format(" size=%#x\n", BBInfo[J].Size);
     }
   });
 }
 #endif
-
-// Align blocks where the previous block does not fall through. This may add
-// extra NOP's but they will not be executed. It uses the PrefLoopAlignment as a
-// measure of how much to align, and only runs at CodeGenOptLevel::Aggressive.
-static bool AlignBlocks(MachineFunction *MF, const EZHSubtarget *STI) {
-  if (MF->getTarget().getOptLevel() != CodeGenOptLevel::Aggressive ||
-      MF->getFunction().hasOptSize())
-    return false;
-
-  auto *TLI = STI->getTargetLowering();
-  const Align Alignment = TLI->getPrefLoopAlignment();
-  if (Alignment < 4)
-    return false;
-
-  bool Changed = false;
-  bool PrevCanFallthrough = true;
-  for (auto &MBB : *MF) {
-    if (!PrevCanFallthrough) {
-      Changed = true;
-      MBB.setAlignment(Alignment);
-    }
-
-    PrevCanFallthrough = MBB.canFallThrough();
-
-    // For LOB's, the EZHLowOverheadLoops pass may remove the unconditional
-    // branch later in the pipeline.
-    if (STI->hasLOB()) {
-      for (const auto &MI : reverse(MBB.terminators())) {
-        if (MI.getOpcode() == EZH::t2B &&
-            MI.getOperand(0).getMBB() == MBB.getNextNode())
-          continue;
-        if (isLoopStart(MI) || MI.getOpcode() == EZH::t2LoopEnd ||
-            MI.getOpcode() == EZH::t2LoopEndDec) {
-          PrevCanFallthrough = true;
-          break;
-        }
-        // Any other terminator - nothing to do
-        break;
-      }
-    }
-  }
-
-  return Changed;
-}
 
 bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   MF = &mf;
@@ -390,38 +315,42 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   STI = &MF->getSubtarget<EZHSubtarget>();
   TII = STI->getInstrInfo();
   isPositionIndependentOrROPI =
-      STI->getTargetLowering()->isPositionIndependent() || STI->isROPI();
-  AFI = MF->getInfo<EZHFunctionInfo>();
+      STI->getTargetLowering()->isPositionIndependent();
+  AFI = MF->getInfo<EZHMachineFunctionInfo>();
   DT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
 
-  isThumb = AFI->isThumbFunction();
-  isThumb1 = AFI->isThumb1OnlyFunction();
-  isThumb2 = AFI->isThumb2Function();
-
-  bool GenerateTBB = isThumb2 || (isThumb1 && SynthesizeThumb1TBB);
-  // TBB generation code in this constant island pass has not been adapted to
-  // deal with speculation barriers.
-  if (STI->hardenSlsRetBr())
-    GenerateTBB = false;
-
-  // Renumber all of the machine basic blocks in the function, guaranteeing that
-  // the numbers agree with the position of the block in the function.
-  MF->RenumberBlocks();
-
-  // Try to reorder and otherwise adjust the block layout to make good use
-  // of the TB[BH] instructions.
-  bool MadeChange = false;
-  if (GenerateTBB && AdjustJumpTableBlocks) {
-    scanFunctionJumpTables();
-    MadeChange |= reorderThumb2JumpTables();
-    // Data is out of date, so clear it. It'll be re-computed later.
-    T2JumpTables.clear();
-    // Blocks may have shifted around. Keep the numbering up to date.
-    MF->RenumberBlocks();
+  // EZH expands BRIND_LDR pseudo instructions here. BRIND_LDR represents an
+  // indirect branch via memory load, which we expand into a concrete LDR to PC:
+  //   ldr pc, [rn, offset]
+  SmallVector<MachineInstr *, 4> BrindPseudos;
+  for (MachineBasicBlock &MBB : *MF) {
+    for (MachineInstr &MI : MBB) {
+      if (MI.getOpcode() == EZH::BRIND_LDR) {
+        BrindPseudos.push_back(&MI);
+      }
+    }
   }
 
-  // Align any non-fallthrough blocks
-  MadeChange |= AlignBlocks(MF, STI);
+  for (MachineInstr *MI : BrindPseudos) {
+    MachineBasicBlock *MBB = MI->getParent();
+    DebugLoc DL = MI->getDebugLoc();
+    Register Rn = MI->getOperand(0).getReg();
+    int64_t Offset = MI->getOperand(1).getImm();
+    unsigned CC = MI->getOperand(2).getImm();
+
+    BuildMI(*MBB, MI, DL, TII->get(EZH::LDR), EZH::PC)
+        .addReg(Rn)
+        .addImm(Offset)
+        .addImm(CC);
+
+    MI->eraseFromParent();
+  }
+
+  // Renumber all of the machine basic blocks in the function, guaranteeing
+  // that the numbers agree with the position of the block in the function.
+  MF->RenumberBlocks();
+
+  bool MadeChange = false;
 
   // Perform the initial placement of the constant pool entries.  To start with,
   // we put them all at the end of the function.
@@ -441,11 +370,6 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   initializeFunctionInfo(CPEMIs);
   CPEMIs.clear();
   LLVM_DEBUG(dumpBBs());
-
-  // Functions with jump tables need an alignment of 4 because they use the ADR
-  // instruction, which aligns the PC to 4 bytes before adding an offset.
-  if (!T2JumpTables.empty())
-    MF->ensureAlignment(Align(4));
 
   /// Remove dead constant pool entries.
   MadeChange |= removeUnusedCPEntries();
@@ -484,29 +408,35 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
     MadeChange = true;
   }
 
-  // Shrink 32-bit Thumb2 load and store instructions.
-  if (isThumb2 && !STI->prefers32BitThumb())
-    MadeChange |= optimizeThumb2Instructions();
-
-  // Shrink 32-bit branch instructions.
-  if (isThumb && STI->hasV8MBaselineOps())
-    MadeChange |= optimizeThumb2Branches();
-
-  // Optimize jump tables using TBB / TBH.
-  if (GenerateTBB && !STI->genExecuteOnly())
-    MadeChange |= optimizeThumb2JumpTables();
-
-  // After a while, this might be made debug-only, but it is not expensive.
-  verify();
-
-  // Save the mapping between original and cloned constpool entries.
-  for (unsigned i = 0, e = CPEntries.size(); i != e; ++i) {
-    for (unsigned j = 0, je = CPEntries[i].size(); j != je; ++j) {
-      const CPEntry &CPE = CPEntries[i][j];
-      if (CPE.CPEMI && CPE.CPEMI->getOperand(1).isCPI())
-        AFI->recordCPEClone(i, CPE.CPI);
+  // Clean up redundant branches created by block splitting. We must perform
+  // this cleanup here (rather than relying on standard LLVM branch folding)
+  // because we also need to remove the coupled EZH::GOTOL bitslice handler
+  // branch. If an unconditional EZH::GOTO branches to its layout successor,
+  // it can be deleted as a fallthrough, and its preceding GOTOL must be
+  // erased to prevent unnecessary jumps to the bitslice interrupt handler.
+  for (auto &MBB : *MF) {
+    MachineBasicBlock::iterator I = MBB.getLastNonDebugInstr();
+    if (I != MBB.end() && I->getOpcode() == EZH::GOTO) {
+      MachineBasicBlock *TargetMBB = I->getOperand(0).getMBB();
+      if (MBB.isLayoutSuccessor(TargetMBB)) {
+        MachineBasicBlock::iterator Prev = I;
+        while (Prev != MBB.begin()) {
+          --Prev;
+          if (!Prev->isDebugInstr()) {
+            if (Prev->getOpcode() == EZH::GOTOL &&
+                Prev->getOperand(1).getImm() == EZHCC::ICC_BS) {
+              Prev->eraseFromParent();
+            }
+            break;
+          }
+        }
+        I->eraseFromParent();
+        MadeChange = true;
+      }
     }
   }
+
+  verify();
 
   LLVM_DEBUG(dbgs() << '\n'; dumpBBs());
 
@@ -517,8 +447,6 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   JumpTableEntryIndices.clear();
   JumpTableUserIndices.clear();
   ImmBranches.clear();
-  PushPopMIs.clear();
-  T2JumpTables.clear();
 
   return MadeChange;
 }
@@ -590,28 +518,20 @@ void EZHConstantIslands::doInitialConstPlacement(
   LLVM_DEBUG(BB->dump());
 }
 
-/// Do initial placement of the jump tables. Because Thumb2's TBB and TBH
-/// instructions can be made more efficient if the jump table immediately
-/// follows the instruction, it's best to place them immediately next to their
-/// jumps to begin with. In almost all cases they'll never be moved from that
-/// position.
+/// Do initial placement of the jump tables. Like ARM/Thumb, EZH jump tables
+/// are placed inline immediately following the block containing the branch
+/// instruction. This is because EZH uses the ADR instruction (which has a
+/// 12-bit signed offset range) to load the jump table address.
 void EZHConstantIslands::doInitialJumpTablePlacement(
     std::vector<MachineInstr *> &CPEMIs) {
   unsigned i = CPEntries.size();
   auto MJTI = MF->getJumpTableInfo();
   const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
 
-  // Only inline jump tables are placed in the function.
-  if (MJTI->getEntryKind() != MachineJumpTableInfo::EK_Inline)
-    return;
-
   MachineBasicBlock *LastCorrectlyNumberedBB = nullptr;
   for (MachineBasicBlock &MBB : *MF) {
     auto MI = MBB.getLastNonDebugInstr();
-    // Look past potential SpeculationBarriers at end of BB.
-    while (MI != MBB.end() &&
-           (isSpeculationBarrierEndBBOpcode(MI->getOpcode()) ||
-            MI->isDebugInstr()))
+    while (MI != MBB.end() && MI->isDebugInstr())
       --MI;
 
     if (MI == MBB.end())
@@ -621,28 +541,8 @@ void EZHConstantIslands::doInitialJumpTablePlacement(
     switch (MI->getOpcode()) {
     default:
       continue;
-    case EZH::BR_JTadd:
     case EZH::BR_JTr:
-    case EZH::tBR_JTr:
-    case EZH::BR_JTm_i12:
-    case EZH::BR_JTm_rs:
-      // These instructions are emitted only in EZH or Thumb1 modes which do not
-      // support PACBTI. Hence we don't add BTI instructions in the destination
-      // blocks.
-      assert(!MF->getInfo<EZHFunctionInfo>()->branchTargetEnforcement() &&
-             "Branch protection must not be enabled for Ezh or Thumb1 modes");
       JTOpcode = EZH::JUMPTABLE_ADDRS;
-      break;
-    case EZH::t2BR_JT:
-      JTOpcode = EZH::JUMPTABLE_INSTS;
-      break;
-    case EZH::tTBB_JT:
-    case EZH::t2TBB_JT:
-      JTOpcode = EZH::JUMPTABLE_TBB;
-      break;
-    case EZH::tTBH_JT:
-    case EZH::t2TBH_JT:
-      JTOpcode = EZH::JUMPTABLE_TBH;
       break;
     }
 
@@ -707,36 +607,7 @@ EZHConstantIslands::findConstPoolEntry(unsigned CPI,
 /// getCPEAlign - Returns the required alignment of the constant pool entry
 /// represented by CPEMI.
 Align EZHConstantIslands::getCPEAlign(const MachineInstr *CPEMI) {
-  switch (CPEMI->getOpcode()) {
-  case EZH::CONSTPOOL_ENTRY:
-    break;
-  case EZH::JUMPTABLE_TBB:
-    return isThumb1 ? Align(4) : Align(1);
-  case EZH::JUMPTABLE_TBH:
-    return isThumb1 ? Align(4) : Align(2);
-  case EZH::JUMPTABLE_INSTS:
-    return Align(2);
-  case EZH::JUMPTABLE_ADDRS:
-    return Align(4);
-  default:
-    llvm_unreachable("unknown constpool entry kind");
-  }
-
-  unsigned CPI = getCombinedIndex(CPEMI);
-  assert(CPI < MCP->getConstants().size() && "Invalid constant pool index.");
-  return MCP->getConstants()[CPI].getAlign();
-}
-
-/// scanFunctionJumpTables - Do a scan of the function, building up
-/// information about the sizes of each block and the locations of all
-/// the jump tables.
-void EZHConstantIslands::scanFunctionJumpTables() {
-  for (MachineBasicBlock &MBB : *MF) {
-    for (MachineInstr &I : MBB)
-      if (I.isBranch() &&
-          (I.getOpcode() == EZH::t2BR_JT || I.getOpcode() == EZH::tBR_JTr))
-        T2JumpTables.push_back(&I);
-  }
+  return Align(4);
 }
 
 /// initializeFunctionInfo - Do the initial scan of the function, building up
@@ -746,18 +617,9 @@ void EZHConstantIslands::initializeFunctionInfo(
     const std::vector<MachineInstr *> &CPEMIs) {
 
   BBUtils->computeAllBlockSizes();
-  BBInfoVector &BBInfo = BBUtils->getBBInfo();
-  // The known bits of the entry block offset are determined by the function
-  // alignment.
-  BBInfo.front().KnownBits = Log2(MF->getAlignment());
 
   // Compute block offsets and known bits.
   BBUtils->adjustBBOffsetsAfter(&MF->front());
-
-  // We only care about jump table instructions when jump tables are inline.
-  MachineJumpTableInfo *MJTI = MF->getJumpTableInfo();
-  bool InlineJumpTables =
-      MJTI && MJTI->getEntryKind() == MachineJumpTableInfo::EK_Inline;
 
   // Now go back through the instructions and build up our data structures.
   for (MachineBasicBlock &MBB : *MF) {
@@ -772,150 +634,34 @@ void EZHConstantIslands::initializeFunctionInfo(
 
       unsigned Opc = I.getOpcode();
       if (I.isBranch()) {
-        bool isCond = false;
-        unsigned Bits = 0;
-        unsigned Scale = 1;
-        int UOpc = Opc;
-        switch (Opc) {
-        default:
-          continue; // Ignore other JT branches
-        case EZH::t2BR_JT:
-        case EZH::tBR_JTr:
-          if (InlineJumpTables)
-            T2JumpTables.push_back(&I);
-          continue; // Does not get an entry in ImmBranches
-        case EZH::Bcc:
-          isCond = true;
-          UOpc = EZH::B;
-          [[fallthrough]];
-        case EZH::B:
-          Bits = 24;
-          Scale = 4;
-          break;
-        case EZH::tBcc:
-          isCond = true;
-          UOpc = EZH::tB;
-          Bits = 8;
-          Scale = 2;
-          break;
-        case EZH::tB:
-          Bits = 11;
-          Scale = 2;
-          break;
-        case EZH::t2Bcc:
-          isCond = true;
-          UOpc = EZH::t2B;
-          Bits = 20;
-          Scale = 2;
-          break;
-        case EZH::t2B:
-          Bits = 24;
-          Scale = 2;
-          break;
-        }
-
-        // Record this immediate branch.
-        unsigned MaxOffs = ((1 << (Bits - 1)) - 1) * Scale;
+        if (Opc != EZH::GOTO)
+          continue;
+        bool isCond = TII->isPredicated(I);
+        unsigned MaxOffs = 8 * 1024 * 1024;
+        unsigned UOpc = isCond ? EZH::GOTO : 0;
         ImmBranches.push_back(ImmBranch(&I, MaxOffs, isCond, UOpc));
       }
 
-      if (Opc == EZH::tPUSH || Opc == EZH::tPOP_RET)
-        PushPopMIs.push_back(&I);
-
-      if (Opc == EZH::CONSTPOOL_ENTRY || Opc == EZH::JUMPTABLE_ADDRS ||
-          Opc == EZH::JUMPTABLE_INSTS || Opc == EZH::JUMPTABLE_TBB ||
-          Opc == EZH::JUMPTABLE_TBH)
+      if (Opc == EZH::CONSTPOOL_ENTRY || Opc == EZH::JUMPTABLE_ADDRS)
         continue;
 
-      // Scan the instructions for constant pool operands.
-      for (unsigned op = 0, e = I.getNumOperands(); op != e; ++op)
-        if (I.getOperand(op).isCPI() ||
-            (I.getOperand(op).isJTI() && InlineJumpTables)) {
-          // We found one.  The addressing mode tells us the max displacement
-          // from the PC that this instruction permits.
-
-          // Basic size info comes from the TSFlags field.
-          unsigned Bits = 0;
-          unsigned Scale = 1;
-          bool NegOk = false;
+      // Scan the instructions for constant pool and jump table operands.
+      for (unsigned op = 0, e = I.getNumOperands(); op != e; ++op) {
+        MachineOperand &MO = I.getOperand(op);
+        if (MO.isCPI() || MO.isJTI()) {
+          // EZH has a +508/-512 offset range with E_LDR (8-bit signed
+          // word offset). We use 508 as the maximum positive offset.
+          unsigned MaxOffs = 508;
+          bool NegOk = true;
           bool IsSoImm = false;
-
-          switch (Opc) {
-          default:
-            llvm_unreachable("Unknown addressing mode for CP reference!");
-
-          // Taking the address of a CP entry.
-          case EZH::LEApcrel:
-          case EZH::LEApcrelJT: {
-            // This takes a SoImm, which is 8 bit immediate rotated. We'll
-            // pretend the maximum offset is 255 * 4. Since each instruction
-            // 4 byte wide, this is always correct. We'll check for other
-            // displacements that fits in a SoImm as well.
-            Bits = 8;
-            NegOk = true;
-            IsSoImm = true;
-            unsigned CPI = I.getOperand(op).getIndex();
-            assert(CPI < CPEMIs.size());
-            MachineInstr *CPEMI = CPEMIs[CPI];
-            const Align CPEAlign = getCPEAlign(CPEMI);
-            const unsigned LogCPEAlign = Log2(CPEAlign);
-            if (LogCPEAlign >= 2)
-              Scale = 4;
-            else
-              // For constants with less than 4-byte alignment,
-              // we'll pretend the maximum offset is 255 * 1.
-              Scale = 1;
-          } break;
-          case EZH::t2LEApcrel:
-          case EZH::t2LEApcrelJT:
-            Bits = 12;
-            NegOk = true;
-            break;
-          case EZH::tLEApcrel:
-          case EZH::tLEApcrelJT:
-            Bits = 8;
-            Scale = 4;
-            break;
-
-          case EZH::LDRBi12:
-          case EZH::LDRi12:
-          case EZH::LDRcp:
-          case EZH::t2LDRpci:
-          case EZH::t2LDRHpci:
-          case EZH::t2LDRSHpci:
-          case EZH::t2LDRBpci:
-          case EZH::t2LDRSBpci:
-            Bits = 12; // +-offset_12
-            NegOk = true;
-            break;
-
-          case EZH::tLDRpci:
-            Bits = 8;
-            Scale = 4; // +(offset_8*4)
-            break;
-
-          case EZH::VLDRD:
-          case EZH::VLDRS:
-            Bits = 8;
-            Scale = 4; // +-(offset_8*4)
-            NegOk = true;
-            break;
-          case EZH::VLDRH:
-            Bits = 8;
-            Scale = 2; // +-(offset_8*2)
-            NegOk = true;
-            break;
-          }
-
           // Remember that this is a user of a CP entry.
-          unsigned CPI = I.getOperand(op).getIndex();
-          if (I.getOperand(op).isJTI()) {
+          unsigned CPI = MO.getIndex();
+          if (MO.isJTI()) {
             JumpTableUserIndices.insert(std::make_pair(CPI, CPUsers.size()));
             CPI = JumpTableEntryIndices[CPI];
           }
 
           MachineInstr *CPEMI = CPEMIs[CPI];
-          unsigned MaxOffs = ((1 << Bits) - 1) * Scale;
           CPUsers.push_back(CPUser(&I, CPEMI, MaxOffs, NegOk, IsSoImm));
 
           // Increment corresponding CPEntry reference count.
@@ -927,6 +673,7 @@ void EZHConstantIslands::initializeFunctionInfo(
           // rest of the operands.
           break;
         }
+      }
     }
   }
 }
@@ -981,13 +728,17 @@ MachineBasicBlock *EZHConstantIslands::splitBlockBeforeInstr(MachineInstr *MI) {
   // Note the new unconditional branch is not being recorded.
   // There doesn't seem to be meaningful DebugInfo available; this doesn't
   // correspond to anything in the source.
-  unsigned Opc = isThumb ? (isThumb2 ? EZH::t2B : EZH::tB) : EZH::B;
-  if (!isThumb)
-    BuildMI(OrigBB, DebugLoc(), TII->get(Opc)).addMBB(NewBB);
-  else
-    BuildMI(OrigBB, DebugLoc(), TII->get(Opc))
-        .addMBB(NewBB)
-        .add(predOps(EZHCC::AL));
+  if (OrigBB->empty()) {
+    BuildMI(OrigBB, DebugLoc(), TII->get(EZH::ADD_IMM))
+        .addReg(EZH::R0)
+        .addReg(EZH::R0)
+        .addImm(0)
+        .addImm(EZHCC::ICC_EU);
+  }
+
+  BuildMI(OrigBB, DebugLoc(), TII->get(EZH::GOTO))
+      .addMBB(NewBB)
+      .addImm(EZHCC::ICC_EU);
   ++NumSplit;
 
   // Update the CFG.  All succs of OrigBB are now succs of NewBB.
@@ -1016,7 +767,7 @@ MachineBasicBlock *EZHConstantIslands::splitBlockBeforeInstr(MachineInstr *MI) {
   // when splitting before a conditional branch that is followed by an
   // unconditional branch - in that case we want to insert NewBB).
   water_iterator IP = llvm::lower_bound(WaterList, OrigBB, CompareMBBNumbers);
-  MachineBasicBlock *WaterBB = *IP;
+  MachineBasicBlock *WaterBB = (IP != WaterList.end()) ? *IP : nullptr;
   if (WaterBB == OrigBB)
     WaterList.insert(std::next(IP), NewBB);
   else
@@ -1046,35 +797,28 @@ MachineBasicBlock *EZHConstantIslands::splitBlockBeforeInstr(MachineInstr *MI) {
 unsigned EZHConstantIslands::getUserOffset(CPUser &U) const {
   unsigned UserOffset = BBUtils->getOffsetOf(U.MI);
 
-  SmallVectorImpl<BasicBlockInfo> &BBInfo = BBUtils->getBBInfo();
-  const BasicBlockInfo &BBI = BBInfo[U.MI->getParent()->getNumber()];
-  unsigned KnownBits = BBI.internalKnownBits();
-
-  // The value read from PC is offset from the actual instruction address.
-  UserOffset += (isThumb ? 4 : 8);
-
-  // Because of inline assembly, we may not know the alignment (mod 4) of U.MI.
-  // Make sure U.getMaxDisp() returns a constrained range.
-  U.KnownAlignment = (KnownBits >= 2);
-
-  // On Thumb, offsets==2 mod 4 are rounded down by the hardware for
-  // purposes of the displacement computation; compensate for that here.
-  // For unknown alignments, getMaxDisp() constrains the range instead.
-  if (isThumb && U.KnownAlignment)
-    UserOffset &= ~3u;
-
+  // The EZH PC register value is 8 bytes (2 instructions) ahead of the
+  // executing instruction address.
+  UserOffset += 8;
+  U.KnownAlignment = true;
   return UserOffset;
 }
 
 /// isOffsetInRange - Checks whether UserOffset (the location of a constant pool
 /// reference) is within MaxDisp of TrialOffset (a proposed location of a
 /// constant pool entry).
-/// UserOffset is computed by getUserOffset above to include PC adjustments. If
-/// the mod 4 alignment of UserOffset is not known, the uncertainty must be
-/// subtracted from MaxDisp instead. CPUser::getMaxDisp() does that.
+/// UserOffset is computed by getUserOffset above to include PC adjustments.
 bool EZHConstantIslands::isOffsetInRange(unsigned UserOffset,
                                          unsigned TrialOffset, unsigned MaxDisp,
                                          bool NegativeOK, bool IsSoImm) {
+  // If it's a branch check (8MB displacement limit)
+  if (MaxDisp >= 8 * 1024 * 1024) {
+    // EZH branches (E_GOTO) cannot cross 8MB segment boundaries.
+    // Segment size is 8MB (0x800000), so the segment mask is 0xFF800000.
+    if ((UserOffset & 0xFF800000) != (TrialOffset & 0xFF800000))
+      return false;
+  }
+
   if (UserOffset <= TrialOffset) {
     // User before the Trial.
     if (TrialOffset - UserOffset <= MaxDisp)
@@ -1123,7 +867,7 @@ bool EZHConstantIslands::isWaterInRange(unsigned UserOffset,
     // the offset of the instruction. Also account for unknown alignment padding
     // in blocks between CPE and the user.
     if (CPEOffset < UserOffset)
-      UserOffset += Growth + UnknownPadding(MF->getAlignment(), Log2(CPEAlign));
+      UserOffset += Growth;
   } else
     // CPE fits in existing padding.
     Growth = 0;
@@ -1166,8 +910,7 @@ static bool BBIsJumpedOver(MachineBasicBlock *MBB) {
   MachineBasicBlock *Succ = *MBB->succ_begin();
   MachineBasicBlock *Pred = *MBB->pred_begin();
   MachineInstr *PredMI = &Pred->back();
-  if (PredMI->getOpcode() == EZH::B || PredMI->getOpcode() == EZH::tB ||
-      PredMI->getOpcode() == EZH::t2B)
+  if (PredMI->getOpcode() == EZH::GOTO)
     return PredMI->getOperand(0).getMBB() == Succ;
   return false;
 }
@@ -1231,9 +974,9 @@ int EZHConstantIslands::findInRangeCPEntry(CPUser &U, unsigned UserOffset) {
                         << "\n");
       // Point the CPUser node to the replacement
       U.CPEMI = CPE.CPEMI;
-      // Change the CPI in the instruction operand to refer to the clone.
+      // Change the CPI/JTI in the instruction operand to refer to the clone.
       for (MachineOperand &MO : UserMI->operands())
-        if (MO.isCPI()) {
+        if (MO.isCPI() || MO.isJTI()) {
           MO.setIndex(CPE.CPI);
           break;
         }
@@ -1247,29 +990,13 @@ int EZHConstantIslands::findInRangeCPEntry(CPUser &U, unsigned UserOffset) {
   return 0;
 }
 
-/// getUnconditionalBrDisp - Returns the maximum displacement that can fit in
-/// the specific unconditional branch instruction.
-static inline unsigned getUnconditionalBrDisp(int Opc) {
-  switch (Opc) {
-  case EZH::tB:
-    return ((1 << 10) - 1) * 2;
-  case EZH::t2B:
-    return ((1 << 23) - 1) * 2;
-  default:
-    break;
-  }
-
-  return ((1 << 23) - 1) * 4;
-}
-
 /// findAvailableWater - Look for an existing entry in the WaterList in which
 /// we can place the CPE referenced from U so it's within range of U's MI.
-/// Returns true if found, false if not.  If it returns true, WaterIter
-/// is set to the WaterList entry.  For Thumb, prefer water that will not
-/// introduce padding to water that will.  To ensure that this pass
-/// terminates, the CPE location for a particular CPUser is only allowed to
-/// move to a lower address, so search backward from the end of the list and
-/// prefer the first water that is in range.
+/// Returns true if found, false if not. If it returns true, WaterIter
+/// is set to the WaterList entry.
+/// To ensure that this pass terminates, the CPE location for a particular
+/// CPUser is only allowed to move to a lower address, so search backward
+/// from the end of the list and prefer the first water that is in range.
 bool EZHConstantIslands::findAvailableWater(CPUser &U, unsigned UserOffset,
                                             water_iterator &WaterIter,
                                             bool CloserWater) {
@@ -1349,12 +1076,10 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
   const BasicBlockInfo &UserBBI = BBInfo[UserMBB->getNumber()];
 
   // If the block does not end in an unconditional branch already, and if the
-  // end of the block is within range, make new water there.  (The addition
-  // below is for the unconditional branch we will be adding: 4 bytes on EZH +
-  // Thumb2, 2 on Thumb1.
+  // end of the block is within range, make new water there by adding an
+  // unconditional branch (4 bytes on EZH).
   if (BBHasFallthrough(UserMBB)) {
-    // Size of branch to insert.
-    unsigned Delta = isThumb1 ? 2 : 4;
+    unsigned Delta = 4;
     // Compute the offset where the CPE will begin.
     unsigned CPEOffset = UserBBI.postOffset(CPEAlign) + Delta;
 
@@ -1362,157 +1087,37 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
       LLVM_DEBUG(dbgs() << "Split at end of " << printMBBReference(*UserMBB)
                         << format(", expected CPE offset %#x\n", CPEOffset));
       NewMBB = &*++UserMBB->getIterator();
-      // Add an unconditional branch from UserMBB to fallthrough block.  Record
-      // it for branch lengthening; this new branch will not get out of range,
-      // but if the preceding conditional branch is out of range, the targets
-      // will be exchanged, and the altered branch may be out of range, so the
-      // machinery has to know about it.
-      int UncondBr = isThumb ? ((isThumb2) ? EZH::t2B : EZH::tB) : EZH::B;
-      if (!isThumb)
-        BuildMI(UserMBB, DebugLoc(), TII->get(UncondBr)).addMBB(NewMBB);
-      else
-        BuildMI(UserMBB, DebugLoc(), TII->get(UncondBr))
-            .addMBB(NewMBB)
-            .add(predOps(EZHCC::AL));
-      unsigned MaxDisp = getUnconditionalBrDisp(UncondBr);
+      BuildMI(UserMBB, DebugLoc(), TII->get(EZH::GOTO))
+          .addMBB(NewMBB)
+          .addImm(EZHCC::ICC_EU);
+      unsigned MaxDisp = 8 * 1024 * 1024;
       ImmBranches.push_back(
-          ImmBranch(&UserMBB->back(), MaxDisp, false, UncondBr));
+          ImmBranch(&UserMBB->back(), MaxDisp, false, EZH::GOTO));
       BBUtils->computeBlockSize(UserMBB);
       BBUtils->adjustBBOffsetsAfter(UserMBB);
       return;
     }
   }
 
-  // What a big block.  Find a place within the block to split it.  This is a
-  // little tricky on Thumb1 since instructions are 2 bytes and constant pool
-  // entries are 4 bytes: if instruction I references island CPE, and
-  // instruction I+1 references CPE', it will not work well to put CPE as far
-  // forward as possible, since then CPE' cannot immediately follow it (that
-  // location is 2 bytes farther away from I+1 than CPE was from I) and we'd
-  // need to create a new island.  So, we make a first guess, then walk through
-  // the instructions between the one currently being looked at and the
-  // possible insertion point, and make sure any other instructions that
-  // reference CPEs will be able to use the same island area; if not, we back
-  // up the insertion point.
-
-  // Try to split the block so it's fully aligned.  Compute the latest split
-  // point where we can add a 4-byte branch instruction, and then align to
-  // Align which is the largest possible alignment in the function.
-  const Align Align = MF->getAlignment();
-  assert(Align >= CPEAlign && "Over-aligned constant pool entry");
-  unsigned KnownBits = UserBBI.internalKnownBits();
-  unsigned UPad = UnknownPadding(Align, KnownBits);
-  unsigned BaseInsertOffset = UserOffset + U.getMaxDisp() - UPad;
-  LLVM_DEBUG(dbgs() << format("Split in middle of big block before %#x",
-                              BaseInsertOffset));
+  // What a big block. Find a place within the block to split it. On EZH,
+  // this is straightforward because both instructions and constant pool
+  // entries are 4-byte aligned and size-compatible (all instructions are
+  // 4 bytes, constants are multiples of 4 bytes). We compute the maximum
+  // insertion offset based on the user instruction's maximum reach,
+  // allowing space for the 4-byte unconditional jump we will insert to
+  // branch around the island.
+  assert(MF->getAlignment() >= CPEAlign && "Over-aligned constant pool entry");
+  unsigned BaseInsertOffset = UserOffset + U.getMaxDisp();
 
   // The 4 in the following is for the unconditional branch we'll be inserting
-  // (allows for long branch on Thumb1).  Alignment of the island is handled
-  // inside isOffsetInRange.
   BaseInsertOffset -= 4;
 
-  LLVM_DEBUG(dbgs() << format(", adjusted to %#x", BaseInsertOffset)
-                    << " la=" << Log2(Align) << " kb=" << KnownBits
-                    << " up=" << UPad << '\n');
-
-  // This could point off the end of the block if we've already got constant
-  // pool entries following this block; only the last one is in the water list.
-  // Back past any possible branches (allow for a conditional and a maximally
-  // long unconditional).
   if (BaseInsertOffset + 8 >= UserBBI.postOffset()) {
-    // Ensure BaseInsertOffset is larger than the offset of the instruction
-    // following UserMI so that the loop which searches for the split point
-    // iterates at least once.
     BaseInsertOffset =
-        std::max(UserBBI.postOffset() - UPad - 8,
+        std::max(UserBBI.postOffset() - 8,
                  UserOffset + TII->getInstSizeInBytes(*UserMI) + 1);
-    // If the CP is referenced(ie, UserOffset) is in first four instructions
-    // after IT, this recalculated BaseInsertOffset could be in the middle of
-    // an IT block. If it is, change the BaseInsertOffset to just after the
-    // IT block. This still make the CP Entry is in range because of the
-    // following reasons.
-    //   1. The initial BaseseInsertOffset calculated is (UserOffset +
-    //   U.getMaxDisp() - UPad).
-    //   2. An IT block is only at most 4 instructions plus the "it" itself (18
-    //   bytes).
-    //   3. All the relevant instructions support much larger Maximum
-    //   displacement.
-    MachineBasicBlock::iterator I = UserMI;
-    ++I;
-    Register PredReg;
-    for (unsigned Offset = UserOffset + TII->getInstSizeInBytes(*UserMI);
-         I->getOpcode() != EZH::t2IT &&
-         getITInstrPredicate(*I, PredReg) != EZHCC::AL;
-         Offset += TII->getInstSizeInBytes(*I), I = std::next(I)) {
-      BaseInsertOffset =
-          std::max(BaseInsertOffset, Offset + TII->getInstSizeInBytes(*I) + 1);
-      assert(I != UserMBB->end() && "Fell off end of block");
-    }
-    LLVM_DEBUG(dbgs() << format("Move inside block: %#x\n", BaseInsertOffset));
   }
-  unsigned EndInsertOffset =
-      BaseInsertOffset + 4 + UPad + CPEMI->getOperand(2).getImm();
-  MachineBasicBlock::iterator MI = UserMI;
-  ++MI;
-  unsigned CPUIndex = CPUserIndex + 1;
-  unsigned NumCPUsers = CPUsers.size();
-  MachineInstr *LastIT = nullptr;
-  for (unsigned Offset = UserOffset + TII->getInstSizeInBytes(*UserMI);
-       Offset < BaseInsertOffset;
-       Offset += TII->getInstSizeInBytes(*MI), MI = std::next(MI)) {
-    assert(MI != UserMBB->end() && "Fell off end of block");
-    if (CPUIndex < NumCPUsers && CPUsers[CPUIndex].MI == &*MI) {
-      CPUser &U = CPUsers[CPUIndex];
-      if (!isOffsetInRange(Offset, EndInsertOffset, U)) {
-        // Shift intertion point by one unit of alignment so it is within reach.
-        BaseInsertOffset -= Align.value();
-        EndInsertOffset -= Align.value();
-      }
-      // This is overly conservative, as we don't account for CPEMIs being
-      // reused within the block, but it doesn't matter much.  Also assume CPEs
-      // are added in order with alignment padding.  We may eventually be able
-      // to pack the aligned CPEs better.
-      EndInsertOffset += U.CPEMI->getOperand(2).getImm();
-      CPUIndex++;
-    }
-
-    // Remember the last IT instruction.
-    if (MI->getOpcode() == EZH::t2IT)
-      LastIT = &*MI;
-  }
-
-  --MI;
-
-  // Avoid splitting an IT block.
-  if (LastIT) {
-    Register PredReg;
-    EZHCC::CondCodes CC = getITInstrPredicate(*MI, PredReg);
-    if (CC != EZHCC::AL)
-      MI = LastIT;
-  }
-
-  // Avoid splitting a MOVW+MOVT pair with a relocation on Windows.
-  // On Windows, this instruction pair is covered by one single
-  // IMAGE_REL_EZH_MOV32T relocation which covers both instructions. If a
-  // constant island is injected inbetween them, the relocation will clobber
-  // the instruction and fail to update the MOVT instruction.
-  // (These instructions are bundled up until right before the ConstantIslands
-  // pass.)
-  if (STI->isTargetWindows() && isThumb && MI->getOpcode() == EZH::t2MOVTi16 &&
-      (MI->getOperand(2).getTargetFlags() & EZHII::MO_OPTION_MASK) ==
-          EZHII::MO_HI16) {
-    --MI;
-    assert(MI->getOpcode() == EZH::t2MOVi16 &&
-           (MI->getOperand(1).getTargetFlags() & EZHII::MO_OPTION_MASK) ==
-               EZHII::MO_LO16);
-  }
-
-  // We really must not split an IT block.
-#ifndef NDEBUG
-  Register PredReg;
-  assert(!isThumb || getITInstrPredicate(*MI, PredReg) == EZHCC::AL);
-#endif
-  NewMBB = splitBlockBeforeInstr(&*MI);
+  NewMBB = splitBlockBeforeInstr(&*UserMI);
 }
 
 /// handleConstantPoolUser - Analyze the specified user, checking to see if it
@@ -1575,10 +1180,7 @@ bool EZHConstantIslands::handleConstantPoolUser(unsigned CPUserIndex,
     // We are adding new water.  Update NewWaterList.
     NewWaterList.insert(NewIsland);
   }
-  // Always align the new block because CP entries can be smaller than 4
-  // bytes. Be careful not to decrease the existing alignment, e.g. NewMBB may
-  // be an already aligned constant pool block.
-  const Align Alignment = isThumb ? Align(2) : Align(4);
+  const Align Alignment = Align(4);
   if (NewMBB->getAlignment() < Alignment)
     NewMBB->setAlignment(Alignment);
 
@@ -1609,15 +1211,15 @@ bool EZHConstantIslands::handleConstantPoolUser(unsigned CPUserIndex,
   decrementCPEReferenceCount(CPI, CPEMI);
 
   // Mark the basic block as aligned as required by the const-pool entry.
-  NewIsland->setAlignment(getCPEAlign(U.CPEMI));
+  NewIsland->setAlignment(Align(4));
 
   // Increase the size of the island block to account for the new entry.
   BBUtils->adjustBBSize(NewIsland, Size);
   BBUtils->adjustBBOffsetsAfter(&*--NewIsland->getIterator());
 
-  // Finally, change the CPI in the instruction operand to be ID.
+  // Finally, change the CPI/JTI in the instruction operand to be ID.
   for (MachineOperand &MO : UserMI->operands())
-    if (MO.isCPI()) {
+    if (MO.isCPI() || MO.isJTI()) {
       MO.setIndex(ID);
       break;
     }
@@ -1676,6 +1278,8 @@ bool EZHConstantIslands::removeUnusedCPEntries() {
 /// fixupImmediateBr - Fix up an immediate branch whose destination is too far
 /// away to fit in its displacement field.
 bool EZHConstantIslands::fixupImmediateBr(ImmBranch &Br) {
+  if (!Br.MI)
+    return false;
   MachineInstr *MI = Br.MI;
   MachineBasicBlock *DestBB = MI->getOperand(0).getMBB();
 
@@ -1689,817 +1293,58 @@ bool EZHConstantIslands::fixupImmediateBr(ImmBranch &Br) {
 }
 
 /// fixupUnconditionalBr - Fix up an unconditional branch whose destination is
-/// too far away to fit in its displacement field. If the LR register has been
-/// spilled in the epilogue, then we can use BL to implement a far jump.
-/// Otherwise, add an intermediate branch instruction to a branch.
+/// too far away to fit in its displacement field. On EZH, we implement this
+/// by loading the destination block's address from the constant pool directly
+/// into the PC register, which acts as an indirect far jump.
 bool EZHConstantIslands::fixupUnconditionalBr(ImmBranch &Br) {
   MachineInstr *MI = Br.MI;
+  MachineBasicBlock *DestBB = MI->getOperand(0).getMBB();
   MachineBasicBlock *MBB = MI->getParent();
-  if (!isThumb1)
-    llvm_unreachable("fixupUnconditionalBr is Thumb1 only!");
 
-  if (!AFI->isLRSpilled())
-    report_fatal_error("underestimated function size");
+  auto *CPV = EZHConstantPoolMBB::Create(
+      Type::getInt32Ty(MF->getFunction().getContext()), DestBB);
+  unsigned CPI = MF->getConstantPool()->getConstantPoolIndex(CPV, Align(4));
 
-  // Use BL to implement far jump.
-  Br.MaxDisp = (1 << 21) * 2;
-  MI->setDesc(TII->get(EZH::tBfar));
-  BBInfoVector &BBInfo = BBUtils->getBBInfo();
-  BBInfo[MBB->getNumber()].Size += 2;
-  BBUtils->adjustBBOffsetsAfter(MBB);
-  ++NumUBrFixed;
+  // Insert LDR PC (via LOAD_CONSTANT)
+  BuildMI(*MBB, MI, MI->getDebugLoc(), TII->get(EZH::LOAD_CONSTANT), EZH::PC)
+      .addImm(CPI);
 
-  LLVM_DEBUG(dbgs() << "  Changed B to long jump " << *MI);
+  MI->eraseFromParent();
+  Br.MI = nullptr;
+
+  // Replaced one 4-byte instruction with another. Block size remains unchanged.
 
   return true;
 }
 
 /// fixupConditionalBr - Fix up a conditional branch whose destination is too
-/// far away to fit in its displacement field. It is converted to an inverse
-/// conditional branch + an unconditional branch to the destination.
+/// far away. On EZH, we implement this using a conditional far load to PC.
 bool EZHConstantIslands::fixupConditionalBr(ImmBranch &Br) {
   MachineInstr *MI = Br.MI;
   MachineBasicBlock *DestBB = MI->getOperand(0).getMBB();
-
-  // Add an unconditional branch to the destination and invert the branch
-  // condition to jump over it:
-  // blt L1
-  // =>
-  // bge L2
-  // b   L1
-  // L2:
-  EZHCC::CondCodes CC = (EZHCC::CondCodes)MI->getOperand(1).getImm();
-  CC = EZHCC::getOppositeCondition(CC);
-  Register CCReg = MI->getOperand(2).getReg();
-
-  // If the branch is at the end of its MBB and that has a fall-through block,
-  // direct the updated conditional branch to the fall-through block. Otherwise,
-  // split the MBB before the next instruction.
   MachineBasicBlock *MBB = MI->getParent();
-  MachineInstr *BMI = &MBB->back();
-  bool NeedSplit = (BMI != MI) || !BBHasFallthrough(MBB);
 
-  ++NumCBrFixed;
-  if (BMI != MI) {
-    if (std::next(MachineBasicBlock::iterator(MI)) == std::prev(MBB->end()) &&
-        BMI->getOpcode() == Br.UncondBr) {
-      // Last MI in the BB is an unconditional branch. Can we simply invert the
-      // condition and swap destinations:
-      // beq L1
-      // b   L2
-      // =>
-      // bne L2
-      // b   L1
-      MachineBasicBlock *NewDest = BMI->getOperand(0).getMBB();
-      if (BBUtils->isBBInRange(MI, NewDest, Br.MaxDisp)) {
-        LLVM_DEBUG(
-            dbgs() << "  Invert Bcc condition and swap its destination with "
-                   << *BMI);
-        BMI->getOperand(0).setMBB(DestBB);
-        MI->getOperand(0).setMBB(NewDest);
-        MI->getOperand(1).setImm(CC);
-        return true;
-      }
-    }
-  }
+  auto *CPV = EZHConstantPoolMBB::Create(
+      Type::getInt32Ty(MF->getFunction().getContext()), DestBB);
+  unsigned CPI = MF->getConstantPool()->getConstantPoolIndex(CPV, Align(4));
 
-  if (NeedSplit) {
-    splitBlockBeforeInstr(MI);
-    // No need for the branch to the next block. We're adding an unconditional
-    // branch to the destination.
-    int delta = TII->getInstSizeInBytes(MBB->back());
-    BBUtils->adjustBBSize(MBB, -delta);
-    MBB->back().eraseFromParent();
+  // Get the condition code from the conditional branch (operand 1 is pred).
+  unsigned CC = MI->getOperand(1).getImm();
 
-    // The conditional successor will be swapped between the BBs after this, so
-    // update CFG.
-    MBB->addSuccessor(DestBB);
-    std::next(MBB->getIterator())->removeSuccessor(DestBB);
+  // Insert conditional LDR PC (via LOAD_CONSTANT_COND)
+  BuildMI(*MBB, MI, MI->getDebugLoc(), TII->get(EZH::LOAD_CONSTANT_COND),
+          EZH::PC)
+      .addImm(CPI)
+      .addImm(CC);
 
-    // BBInfo[SplitBB].Offset is wrong temporarily, fixed below
-  }
-  MachineBasicBlock *NextBB = &*++MBB->getIterator();
-
-  LLVM_DEBUG(dbgs() << "  Insert B to " << printMBBReference(*DestBB)
-                    << " also invert condition and change dest. to "
-                    << printMBBReference(*NextBB) << "\n");
-
-  // Insert a new conditional branch and a new unconditional branch.
-  // Also update the ImmBranch as well as adding a new entry for the new branch.
-  BuildMI(MBB, DebugLoc(), TII->get(MI->getOpcode()))
-      .addMBB(NextBB)
-      .addImm(CC)
-      .addReg(CCReg);
-  Br.MI = &MBB->back();
-  BBUtils->adjustBBSize(MBB, TII->getInstSizeInBytes(MBB->back()));
-  if (isThumb)
-    BuildMI(MBB, DebugLoc(), TII->get(Br.UncondBr))
-        .addMBB(DestBB)
-        .add(predOps(EZHCC::AL));
-  else
-    BuildMI(MBB, DebugLoc(), TII->get(Br.UncondBr)).addMBB(DestBB);
-  BBUtils->adjustBBSize(MBB, TII->getInstSizeInBytes(MBB->back()));
-  unsigned MaxDisp = getUnconditionalBrDisp(Br.UncondBr);
-  ImmBranches.push_back(ImmBranch(&MBB->back(), MaxDisp, false, Br.UncondBr));
-
-  // Remove the old conditional branch.  It may or may not still be in MBB.
-  BBUtils->adjustBBSize(MI->getParent(), -TII->getInstSizeInBytes(*MI));
   MI->eraseFromParent();
-  BBUtils->adjustBBOffsetsAfter(MBB);
+  Br.MI = nullptr;
+
+  // Replaced one 4-byte instruction with another. Block size remains unchanged.
+
   return true;
 }
 
-bool EZHConstantIslands::optimizeThumb2Instructions() {
-  bool MadeChange = false;
-
-  // Shrink ADR and LDR from constantpool.
-  for (CPUser &U : CPUsers) {
-    unsigned Opcode = U.MI->getOpcode();
-    unsigned NewOpc = 0;
-    unsigned Scale = 1;
-    unsigned Bits = 0;
-    switch (Opcode) {
-    default:
-      break;
-    case EZH::t2LEApcrel:
-      if (isEZHLowRegister(U.MI->getOperand(0).getReg())) {
-        NewOpc = EZH::tLEApcrel;
-        Bits = 8;
-        Scale = 4;
-      }
-      break;
-    case EZH::t2LDRpci:
-      if (isEZHLowRegister(U.MI->getOperand(0).getReg())) {
-        NewOpc = EZH::tLDRpci;
-        Bits = 8;
-        Scale = 4;
-      }
-      break;
-    }
-
-    if (!NewOpc)
-      continue;
-
-    unsigned UserOffset = getUserOffset(U);
-    unsigned MaxOffs = ((1 << Bits) - 1) * Scale;
-
-    // Be conservative with inline asm.
-    if (!U.KnownAlignment)
-      MaxOffs -= 2;
-
-    // FIXME: Check if offset is multiple of scale if scale is not 4.
-    if (isCPEntryInRange(U.MI, UserOffset, U.CPEMI, MaxOffs, false, true)) {
-      LLVM_DEBUG(dbgs() << "Shrink: " << *U.MI);
-      U.MI->setDesc(TII->get(NewOpc));
-      MachineBasicBlock *MBB = U.MI->getParent();
-      BBUtils->adjustBBSize(MBB, -2);
-      BBUtils->adjustBBOffsetsAfter(MBB);
-      ++NumT2CPShrunk;
-      MadeChange = true;
-    }
-  }
-
-  return MadeChange;
-}
-
-bool EZHConstantIslands::optimizeThumb2Branches() {
-
-  auto TryShrinkBranch = [this](ImmBranch &Br) {
-    unsigned Opcode = Br.MI->getOpcode();
-    unsigned NewOpc = 0;
-    unsigned Scale = 1;
-    unsigned Bits = 0;
-    switch (Opcode) {
-    default:
-      break;
-    case EZH::t2B:
-      NewOpc = EZH::tB;
-      Bits = 11;
-      Scale = 2;
-      break;
-    case EZH::t2Bcc:
-      NewOpc = EZH::tBcc;
-      Bits = 8;
-      Scale = 2;
-      break;
-    }
-    if (NewOpc) {
-      unsigned MaxOffs = ((1 << (Bits - 1)) - 1) * Scale;
-      MachineBasicBlock *DestBB = Br.MI->getOperand(0).getMBB();
-      if (BBUtils->isBBInRange(Br.MI, DestBB, MaxOffs)) {
-        LLVM_DEBUG(dbgs() << "Shrink branch: " << *Br.MI);
-        Br.MI->setDesc(TII->get(NewOpc));
-        MachineBasicBlock *MBB = Br.MI->getParent();
-        BBUtils->adjustBBSize(MBB, -2);
-        BBUtils->adjustBBOffsetsAfter(MBB);
-        ++NumT2BrShrunk;
-        return true;
-      }
-    }
-    return false;
-  };
-
-  struct ImmCompare {
-    MachineInstr *MI = nullptr;
-    unsigned NewOpc = 0;
-  };
-
-  auto FindCmpForCBZ = [this](ImmBranch &Br, ImmCompare &ImmCmp,
-                              MachineBasicBlock *DestBB) {
-    ImmCmp.MI = nullptr;
-    ImmCmp.NewOpc = 0;
-
-    // If the conditional branch doesn't kill CPSR, then CPSR can be liveout
-    // so this transformation is not safe.
-    if (!Br.MI->killsRegister(EZH::CPSR, /*TRI=*/nullptr))
-      return false;
-
-    Register PredReg;
-    unsigned NewOpc = 0;
-    EZHCC::CondCodes Pred = getInstrPredicate(*Br.MI, PredReg);
-    if (Pred == EZHCC::EQ)
-      NewOpc = EZH::tCBZ;
-    else if (Pred == EZHCC::NE)
-      NewOpc = EZH::tCBNZ;
-    else
-      return false;
-
-    // Check if the distance is within 126. Subtract starting offset by 2
-    // because the cmp will be eliminated.
-    unsigned BrOffset = BBUtils->getOffsetOf(Br.MI) + 4 - 2;
-    BBInfoVector &BBInfo = BBUtils->getBBInfo();
-    unsigned DestOffset = BBInfo[DestBB->getNumber()].Offset;
-    if (BrOffset >= DestOffset || (DestOffset - BrOffset) > 126)
-      return false;
-
-    // Search backwards to find a tCMPi8
-    auto *TRI = STI->getRegisterInfo();
-    MachineInstr *CmpMI = findCMPToFoldIntoCBZ(Br.MI, TRI);
-    if (!CmpMI || CmpMI->getOpcode() != EZH::tCMPi8)
-      return false;
-
-    ImmCmp.MI = CmpMI;
-    ImmCmp.NewOpc = NewOpc;
-    return true;
-  };
-
-  auto TryConvertToLE = [this](ImmBranch &Br, ImmCompare &Cmp) {
-    if (Br.MI->getOpcode() != EZH::t2Bcc || !STI->hasLOB() || STI->hasMinSize())
-      return false;
-
-    MachineBasicBlock *MBB = Br.MI->getParent();
-    MachineBasicBlock *DestBB = Br.MI->getOperand(0).getMBB();
-    if (BBUtils->getOffsetOf(MBB) < BBUtils->getOffsetOf(DestBB) ||
-        !BBUtils->isBBInRange(Br.MI, DestBB, 4094))
-      return false;
-
-    if (!DT->dominates(DestBB, MBB))
-      return false;
-
-    // We queried for the CBN?Z opcode based upon the 'ExitBB', the opposite
-    // target of Br. So now we need to reverse the condition.
-    Cmp.NewOpc = Cmp.NewOpc == EZH::tCBZ ? EZH::tCBNZ : EZH::tCBZ;
-
-    MachineInstrBuilder MIB =
-        BuildMI(*MBB, Br.MI, Br.MI->getDebugLoc(), TII->get(EZH::t2LE));
-    // Swapped a t2Bcc for a t2LE, so no need to update the size of the block.
-    MIB.add(Br.MI->getOperand(0));
-    Br.MI->eraseFromParent();
-    Br.MI = MIB;
-    ++NumLEInserted;
-    return true;
-  };
-
-  bool MadeChange = false;
-
-  // The order in which branches appear in ImmBranches is approximately their
-  // order within the function body. By visiting later branches first, we reduce
-  // the distance between earlier forward branches and their targets, making it
-  // more likely that the cbn?z optimization, which can only apply to forward
-  // branches, will succeed.
-  for (ImmBranch &Br : reverse(ImmBranches)) {
-    MachineBasicBlock *DestBB = Br.MI->getOperand(0).getMBB();
-    MachineBasicBlock *MBB = Br.MI->getParent();
-    MachineBasicBlock *ExitBB = &MBB->back() == Br.MI
-                                    ? MBB->getFallThrough()
-                                    : MBB->back().getOperand(0).getMBB();
-
-    ImmCompare Cmp;
-    if (FindCmpForCBZ(Br, Cmp, ExitBB) && TryConvertToLE(Br, Cmp)) {
-      DestBB = ExitBB;
-      MadeChange = true;
-    } else {
-      FindCmpForCBZ(Br, Cmp, DestBB);
-      MadeChange |= TryShrinkBranch(Br);
-    }
-
-    unsigned Opcode = Br.MI->getOpcode();
-    if ((Opcode != EZH::tBcc && Opcode != EZH::t2LE) || !Cmp.NewOpc)
-      continue;
-
-    Register Reg = Cmp.MI->getOperand(0).getReg();
-
-    // Check for Kill flags on Reg. If they are present remove them and set kill
-    // on the new CBZ.
-    auto *TRI = STI->getRegisterInfo();
-    MachineBasicBlock::iterator KillMI = Br.MI;
-    bool RegKilled = false;
-    do {
-      --KillMI;
-      if (KillMI->killsRegister(Reg, TRI)) {
-        KillMI->clearRegisterKills(Reg, TRI);
-        RegKilled = true;
-        break;
-      }
-    } while (KillMI != Cmp.MI);
-
-    // Create the new CBZ/CBNZ
-    LLVM_DEBUG(dbgs() << "Fold: " << *Cmp.MI << " and: " << *Br.MI);
-    MachineInstr *NewBR =
-        BuildMI(*MBB, Br.MI, Br.MI->getDebugLoc(), TII->get(Cmp.NewOpc))
-            .addReg(Reg, getKillRegState(RegKilled) |
-                             getRegState(Cmp.MI->getOperand(0)))
-            .addMBB(DestBB, Br.MI->getOperand(0).getTargetFlags());
-
-    Cmp.MI->eraseFromParent();
-
-    if (Br.MI->getOpcode() == EZH::tBcc) {
-      Br.MI->eraseFromParent();
-      Br.MI = NewBR;
-      BBUtils->adjustBBSize(MBB, -2);
-    } else if (MBB->back().getOpcode() != EZH::t2LE) {
-      // An LE has been generated, but it's not the terminator - that is an
-      // unconditional branch. However, the logic has now been reversed with the
-      // CBN?Z being the conditional branch and the LE being the unconditional
-      // branch. So this means we can remove the redundant unconditional branch
-      // at the end of the block.
-      MachineInstr *LastMI = &MBB->back();
-      BBUtils->adjustBBSize(MBB, -LastMI->getDesc().getSize());
-      LastMI->eraseFromParent();
-    }
-    BBUtils->adjustBBOffsetsAfter(MBB);
-    ++NumCBZ;
-    MadeChange = true;
-  }
-
-  return MadeChange;
-}
-
-static bool isSimpleIndexCalc(MachineInstr &I, unsigned EntryReg,
-                              unsigned BaseReg) {
-  if (I.getOpcode() != EZH::t2ADDrs)
-    return false;
-
-  if (I.getOperand(0).getReg() != EntryReg)
-    return false;
-
-  if (I.getOperand(1).getReg() != BaseReg)
-    return false;
-
-  // FIXME: what about CC and IdxReg?
-  return true;
-}
-
-/// While trying to form a TBB/TBH instruction, we may (if the table
-/// doesn't immediately follow the BR_JT) need access to the start of the
-/// jump-table. We know one instruction that produces such a register; this
-/// function works out whether that definition can be preserved to the BR_JT,
-/// possibly by removing an intervening addition (which is usually needed to
-/// calculate the actual entry to jump to).
-bool EZHConstantIslands::preserveBaseRegister(MachineInstr *JumpMI,
-                                              MachineInstr *LEAMI,
-                                              unsigned &DeadSize,
-                                              bool &CanDeleteLEA,
-                                              bool &BaseRegKill) {
-  if (JumpMI->getParent() != LEAMI->getParent())
-    return false;
-
-  // Now we hope that we have at least these instructions in the basic block:
-  //     BaseReg = t2LEA ...
-  //     [...]
-  //     EntryReg = t2ADDrs BaseReg, ...
-  //     [...]
-  //     t2BR_JT EntryReg
-  //
-  // We have to be very conservative about what we recognise here though. The
-  // main perturbing factors to watch out for are:
-  //    + Spills at any point in the chain: not direct problems but we would
-  //      expect a blocking Def of the spilled register so in practice what we
-  //      can do is limited.
-  //    + EntryReg == BaseReg: this is the one situation we should allow a Def
-  //      of BaseReg, but only if the t2ADDrs can be removed.
-  //    + Some instruction other than t2ADDrs computing the entry. Not seen in
-  //      the wild, but we should be careful.
-  Register EntryReg = JumpMI->getOperand(0).getReg();
-  Register BaseReg = LEAMI->getOperand(0).getReg();
-
-  CanDeleteLEA = true;
-  BaseRegKill = false;
-  MachineInstr *RemovableAdd = nullptr;
-  MachineBasicBlock::iterator I(LEAMI);
-  for (++I; &*I != JumpMI; ++I) {
-    if (isSimpleIndexCalc(*I, EntryReg, BaseReg)) {
-      RemovableAdd = &*I;
-      break;
-    }
-
-    for (const MachineOperand &MO : I->operands()) {
-      if (!MO.isReg() || !MO.getReg())
-        continue;
-      if (MO.isDef() && MO.getReg() == BaseReg)
-        return false;
-      if (MO.isUse() && MO.getReg() == BaseReg) {
-        BaseRegKill = BaseRegKill || MO.isKill();
-        CanDeleteLEA = false;
-      }
-    }
-  }
-
-  if (!RemovableAdd)
-    return true;
-
-  // Check the add really is removable, and that nothing else in the block
-  // clobbers BaseReg.
-  for (++I; &*I != JumpMI; ++I) {
-    for (const MachineOperand &MO : I->operands()) {
-      if (!MO.isReg() || !MO.getReg())
-        continue;
-      if (MO.isDef() && MO.getReg() == BaseReg)
-        return false;
-      if (MO.isUse() && MO.getReg() == EntryReg)
-        RemovableAdd = nullptr;
-    }
-  }
-
-  if (RemovableAdd) {
-    RemovableAdd->eraseFromParent();
-    DeadSize += isThumb2 ? 4 : 2;
-  } else if (BaseReg == EntryReg) {
-    // The add wasn't removable, but clobbered the base for the TBB. So we can't
-    // preserve it.
-    return false;
-  }
-
-  // We reached the end of the block without seeing another definition of
-  // BaseReg (except, possibly the t2ADDrs, which was removed). BaseReg can be
-  // used in the TBB/TBH if necessary.
-  return true;
-}
-
-/// Returns whether CPEMI is the first instruction in the block
-/// immediately following JTMI (assumed to be a TBB or TBH terminator). If so,
-/// we can switch the first register to PC and usually remove the address
-/// calculation that preceded it.
-static bool jumpTableFollowsTB(MachineInstr *JTMI, MachineInstr *CPEMI) {
-  MachineFunction::iterator MBB = JTMI->getParent()->getIterator();
-  MachineFunction *MF = MBB->getParent();
-  ++MBB;
-
-  return MBB != MF->end() && !MBB->empty() && &*MBB->begin() == CPEMI;
-}
-
-static void RemoveDeadAddBetweenLEAAndJT(MachineInstr *LEAMI,
-                                         MachineInstr *JumpMI,
-                                         unsigned &DeadSize) {
-  // Remove a dead add between the LEA and JT, which used to compute EntryReg,
-  // but the JT now uses PC. Finds the last ADD (if any) that def's EntryReg
-  // and is not clobbered / used.
-  MachineInstr *RemovableAdd = nullptr;
-  Register EntryReg = JumpMI->getOperand(0).getReg();
-
-  // Find the last ADD to set EntryReg
-  MachineBasicBlock::iterator I(LEAMI);
-  for (++I; &*I != JumpMI; ++I) {
-    if (I->getOpcode() == EZH::t2ADDrs && I->getOperand(0).getReg() == EntryReg)
-      RemovableAdd = &*I;
-  }
-
-  if (!RemovableAdd)
-    return;
-
-  // Ensure EntryReg is not clobbered or used.
-  MachineBasicBlock::iterator J(RemovableAdd);
-  for (++J; &*J != JumpMI; ++J) {
-    for (const MachineOperand &MO : J->operands()) {
-      if (!MO.isReg() || !MO.getReg())
-        continue;
-      if (MO.isDef() && MO.getReg() == EntryReg)
-        return;
-      if (MO.isUse() && MO.getReg() == EntryReg)
-        return;
-    }
-  }
-
-  LLVM_DEBUG(dbgs() << "Removing Dead Add: " << *RemovableAdd);
-  RemovableAdd->eraseFromParent();
-  DeadSize += 4;
-}
-
-/// optimizeThumb2JumpTables - Use tbb / tbh instructions to generate smaller
-/// jumptables when it's possible.
-bool EZHConstantIslands::optimizeThumb2JumpTables() {
-  bool MadeChange = false;
-
-  // FIXME: After the tables are shrunk, can we get rid some of the
-  // constantpool tables?
-  MachineJumpTableInfo *MJTI = MF->getJumpTableInfo();
-  if (!MJTI)
-    return false;
-
-  const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
-  for (MachineInstr *MI : T2JumpTables) {
-    const MCInstrDesc &MCID = MI->getDesc();
-    unsigned NumOps = MCID.getNumOperands();
-    unsigned JTOpIdx = NumOps - (MI->isPredicable() ? 2 : 1);
-    MachineOperand JTOP = MI->getOperand(JTOpIdx);
-    unsigned JTI = JTOP.getIndex();
-    assert(JTI < JT.size());
-
-    bool ByteOk = true;
-    bool HalfWordOk = true;
-    unsigned JTOffset = BBUtils->getOffsetOf(MI) + 4;
-    const std::vector<MachineBasicBlock *> &JTBBs = JT[JTI].MBBs;
-    BBInfoVector &BBInfo = BBUtils->getBBInfo();
-    for (MachineBasicBlock *MBB : JTBBs) {
-      unsigned DstOffset = BBInfo[MBB->getNumber()].Offset;
-      // Negative offset is not ok. FIXME: We should change BB layout to make
-      // sure all the branches are forward.
-      if (ByteOk && (DstOffset - JTOffset) > ((1 << 8) - 1) * 2)
-        ByteOk = false;
-      unsigned TBHLimit = ((1 << 16) - 1) * 2;
-      if (HalfWordOk && (DstOffset - JTOffset) > TBHLimit)
-        HalfWordOk = false;
-      if (!ByteOk && !HalfWordOk)
-        break;
-    }
-
-    if (!ByteOk && !HalfWordOk)
-      continue;
-
-    CPUser &User = CPUsers[JumpTableUserIndices[JTI]];
-    MachineBasicBlock *MBB = MI->getParent();
-    if (!MI->getOperand(0).isKill()) // FIXME: needed now?
-      continue;
-
-    unsigned DeadSize = 0;
-    bool CanDeleteLEA = false;
-    bool BaseRegKill = false;
-
-    unsigned IdxReg = ~0U;
-    bool IdxRegKill = true;
-    if (isThumb2) {
-      IdxReg = MI->getOperand(1).getReg();
-      IdxRegKill = MI->getOperand(1).isKill();
-
-      bool PreservedBaseReg = preserveBaseRegister(MI, User.MI, DeadSize,
-                                                   CanDeleteLEA, BaseRegKill);
-      if (!jumpTableFollowsTB(MI, User.CPEMI) && !PreservedBaseReg)
-        continue;
-    } else {
-      // We're in thumb-1 mode, so we must have something like:
-      //   %idx = tLSLri %idx, 2
-      //   %base = tLEApcrelJT
-      //   %t = tLDRr %base, %idx
-      Register BaseReg = User.MI->getOperand(0).getReg();
-
-      MachineBasicBlock *UserMBB = User.MI->getParent();
-      MachineBasicBlock::iterator Shift = User.MI->getIterator();
-      if (Shift == UserMBB->begin())
-        continue;
-
-      Shift = prev_nodbg(Shift, UserMBB->begin());
-      if (Shift->getOpcode() != EZH::tLSLri ||
-          Shift->getOperand(3).getImm() != 2 || !Shift->getOperand(2).isKill())
-        continue;
-      IdxReg = Shift->getOperand(2).getReg();
-      Register ShiftedIdxReg = Shift->getOperand(0).getReg();
-
-      // It's important that IdxReg is live until the actual TBB/TBH. Most of
-      // the range is checked later, but the LEA might still clobber it and not
-      // actually get removed.
-      if (BaseReg == IdxReg && !jumpTableFollowsTB(MI, User.CPEMI))
-        continue;
-
-      MachineInstr *Load = User.MI->getNextNode();
-      if (Load->getOpcode() != EZH::tLDRr)
-        continue;
-      if (Load->getOperand(1).getReg() != BaseReg ||
-          Load->getOperand(2).getReg() != ShiftedIdxReg ||
-          !Load->getOperand(2).isKill())
-        continue;
-
-      // If we're in PIC mode, there should be another ADD following.
-      auto *TRI = STI->getRegisterInfo();
-
-      // %base cannot be redefined after the load as it will appear before
-      // TBB/TBH like:
-      //      %base =
-      //      %base =
-      //      tBB %base, %idx
-      if (registerDefinedBetween(BaseReg, Load->getNextNode(), MBB->end(), TRI))
-        continue;
-
-      if (isPositionIndependentOrROPI) {
-        MachineInstr *Add = Load->getNextNode();
-        if (Add->getOpcode() != EZH::tADDrr ||
-            Add->getOperand(2).getReg() != BaseReg ||
-            Add->getOperand(3).getReg() != Load->getOperand(0).getReg() ||
-            !Add->getOperand(3).isKill())
-          continue;
-        if (Add->getOperand(0).getReg() != MI->getOperand(0).getReg())
-          continue;
-        if (registerDefinedBetween(IdxReg, Add->getNextNode(), MI, TRI))
-          // IdxReg gets redefined in the middle of the sequence.
-          continue;
-        Add->eraseFromParent();
-        DeadSize += 2;
-      } else {
-        if (Load->getOperand(0).getReg() != MI->getOperand(0).getReg())
-          continue;
-        if (registerDefinedBetween(IdxReg, Load->getNextNode(), MI, TRI))
-          // IdxReg gets redefined in the middle of the sequence.
-          continue;
-      }
-
-      // Now safe to delete the load and lsl. The LEA will be removed later.
-      CanDeleteLEA = true;
-      Shift->eraseFromParent();
-      Load->eraseFromParent();
-      DeadSize += 4;
-    }
-
-    LLVM_DEBUG(dbgs() << "Shrink JT: " << *MI);
-    MachineInstr *CPEMI = User.CPEMI;
-    unsigned Opc = ByteOk ? EZH::t2TBB_JT : EZH::t2TBH_JT;
-    if (!isThumb2)
-      Opc = ByteOk ? EZH::tTBB_JT : EZH::tTBH_JT;
-
-    MachineBasicBlock::iterator MI_JT = MI;
-    MachineInstr *NewJTMI =
-        BuildMI(*MBB, MI_JT, MI->getDebugLoc(), TII->get(Opc))
-            .addReg(User.MI->getOperand(0).getReg(),
-                    getKillRegState(BaseRegKill))
-            .addReg(IdxReg, getKillRegState(IdxRegKill))
-            .addJumpTableIndex(JTI, JTOP.getTargetFlags())
-            .addImm(CPEMI->getOperand(0).getImm());
-    LLVM_DEBUG(dbgs() << printMBBReference(*MBB) << ": " << *NewJTMI);
-
-    unsigned JTOpc = ByteOk ? EZH::JUMPTABLE_TBB : EZH::JUMPTABLE_TBH;
-    CPEMI->setDesc(TII->get(JTOpc));
-
-    if (jumpTableFollowsTB(MI, User.CPEMI)) {
-      NewJTMI->getOperand(0).setReg(EZH::PC);
-      NewJTMI->getOperand(0).setIsKill(false);
-
-      if (CanDeleteLEA) {
-        if (isThumb2)
-          RemoveDeadAddBetweenLEAAndJT(User.MI, MI, DeadSize);
-
-        User.MI->eraseFromParent();
-        DeadSize += isThumb2 ? 4 : 2;
-
-        // The LEA was eliminated, the TBB instruction becomes the only new user
-        // of the jump table.
-        User.MI = NewJTMI;
-        User.MaxDisp = 4;
-        User.NegOk = false;
-        User.IsSoImm = false;
-        User.KnownAlignment = false;
-      } else {
-        // The LEA couldn't be eliminated, so we must add another CPUser to
-        // record the TBB or TBH use.
-        int CPEntryIdx = JumpTableEntryIndices[JTI];
-        auto &CPEs = CPEntries[CPEntryIdx];
-        auto Entry =
-            find_if(CPEs, [&](CPEntry &E) { return E.CPEMI == User.CPEMI; });
-        ++Entry->RefCount;
-        CPUsers.emplace_back(CPUser(NewJTMI, User.CPEMI, 4, false, false));
-      }
-    }
-
-    unsigned NewSize = TII->getInstSizeInBytes(*NewJTMI);
-    unsigned OrigSize = TII->getInstSizeInBytes(*MI);
-    MI->eraseFromParent();
-
-    int Delta = OrigSize - NewSize + DeadSize;
-    BBInfo[MBB->getNumber()].Size -= Delta;
-    BBUtils->adjustBBOffsetsAfter(MBB);
-
-    ++NumTBs;
-    MadeChange = true;
-  }
-
-  return MadeChange;
-}
-
-/// reorderThumb2JumpTables - Adjust the function's block layout to ensure that
-/// jump tables always branch forwards, since that's what tbb and tbh need.
-bool EZHConstantIslands::reorderThumb2JumpTables() {
-  bool MadeChange = false;
-
-  MachineJumpTableInfo *MJTI = MF->getJumpTableInfo();
-  if (!MJTI)
-    return false;
-
-  const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
-  for (MachineInstr *MI : T2JumpTables) {
-    const MCInstrDesc &MCID = MI->getDesc();
-    unsigned NumOps = MCID.getNumOperands();
-    unsigned JTOpIdx = NumOps - (MI->isPredicable() ? 2 : 1);
-    MachineOperand JTOP = MI->getOperand(JTOpIdx);
-    unsigned JTI = JTOP.getIndex();
-    assert(JTI < JT.size());
-
-    // We prefer if target blocks for the jump table come after the jump
-    // instruction so we can use TB[BH]. Loop through the target blocks
-    // and try to adjust them such that that's true.
-    int JTNumber = MI->getParent()->getNumber();
-    const std::vector<MachineBasicBlock *> &JTBBs = JT[JTI].MBBs;
-    for (MachineBasicBlock *MBB : JTBBs) {
-      int DTNumber = MBB->getNumber();
-
-      if (DTNumber < JTNumber) {
-        // The destination precedes the switch. Try to move the block forward
-        // so we have a positive offset.
-        MachineBasicBlock *NewBB =
-            adjustJTTargetBlockForward(JTI, MBB, MI->getParent());
-        if (NewBB)
-          MJTI->ReplaceMBBInJumpTable(JTI, MBB, NewBB);
-        MadeChange = true;
-      }
-    }
-  }
-
-  return MadeChange;
-}
-
-MachineBasicBlock *EZHConstantIslands::adjustJTTargetBlockForward(
-    unsigned JTI, MachineBasicBlock *BB, MachineBasicBlock *JTBB) {
-  // If the destination block is terminated by an unconditional branch,
-  // try to move it; otherwise, create a new block following the jump
-  // table that branches back to the actual target. This is a very simple
-  // heuristic. FIXME: We can definitely improve it.
-  MachineBasicBlock *TBB = nullptr, *FBB = nullptr;
-  SmallVector<MachineOperand, 4> Cond;
-  SmallVector<MachineOperand, 4> CondPrior;
-  MachineFunction::iterator BBi = BB->getIterator();
-  MachineFunction::iterator OldPrior = std::prev(BBi);
-  MachineFunction::iterator OldNext = std::next(BBi);
-
-  // If the block terminator isn't analyzable, don't try to move the block
-  bool B = TII->analyzeBranch(*BB, TBB, FBB, Cond);
-
-  // If the block ends in an unconditional branch, move it. The prior block
-  // has to have an analyzable terminator for us to move this one. Be paranoid
-  // and make sure we're not trying to move the entry block of the function.
-  if (!B && Cond.empty() && BB != &MF->front() &&
-      !TII->analyzeBranch(*OldPrior, TBB, FBB, CondPrior)) {
-    BB->moveAfter(JTBB);
-    OldPrior->updateTerminator(BB);
-    BB->updateTerminator(OldNext != MF->end() ? &*OldNext : nullptr);
-    // Update numbering to account for the block being moved.
-    MF->RenumberBlocks();
-    ++NumJTMoved;
-    return nullptr;
-  }
-
-  // Create a new MBB for the code after the jump BB.
-  MachineBasicBlock *NewBB = MF->CreateMachineBasicBlock(JTBB->getBasicBlock());
-  MachineFunction::iterator MBBI = ++JTBB->getIterator();
-  MF->insert(MBBI, NewBB);
-
-  // Copy live-in information to new block.
-  for (const MachineBasicBlock::RegisterMaskPair &RegMaskPair : BB->liveins())
-    NewBB->addLiveIn(RegMaskPair);
-
-  // Add an unconditional branch from NewBB to BB.
-  // There doesn't seem to be meaningful DebugInfo available; this doesn't
-  // correspond directly to anything in the source.
-  if (isThumb2)
-    BuildMI(NewBB, DebugLoc(), TII->get(EZH::t2B))
-        .addMBB(BB)
-        .add(predOps(EZHCC::AL));
-  else
-    BuildMI(NewBB, DebugLoc(), TII->get(EZH::tB))
-        .addMBB(BB)
-        .add(predOps(EZHCC::AL));
-
-  // Update internal data structures to account for the newly inserted MBB.
-  MF->RenumberBlocks(NewBB);
-
-  // Update the CFG.
-  NewBB->addSuccessor(BB);
-  JTBB->replaceSuccessor(BB, NewBB);
-
-  ++NumJTInserted;
-  return NewBB;
-}
-
-/// createEZHConstantIslandPass - returns an instance of the constpool
-/// island pass.
-FunctionPass *llvm::createEZHConstantIslandPass() {
-  return new EZHConstantIslands();
-}
-
-INITIALIZE_PASS(EZHConstantIslands, "ezh-cp-islands", EZH_CP_ISLANDS_OPT_NAME,
-                false, false)
+namespace llvm {
+FunctionPass *createEZHConstantIslandPass() { return new EZHConstantIslands(); }
+} // namespace llvm

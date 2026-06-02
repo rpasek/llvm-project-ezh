@@ -1,4 +1,20 @@
+#
+# Description:
+#   CMake build configuration for the EZH target backend component group.
+#
+# Copied From:
+#   Lanai target backend (llvm/lib/Target/Lanai/CMakeLists.txt).
+#
+# Changes:
+#   Replaced Lanai component names with EZH; configured TableGen generation
+#   targets (register info, instruction info, DAG ISel, calling conventions,
+#   asm writer/matcher, disassembler, code emitter, subtarget info) and listed
+#   EZH source files.
+#
 add_llvm_component_group(EZH)
+
+# Add strict warning flags for EZH locally (remove before upstreaming)
+add_compile_options(-Wall -Wextra -Wundef -Werror)
 
 set(LLVM_TARGET_DEFINITIONS EZH.td)
 
@@ -17,19 +33,20 @@ add_public_tablegen_target(EZHCommonTableGen)
 
 add_llvm_target(EZHCodeGen
   EZHAsmPrinter.cpp
-  EZHDelaySlotFiller.cpp
+  EZHBasicBlockInfo.cpp
+  EZHBitSliceInjection.cpp
+  EZHConstantIslandPass.cpp
+  EZHConstantPoolValue.cpp
   EZHFrameLowering.cpp
   EZHInstrInfo.cpp
   EZHISelDAGToDAG.cpp
   EZHISelLowering.cpp
   EZHMachineFunctionInfo.cpp
   EZHMCInstLower.cpp
-  EZHMemAluCombiner.cpp
   EZHRegisterInfo.cpp
   EZHSelectionDAGInfo.cpp
   EZHSubtarget.cpp
   EZHTargetMachine.cpp
-  EZHTargetObjectFile.cpp
 
   LINK_COMPONENTS
   Analysis
@@ -37,7 +54,6 @@ add_llvm_target(EZHCodeGen
   CodeGen
   CodeGenTypes
   Core
-  EZHAsmParser
   EZHDesc
   EZHInfo
   MC

@@ -1,4 +1,4 @@
-//===- EZHDisassembler.cpp - Disassembler for EZH -----------*- C++ -*-===//
+//===- EZHDisassembler.h - Disassembler for EZH -----------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,6 +7,18 @@
 //===----------------------------------------------------------------------===//
 //
 // This file is part of the EZH Disassembler.
+//
+// Description:
+//   Declares EZHDisassembler, decoding binary machine code bytes into EZH
+//   MCInst representations.
+//
+// Copied From:
+//   Lanai target backend
+//   (llvm/lib/Target/Lanai/Disassembler/LanaiDisassembler.h).
+//
+// Changes:
+//   Renamed LanaiDisassembler to EZHDisassembler; declared EZH-specific
+//   decoding methods.
 //
 //===----------------------------------------------------------------------===//
 

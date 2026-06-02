@@ -1,4 +1,4 @@
-//===-- EZHInstrInfo.td - Target Description for EZH Target -----------===//
+//===-- EZHInstrInfo.td - EZH Instruction defs ---------*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,880 +6,900 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file describes the EZH instructions in TableGen format.
+// Description:
+//   TableGen definitions for all EZH instructions (ALU ops, branches,
+//   loads/stores, pseudos), SelectionDAG patterns, and operands.
 //
-//===----------------------------------------------------------------------===//
-
-//===----------------------------------------------------------------------===//
-// Instruction format superclass
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiInstrInfo.td).
+//
+// Changes:
+//   Replaced Lanai instruction definitions with EZH records and DAG patterns
+//   matching fsl_smartdma_prv.h and AN14650; implemented preceding condition
+//   code assembly syntax (e.g., goto_ca); enforced PC-relative load limits
+//   (+508/-512 range).
+//
 //===----------------------------------------------------------------------===//
 
 include "EZHInstrFormats.td"
 
-// -------------------------------------------------- //
-// Instruction Operands and Patterns
-// -------------------------------------------------- //
-
-//  These are target-independent nodes, but have target-specific formats.
-def SDT_EZHCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>,
-                                            SDTCisVT<1, i32>]>;
-def SDT_EZHCallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, i32>,
-                                          SDTCisVT<1, i32>]>;
-def SDT_EZHCall         : SDTypeProfile<0, -1, [SDTCisVT<0, i32>]>;
-def SDT_EZHSetFlag      : SDTypeProfile<0,  2, [SDTCisSameAs<0, 1>]>;
-def SDT_EZHSelectCC     : SDTypeProfile<1,  3, [SDTCisSameAs<0, 1>,
-                                                  SDTCisSameAs<1, 2>]>;
-def SDT_EZHSetCC        : SDTypeProfile<1,  1, [SDTCisVT<0, i32>,
-                                                  SDTCisVT<1, i32>]>;
-def SDT_EZHBrCC         : SDTypeProfile<0,  2, [SDTCisVT<0, OtherVT>,
-                                                  SDTCisVT<1, i32>]>;
-def SDT_EZHAdjDynAlloc  : SDTypeProfile<1,  1, [SDTCisVT<0, i32>,
-                                                  SDTCisVT<1, i32>]>;
-
-def Call             : SDNode<"EZHISD::CALL", SDT_EZHCall,
-                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
-                               SDNPVariadic]>;
-def RetGlue          : SDNode<"EZHISD::RET_GLUE", SDTNone,
-                              [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
-def CallSeqStart     : SDNode<"ISD::CALLSEQ_START", SDT_EZHCallSeqStart,
-                              [SDNPHasChain, SDNPOutGlue]>;
-def CallSeqEnd       : SDNode<"ISD::CALLSEQ_END", SDT_EZHCallSeqEnd,
-                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
-def EZHSetFlag     : SDNode<"EZHISD::SET_FLAG", SDT_EZHSetFlag,
-                              [SDNPOutGlue]>;
-def EZHSubbF       : SDNode<"EZHISD::SUBBF", SDT_EZHSetFlag,
-                              [SDNPOutGlue, SDNPInGlue]>;
-def EZHBrCC        : SDNode<"EZHISD::BR_CC", SDT_EZHBrCC,
-                              [SDNPHasChain, SDNPInGlue]>;
-def EZHSelectCC    : SDNode<"EZHISD::SELECT_CC", SDT_EZHSelectCC,
-                              [SDNPInGlue]>;
-def EZHSetCC       : SDNode<"EZHISD::SETCC", SDT_EZHSetCC,
-                              [SDNPInGlue]>;
-def EZHHi          : SDNode<"EZHISD::HI", SDTIntUnaryOp>;
-def EZHLo          : SDNode<"EZHISD::LO", SDTIntUnaryOp>;
-def EZHSmall       : SDNode<"EZHISD::SMALL", SDTIntUnaryOp>;
-def EZHAdjDynAlloc : SDNode<"EZHISD::ADJDYNALLOC", SDT_EZHAdjDynAlloc>;
-
-// Extract bits 0-15 (low-end) of an immediate value.
-def LO16 : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant((uint64_t)N->getZExtValue() & 0xffff,
-                                   SDLoc(N), MVT::i32);
-}]>;
-
-// Extract bits 16-31 (high-end) of an immediate value.
-// Transformation function: shift the immediate value down into the low bits.
-def HI16 : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant((uint64_t)N->getZExtValue() >> 16, SDLoc(N),
-                                   MVT::i32);
-}]>;
-
-def NEG : SDNodeXForm<imm, [{
-  return CurDAG->getSignedTargetConstant(-N->getSExtValue(), SDLoc(N),
-                                         MVT::i32);
-}]>;
-
-def LO21 : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant((uint64_t)N->getZExtValue() & 0x1fffff,
-                                   SDLoc(N), MVT::i32);
-}]>;
-
-// Branch targets
-def BrTargetAsmOperand : AsmOperandClass {
-  let Name = "BrTarget";
+def EZHNullPat {
+  list<dag> Value = [];
 }
-def BrTarget   : Operand<OtherVT> {
-  let ParserMatchClass = BrTargetAsmOperand;
+
+//===----------------------------------------------------------------------===//
+// SDNodes and Profiles
+//===----------------------------------------------------------------------===//
+def SDT_EZHCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+def SDT_EZHCallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+def SDT_EZHCall : SDTypeProfile<0, -1, [SDTCisVT<0, i32>]>;
+def EZH_call : SDNode<"EZHISD::CALL", SDT_EZHCall, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+def EZH_adjcallstackdown : SDNode<"ISD::CALLSEQ_START", SDT_EZHCallSeqStart, [SDNPHasChain, SDNPOutGlue]>;
+def EZH_adjcallstackup : SDNode<"ISD::CALLSEQ_END", SDT_EZHCallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def EZH_ret_glue_node : SDNode<"EZHISD::RET_GLUE_INTERNAL", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
+def EZHcmp : SDNode<"EZHISD::CMP", SDTypeProfile<0, 2, [SDTCisSameAs<0, 1>]>, [SDNPOutGlue]>;
+def EZHbrcc : SDNode<"EZHISD::BR_CC", SDTypeProfile<0, 2, [SDTCisVT<0, OtherVT>, SDTCisVT<1, i32>]>, [SDNPHasChain, SDNPInGlue]>;
+def EZHselectcc : SDNode<"EZHISD::SELECT_CC", SDTypeProfile<1, 3, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SDTCisVT<3, i32>]>, [SDNPInGlue]>;
+def EZHbtog : SDNode<"EZHISD::BTOG", SDTypeProfile<1, 2, [SDTCisSameAs<0, 1>, SDTCisVT<2, i32>]>>;
+def EZHWrapperJT : SDNode<"EZHISD::WrapperJT", SDTIntUnaryOp>;
+def EZHWrapper : SDNode<"EZHISD::Wrapper", SDTIntUnaryOp>;
+def EZHbrjt : SDNode<"EZHISD::BR_JT", SDTypeProfile<0, 2, [SDTCisVT<0, i32>, SDTCisVT<1, i32>]>, [SDNPHasChain]>;
+def EZHsjlj_setjmp : SDNode<"EZHISD::EH_SJLJ_SETJMP", SDTypeProfile<1, 1, [SDTCisVT<0, i32>, SDTCisVT<1, i32>]>, [SDNPHasChain, SDNPOptInGlue]>;
+def EZHsjlj_longjmp : SDNode<"EZHISD::EH_SJLJ_LONGJMP", SDTypeProfile<0, 1, [SDTCisVT<0, i32>]>, [SDNPHasChain, SDNPOptInGlue]>;
+def EZHsjlj_setup_dispatch : SDNode<"EZHISD::EH_SJLJ_SETUP_DISPATCH", SDTypeProfile<0, 0, []>, [SDNPHasChain, SDNPOptInGlue]>;
+
+// EZH Peripheral Memory Access Profiles
+def SDT_EZHPerRead  : SDTypeProfile<1, 1, [SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+def SDT_EZHPerWrite : SDTypeProfile<0, 2, [SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+
+def EZHper_read  : SDNode<"EZHISD::PER_READ", SDT_EZHPerRead,
+                          [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
+def EZHper_write : SDNode<"EZHISD::PER_WRITE", SDT_EZHPerWrite,
+                           [SDNPHasChain, SDNPMayStore, SDNPMemOperand]>;
+
+//===----------------------------------------------------------------------===//
+// Operands
+//===----------------------------------------------------------------------===//
+def calltarget : Operand<i32>, ImmLeaf<i32, [{ return (Imm & 3) == 0; }]> {
+  let PrintMethod = "printBranchTarget";
+  let EncoderMethod = "getCallTargetOpValue";
+  let DecoderMethod = "decodeSimm30";
+}
+
+def brtarget : Operand<OtherVT> {
+  let PrintMethod = "printBranchTarget";
   let EncoderMethod = "getBranchTargetOpValue";
-  let DecoderMethod = "decodeBranch";
+  let DecoderMethod = "decodeSimm21";
 }
 
-def CallTargetAsmOperand : AsmOperandClass {
-  let Name = "CallTarget";
-}
-def CallTarget : Operand<i32> {
-  let ParserMatchClass = CallTargetAsmOperand;
-  let EncoderMethod = "getBranchTargetOpValue";
-  let DecoderMethod = "decodeBranch";
+def imm20 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<20>(Imm) && (Imm & 3) == 0; }]> {
+  let PrintMethod = "printPerAddrOperand";
+  let EncoderMethod = "getPerAddrOpValue";
 }
 
-def ImmShiftAsmOperand : AsmOperandClass { let Name = "ImmShift"; }
-def immShift : Operand<i32>, PatLeaf<(imm), [{
-    int Imm = N->getSExtValue();
-    return Imm >= -31 && Imm <= 31;}]> {
-  let ParserMatchClass = ImmShiftAsmOperand;
-  let DecoderMethod = "decodeShiftImm";
+def shifted_imms11 : Operand<i32>, ImmLeaf<i32, [{ return isInt<11>(Imm); }]> {
+  let PrintMethod = "printShiftedImmOperand";
+  let DecoderMethod = "decodeSimm11";
 }
 
-def Imm10AsmOperand : AsmOperandClass { let Name = "Imm10"; }
-def imm10 : Operand<i32>, PatLeaf<(imm), [{
-    return isInt<10>(N->getSExtValue()); }]> {
-  let ParserMatchClass = Imm10AsmOperand;
+def imms11 : Operand<i32>, ImmLeaf<i32, [{ return isInt<11>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
+  let DecoderMethod = "decodeSimm11";
 }
 
-def LoImm16AsmOperand : AsmOperandClass { let Name = "LoImm16"; }
-def i32lo16z : Operand<i32>, PatLeaf<(i32 imm), [{
-    // i32lo16 predicate - true if the 32-bit immediate has only rightmost 16
-    // bits set.
-    return ((N->getZExtValue() & 0xFFFFUL) == N->getZExtValue());}], LO16> {
-  let ParserMatchClass = LoImm16AsmOperand;
-}
-def i32neg16 : Operand<i32>, PatLeaf<(i32 imm), [{
-    // i32neg16 predicate - true if the 32-bit immediate is negative and can
-    // be represented by a 16 bit integer.
-    int Imm = N->getSExtValue();
-    return (Imm < 0) && (isInt<16>(Imm));}], LO16> {
-  let ParserMatchClass = LoImm16AsmOperand;
-}
-def i32lo16s : Operand<i32>, PatLeaf<(i32 imm), [{
-    // i32lo16 predicate - true if the 32-bit immediate has only rightmost 16
-    // bits set.
-    return ((int64_t)(N->getSExtValue() & 0xFFFFUL) == N->getSExtValue());}], LO16> {
-  let ParserMatchClass = LoImm16AsmOperand;
+def imms12 : Operand<i32>, ImmLeaf<i32, [{ return isInt<12>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
+  let DecoderMethod = "decodeSimm12";
 }
 
-def LoImm16AndAsmOperand : AsmOperandClass { let Name = "LoImm16And"; }
-def i32lo16and : Operand<i32>, PatLeaf<(i32 imm), [{
-    // i32lo16 predicate - true if the 32-bit immediate has the rightmost 16
-    // bits set and the leftmost 16 bits 1's.
-    return (N->getZExtValue() >= 0xFFFF0000UL);}], LO16> {
-  let ParserMatchClass = LoImm16AndAsmOperand;
-  let PrintMethod = "printLo16AndImmOperand";
+def imms8_word : PatLeaf<(imm), [{ return isInt<8>(N->getSExtValue() >> 2) && ((N->getZExtValue() & 3) == 0); }]>;
+
+def imms8_word_offset : Operand<i32>, ImmLeaf<i32, [{ return isInt<8>(Imm >> 2) && ((Imm & 3) == 0); }]> {
+  let PrintMethod = "printWordOffset";
+  let EncoderMethod = "getWordOffsetOpValue";
+  let DecoderMethod = "decodeWordOffset";
 }
 
-def HiImm16AsmOperand : AsmOperandClass { let Name = "HiImm16"; }
-def i32hi16 : Operand<i32>, PatLeaf<(i32 imm), [{
-    // i32hi16 predicate - true if the 32-bit immediate has only leftmost 16
-    // bits set.
-    return ((N->getZExtValue() & 0xFFFF0000UL) == N->getZExtValue());}], HI16> {
-  let ParserMatchClass = HiImm16AsmOperand;
-  let PrintMethod = "printHi16ImmOperand";
+def imms8 : Operand<i32>, ImmLeaf<i32, [{ return isInt<8>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
+  let DecoderMethod = "decodeSimm8";
 }
 
-def HiImm16AndAsmOperand : AsmOperandClass { let Name = "HiImm16And"; }
-def i32hi16and : Operand<i32>, PatLeaf<(i32 imm), [{
-    // i32lo16 predicate - true if the 32-bit immediate has the leftmost 16
-    // bits set and the rightmost 16 bits 1's.
-    return ((N->getZExtValue() & 0xFFFFUL) == 0xFFFFUL);}], HI16> {
-  let ParserMatchClass = HiImm16AndAsmOperand;
-  let PrintMethod = "printHi16AndImmOperand";
+def imm5 : Operand<i32>, ImmLeaf<i32, [{ return isInt<5>(Imm) || isUInt<5>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
 }
 
-def LoImm21AsmOperand : AsmOperandClass { let Name = "LoImm21"; }
-def i32lo21 : Operand<i32>, PatLeaf<(i32 imm), [{
-    // i32lo21 predicate - true if the 32-bit immediate has only rightmost 21
-    // bits set.
-    return ((N->getZExtValue() & 0x1FFFFFUL) == N->getZExtValue());}], LO21> {
-  let ParserMatchClass = LoImm21AsmOperand;
+def imm16 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<16>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
+  let DecoderMethod = "decodeSimm16";
 }
 
-def AluOp : Operand<i32> {
-  let PrintMethod = "printAluOperand";
+def imm24 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<24>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
 }
 
-// Addressing modes.
-def ADDRrr : ComplexPattern<i32, 3, "selectAddrRr", [], []>;
-def ADDRri : ComplexPattern<i32, 3, "selectAddrRi", [frameindex], []>;
-def ADDRsls : ComplexPattern<i32, 1, "selectAddrSls", [frameindex], []>;
-def ADDRspls : ComplexPattern<i32, 3, "selectAddrSpls", [frameindex], []>;
-
-// Address operands
-def MemRegImmAsmOperand : AsmOperandClass {
-  let Name = "MemRegImm";
-  let ParserMethod  = "parseMemoryOperand";
-}
-def MEMri : Operand<i32> {
-  let DecoderMethod = "decodeRiMemoryValue";
-  let EncoderMethod = "getRiMemoryOpValue";
-  let MIOperandInfo = (ops GPR:$base, i32lo16s:$offset, AluOp:$Opcode);
-  let ParserMatchClass = MemRegImmAsmOperand;
-  let PrintMethod   = "printMemRiOperand";
+def imm1 : Operand<i32>, ImmLeaf<i32, [{ return isInt<1>(Imm) || isUInt<1>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
 }
 
-def MemRegRegAsmOperand : AsmOperandClass {
-  let Name = "MemRegReg";
-  let ParserMethod  = "parseMemoryOperand";
-}
-def MEMrr : Operand<i32> {
-  let DecoderMethod = "decodeRrMemoryValue";
-  let EncoderMethod = "getRrMemoryOpValue";
-  let MIOperandInfo = (ops GPR:$Op1, GPR:$Op2, AluOp:$Opcode);
-  let ParserMatchClass = MemRegRegAsmOperand;
-  let PrintMethod   = "printMemRrOperand";
+//===----------------------------------------------------------------------===//
+// Condition Codes & Flags
+//===----------------------------------------------------------------------===//
+class EZHCondCode<bits<4> val, string suffix> {
+  bits<4> Value = val;
+  string Suffix = suffix;
 }
 
-def MemImmAsmOperand : AsmOperandClass {
-  let Name = "MemImm";
-  let ParserMethod  = "parseMemoryOperand";
-}
-def MEMi : Operand<i32> {
-  let ParserMatchClass = MemImmAsmOperand;
-  let PrintMethod   = "printMemImmOperand";
-}
+def Cond_eu : EZHCondCode<COND_EU, "">;     // Always / True (EU flag)
+def Cond_ze : EZHCondCode<COND_ZE, "_ze">;  // Zero (ZE flag)
+def Cond_nz : EZHCondCode<COND_NZ, "_nz">;  // Not Zero (NZ flag)
+def Cond_po : EZHCondCode<COND_PO, "_po">;  // Positive (PO flag)
+def Cond_ne : EZHCondCode<COND_NE, "_ne">;  // Negative (NE flag)
+def Cond_az : EZHCondCode<COND_AZ, "_az">;  // Above Zero (AZ flag)
+def Cond_zb : EZHCondCode<COND_ZB, "_zb">;  // Zero or Below (ZB flag)
+def Cond_ca : EZHCondCode<COND_CA, "_ca">;  // Carry (CA flag)
+def Cond_nc : EZHCondCode<COND_NC, "_nc">;  // No Carry (NC flag)
+def Cond_cz : EZHCondCode<COND_CZ, "_cz">;  // Carry or Zero (CZ flag)
+def Cond_spo: EZHCondCode<COND_SPO, "_spo">; // Shift-Only-when-Positive / Unconditionally Scheduled branch delay slot (SPO/UNS)
+def Cond_sne: EZHCondCode<COND_SNE, "_sne">; // Shift-Only-when-Negative / Scheduled branch delay slot when Not Zero (SNE/NZS)
+def Cond_nbs: EZHCondCode<COND_NBS, "_nbs">; // Not Boolean-expression set (NBS flag)
+def Cond_nex: EZHCondCode<COND_NEX, "_nex">; // External flag is not set (NEX flag)
+def Cond_bs : EZHCondCode<COND_BS, "_bs">;  // Boolean-expression set (BS flag)
+def Cond_ex : EZHCondCode<COND_EX, "_ex">;  // External flag is set (EX flag)
 
-def MemSplsAsmOperand : AsmOperandClass {
-  let Name = "MemSpls";
-  let ParserMethod  = "parseMemoryOperand";
-}
-def MEMspls : Operand<i32> {
-  let DecoderMethod = "decodeSplsValue";
-  let EncoderMethod = "getSplsOpValue";
-  let MIOperandInfo = (ops GPR:$base, imm10:$offset, AluOp:$Opcode);
-  let ParserMatchClass = MemSplsAsmOperand;
-  let PrintMethod   = "printMemSplsOperand";
-}
+defvar CondCodes = [Cond_eu, Cond_ze, Cond_nz, Cond_po, Cond_ne, Cond_az, Cond_zb, Cond_ca, Cond_nc, Cond_cz, Cond_spo, Cond_sne, Cond_nbs, Cond_nex, Cond_bs, Cond_ex];
 
-def CCOp : Operand<i32> {
-  let PrintMethod = "printCCOperand";
-}
-
-// Predicate operand. Default to 0 = true.
-def CondCodeOperand : AsmOperandClass { let Name = "CondCode"; }
-
-def pred : PredicateOperand<i32, (ops i32imm), (ops (i32 0))> {
-  let PrintMethod = "printPredicateOperand";
-  let ParserMatchClass = CondCodeOperand;
-  let DecoderMethod = "decodePredicateOperand";
+  class SetFlag<bits<1> val, string suffix> {
+  bits<1> Value = val;
+  string Suffix = suffix;
 }
 
-let hasSideEffects = 0, Inst = 0x00000001 in
-  def NOP : InstEZH<(outs), (ins), "nop", []>;
+def Flag_none : SetFlag<0, "">;
+def Flag_s : SetFlag<1, "s">;
 
-// Special NOPs to change logging level in vezh.
-let hasSideEffects = 0, Inst = 0x00000002 in
-  def LOG0 : InstEZH<(outs), (ins), "log_0", []>;
-let hasSideEffects = 0, Inst = 0x00000003 in
-  def LOG1 : InstEZH<(outs), (ins), "log_1", []>;
-let hasSideEffects = 0, Inst = 0x00000004 in
-  def LOG2 : InstEZH<(outs), (ins), "log_2", []>;
-let hasSideEffects = 0, Inst = 0x00000005 in
-  def LOG3 : InstEZH<(outs), (ins), "log_3", []>;
-let hasSideEffects = 0, Inst = 0x00000006 in
-  def LOG4 : InstEZH<(outs), (ins), "log_4", []>;
+defvar SetFlags = [Flag_none, Flag_s];
 
-// Map an SPLS instruction onto itself. All other instructions will be mapped
-// onto -1. Used to identify SPLS instructions.
-def splsIdempotent : InstrMapping {
-  let FilterClass = "InstSPLS";
-  let RowFields = ["AsmString"];
-  let ColFields = ["PostEncoderMethod"];
-  let KeyCol = ["adjustPqBitsSpls"];
-  let ValueCols = [["adjustPqBitsSpls"]];
+//===----------------------------------------------------------------------===//
+// Helper Classes & Multiclasses
+//===----------------------------------------------------------------------===//
+class EZHPseudo<dag outs, dag ins, string asmstr, list<dag> pattern>
+    : Instruction {
+  let Namespace = "EZH";
+  dag OutOperandList = outs;
+  dag InOperandList = ins;
+  let AsmString = asmstr;
+  let Pattern = pattern;
+  let isPseudo = 1;
+  let isCodeGenOnly = 1;
 }
 
-// -------------------------------------------------- //
-// ALU instructions
-// -------------------------------------------------- //
-multiclass ALUbase<bits<3> subOp, string AsmStr,
-                   PatLeaf LoExt, PatLeaf HiExt,
-                   list<dag> loPattern, list<dag> hiPattern> {
-  // Register Immediate
-  let H = 0 in
-    def LO : InstRI<subOp, (outs GPR:$Rd), (ins GPR:$Rs1, LoExt:$imm16),
-                    !strconcat(AsmStr, "\t$Rs1, $imm16, $Rd"),
-                    loPattern>;
-  let H = 1 in
-    def HI : InstRI<subOp, (outs GPR:$Rd), (ins GPR:$Rs1, HiExt:$imm16),
-                    !strconcat(AsmStr, "\t$Rs1, $imm16, $Rd"),
-                    hiPattern>;
+// Helpers for Power of 2 matching
+def Log2 : SDNodeXForm<imm, [{ return CurDAG->getTargetConstant(Log2_32(N->getZExtValue()), SDLoc(N), MVT::i32); }]>;
+def Log2Inv : SDNodeXForm<imm, [{ return CurDAG->getTargetConstant(Log2_32(~N->getZExtValue()), SDLoc(N), MVT::i32); }]>;
+def power_of_2 : PatLeaf<(imm), [{ return isPowerOf2_32(N->getZExtValue()); }], Log2>;
+def power_of_2_inv : PatLeaf<(imm), [{ return isPowerOf2_32(~N->getZExtValue()); }], Log2Inv>;
 
+class ShiftInfo<bits<3> val, string name, string asm_name, SDPatternOperator node, bit flip> {
+  bits<3> Val = val;
+  string Name = name;
+  string AsmName = asm_name;
+  SDPatternOperator Node = node;
+  bit Flip = flip;
 }
 
-multiclass ALUarith<bits<3> subOp, string AsmStr, SDNode OpNode,
-                    PatLeaf LoExt, PatLeaf HiExt> {
-  defm I_ : ALUbase<subOp, AsmStr, LoExt, HiExt, [], []>;
-
-  // Register Register
-  let JJJJJ = 0 in
-    def R : InstRR<subOp, (outs GPR:$Rd), (ins GPR:$Rs1, GPR:$Rs2, pred:$DDDI),
-                   !strconcat(AsmStr, "$DDDI\t$Rs1, $Rs2, $Rd"),
-                   [(set GPR:$Rd, (OpNode GPR:$Rs1, GPR:$Rs2))]>;
+class EZHShiftAluOpInfo<bits<3> op, string name, string upper_name, SDPatternOperator node, bit rev = 0, bit has_pat = 1> {
+  bits<3> AluOp = op;
+  string Name = name;
+  string UpperName = upper_name;
+  SDPatternOperator Node = node;
+  bit Rev = rev;
+  bit HasPat = has_pat;
 }
 
-multiclass ALUlogic<bits<3> subOp, string AsmStr, SDNode OpNode,
-                    PatLeaf LoExt, PatLeaf HiExt> {
-  defm I_ : ALUbase<subOp, AsmStr, LoExt, HiExt,
-                    [(set GPR:$Rd, (OpNode GPR:$Rs1, LoExt:$imm16))],
-                    [(set GPR:$Rd, (OpNode GPR:$Rs1, HiExt:$imm16))]>;
+def EZHShiftAluOp_AND : EZHShiftAluOpInfo<FLIP_AND, "and", "AND", and>;
+def EZHShiftAluOp_OR  : EZHShiftAluOpInfo<FLIP_OR,  "or",  "OR",  or>;
+def EZHShiftAluOp_XOR : EZHShiftAluOpInfo<FLIP_XOR, "xor", "XOR", xor>;
+def EZHShiftAluOp_ADD : EZHShiftAluOpInfo<FLIP_ADD, "add", "ADD", add>;
+def EZHShiftAluOp_SUB : EZHShiftAluOpInfo<FLIP_SUB, "sub", "SUB", sub, 1>;
+def EZHShiftAluOp_ADC : EZHShiftAluOpInfo<FLIP_ADC, "adc", "ADC", null_frag, 0, 0>;
+def EZHShiftAluOp_SBC : EZHShiftAluOpInfo<FLIP_SBC, "sbc", "SBC", null_frag, 0, 0>;
 
-  // Register Register
-  let JJJJJ = 0 in
-    def R : InstRR<subOp, (outs GPR:$Rd), (ins GPR:$Rs1, GPR:$Rs2, pred:$DDDI),
-                   !strconcat(AsmStr, "$DDDI\t$Rs1, $Rs2, $Rd"),
-                   [(set GPR:$Rd, (OpNode GPR:$Rs1, GPR:$Rs2))]>;
-}
+defvar EZHShiftAluOpsList = [
+  EZHShiftAluOp_AND, EZHShiftAluOp_OR, EZHShiftAluOp_XOR,
+  EZHShiftAluOp_ADD, EZHShiftAluOp_SUB, EZHShiftAluOp_ADC, EZHShiftAluOp_SBC
+];
 
-// Non flag setting ALU operations
-let isAsCheapAsAMove = 1, F = 0 in {
-  let isCommutable = 1 in {
-    defm ADD_ : ALUarith<0b000, "add", add, i32lo16z, i32hi16>;
+multiclass MemOps<bits<5> major_op, bit is_store, bit is_word, bit is_signed,
+                      string opc_name, Operand offset_type,
+                      list<dag> pattern,
+                      string asm_ops_normal, string asm_ops_pre, string asm_ops_post> {
+
+  defvar outs_normal = !if(is_store, (outs), (outs GPR:$Rd));
+  defvar ins_normal  = !if(is_store, (ins GPR:$Rd, GPR:$Rn, offset_type:$Offset),
+                                     (ins GPR:$Rn, offset_type:$Offset));
+  defvar ins_normal_pred = !con(ins_normal, (ins pred:$Cond));
+
+  defvar outs_wb     = !if(is_store, (outs GPR:$Rn_wb), (outs GPR:$Rd, GPR:$Rn_wb));
+
+  // Normal
+  def ""
+    : EZHInstMem<major_op, is_store, is_word, is_signed, 0, 0,
+                 outs_normal, ins_normal_pred,
+                 opc_name#"$Cond "#asm_ops_normal,
+                 pattern> {}
+
+  // Pre-indexed
+  def _PRE
+    : EZHInstMem<major_op, is_store, is_word, is_signed, 0, 1,
+                 outs_wb, ins_normal_pred,
+                 opc_name#"_pre$Cond "#asm_ops_pre,
+                 []> {
+    let Constraints = "$Rn = $Rn_wb";
   }
-  defm SUB_ : ALUarith<0b010,   "sub", sub, i32lo16z, i32hi16>;
-  let isCommutable = 1 in {
-    defm AND_ : ALUlogic<0b100, "and", and, i32lo16and, i32hi16and>;
-    defm OR_  : ALUlogic<0b101,  "or",  or, i32lo16z, i32hi16>;
-    defm XOR_ : ALUlogic<0b110, "xor", xor, i32lo16z, i32hi16>;
+
+  // Post-indexed
+  def _POST
+    : EZHInstMem<major_op, is_store, is_word, is_signed, 1, 1,
+                 outs_wb, ins_normal_pred,
+                 opc_name#"_post$Cond "#asm_ops_post,
+                 []> {
+    let Constraints = "$Rn = $Rn_wb";
   }
 }
 
-def : Pat<(add GPR:$Rs1, i32lo16z:$imm),
-          (ADD_I_LO GPR:$Rs1, i32lo16z:$imm)>;
 
-def : Pat<(sub GPR:$Rs1, i32lo16z:$imm),
-          (SUB_I_LO GPR:$Rs1, i32lo16z:$imm)>;
 
-def : Pat<(add GPR:$Rs1, i32hi16:$imm),
-          (ADD_I_HI GPR:$Rs1, i32hi16:$imm)>;
+multiclass ALUShiftedOps<bits<5> op, string opc_str, string sf_suffix> {
+  defvar ins_shifted_pred = (ins GPR:$Rs1, GPR:$Rs2, imm5:$ShAmt, pred:$Cond);
 
-def : Pat<(sub GPR:$Rs1, i32hi16:$imm),
-          (SUB_I_HI GPR:$Rs1, i32hi16:$imm)>;
+  // Normal and Negated Shifts
+  foreach sh = EZHShiftTypesList in {
+    foreach inv = [0, 1] in {
+      defvar inv_suffix = !if(inv, "n", "");
+      defvar name_suffix = !if(!empty(sf_suffix), "", "_" # sf_suffix);
 
-def : Pat<(i32 i32lo16and:$imm), (AND_I_LO (i32 R1), i32lo16and:$imm)>;
-def : Pat<(i32 i32hi16and:$imm), (AND_I_HI (i32 R1), i32hi16and:$imm)>;
-
-// Change add/sub with negative number to sub/add
-def : Pat<(add GPR:$Rs1, i32neg16:$imm),
-          (SUB_I_LO GPR:$Rs1, (NEG $imm))>;
-def : Pat<(sub GPR:$Rs1, i32neg16:$imm),
-          (ADD_I_LO GPR:$Rs1, (NEG $imm))>;
-
-// Flag (incl. carry) setting addition and subtraction
-let F = 1, Defs = [SR] in {
-  defm ADD_F_ : ALUarith<0b000, "add.f", addc, i32lo16z, i32hi16>;
-  defm SUB_F_ : ALUarith<0b010, "sub.f", subc, i32lo16z, i32hi16>;
-}
-
-def : Pat<(addc GPR:$Rs1, i32lo16z:$imm),
-          (ADD_F_I_LO GPR:$Rs1, i32lo16z:$imm)>;
-
-def : Pat<(subc GPR:$Rs1, i32lo16z:$imm),
-          (SUB_F_I_LO GPR:$Rs1, i32lo16z:$imm)>;
-
-def : Pat<(addc GPR:$Rs1, i32hi16:$imm),
-          (ADD_F_I_HI GPR:$Rs1, i32hi16:$imm)>;
-
-def : Pat<(subc GPR:$Rs1, i32hi16:$imm),
-          (SUB_F_I_HI GPR:$Rs1, i32hi16:$imm)>;
-
-// Carry using addition and subtraction
-let F = 0, Uses = [SR] in {
-  defm ADDC_ : ALUarith<0b001, "addc", adde, i32lo16z, i32hi16>;
-  defm SUBB_ : ALUarith<0b011, "subb", sube, i32lo16z, i32hi16>;
-}
-
-def : Pat<(adde GPR:$Rs1, i32lo16z:$imm),
-          (ADDC_I_LO GPR:$Rs1, i32lo16z:$imm)>;
-
-def : Pat<(sube GPR:$Rs1, i32lo16z:$imm),
-          (SUBB_I_LO GPR:$Rs1, i32lo16z:$imm)>;
-
-def : Pat<(adde GPR:$Rs1, i32hi16:$imm),
-          (ADDC_I_HI GPR:$Rs1, i32hi16:$imm)>;
-
-def : Pat<(sube GPR:$Rs1, i32hi16:$imm),
-          (SUBB_I_HI GPR:$Rs1, i32hi16:$imm)>;
-
-// Flag setting ALU operations
-let isAsCheapAsAMove = 1, F = 1, Defs = [SR] in {
-  let isCommutable = 1 in {
-    defm AND_F_ : ALUlogic<0b100, "and.f",  and, i32lo16and, i32hi16and>;
-    defm OR_F_  : ALUlogic<0b101,  "or.f",   or, i32lo16z, i32hi16>;
-    defm XOR_F_ : ALUlogic<0b110, "xor.f",  xor, i32lo16z, i32hi16>;
+      def !if(inv, "N_", "_") # sh.UpperName # name_suffix
+        : EZHInstALUShifted<op, sh.Val, inv, (outs GPR:$Rd), ins_shifted_pred,
+                            opc_str # inv_suffix # "_" # sh.Name # sf_suffix # "$Cond $Rd, $Rs1, $Rs2, $ShAmt", []>;
+    }
   }
-}
 
-let isAsCheapAsAMove = 1, F = 1, Defs = [SR], Uses = [SR] in {
-  defm ADDC_F_ : ALUarith<0b001, "addc.f", adde, i32lo16z, i32hi16>;
-  defm SUBB_F_ : ALUarith<0b011, "subb.f", sube, i32lo16z, i32hi16>;
-}
+  // Fast Shifts (ShAmt = 0, shift_type = 4)
+  foreach inv = [0, 1] in {
+    defvar inv_suffix = !if(inv, "n", "");
+    defvar name_suffix = !if(!empty(sf_suffix), "", "_" # sf_suffix);
 
-def : Pat<(EZHSubbF GPR:$Rs1, GPR:$Rs2),
-          (SUBB_F_R GPR:$Rs1, GPR:$Rs2)>;
-
-def : Pat<(EZHSubbF GPR:$Rs1, i32lo16z:$imm),
-          (SUBB_F_I_LO GPR:$Rs1, i32lo16z:$imm)>;
-
-def : Pat<(EZHSubbF GPR:$Rs1, i32hi16:$imm),
-          (SUBB_F_I_HI GPR:$Rs1, i32hi16:$imm)>;
-
-def : InstAlias<"mov $src, $dst", (ADD_R GPR:$dst, GPR:$src, R0, (pred 0))>;
-
-let isAsCheapAsAMove = 1, Rs1 = R0.Num, isCodeGenOnly = 1, H = 1, F = 0,
-  isReMaterializable = 1 in
-  def MOVHI : InstRI<0b000, (outs GPR:$Rd), (ins i32hi16:$imm16),
-                     "mov\t$imm16, $Rd",
-                     [(set GPR:$Rd, i32hi16:$imm16)]>;
-
-def : InstAlias<"mov $imm16, $dst", (ADD_I_LO GPR:$dst, R0, i32lo16z:$imm16)>;
-def : InstAlias<"mov $imm16, $dst", (ADD_I_HI GPR:$dst, R0, i32hi16:$imm16)>;
-def : InstAlias<"mov $imm16, $dst",
-                (AND_I_LO GPR:$dst, R1, i32lo16and:$imm16)>;
-def : InstAlias<"mov $imm16, $dst",
-                (AND_I_HI GPR:$dst, R1, i32hi16and:$imm16)>;
-
-// Shift instructions
-class ShiftRI<string AsmStr, list<dag> Pattern>
-  : InstRI<0b111, (outs GPR:$Rd), (ins GPR:$Rs1, immShift:$imm16),
-           !strconcat(AsmStr, "\t$Rs1, $imm16, $Rd"), Pattern> {
-  let isReMaterializable = 1;
-}
-
-let F = 0 in {
-  let H = 0 in
-    def SL_I : ShiftRI<"sh", [(set GPR:$Rd, (shl GPR:$Rs1, immShift:$imm16))]>;
-  let H = 1 in
-    def SA_I : ShiftRI<"sha", []>;
-}
-def : Pat<(srl GPR:$Rs1, immShift:$imm), (SL_I GPR:$Rs1, (NEG $imm))>;
-def : Pat<(sra GPR:$Rs1, immShift:$imm), (SA_I GPR:$Rs1, (NEG $imm))>;
-
-let F = 1, Defs = [SR] in {
-  let H = 0 in
-    def SL_F_I : ShiftRI<"sh.f", []>;
-  let H = 1 in
-    def SA_F_I : ShiftRI<"sha.f", []>;
-}
-
-class ShiftRR<string AsmStr, list<dag> Pattern>
-  : InstRR<0b111, (outs GPR:$Rd), (ins GPR:$Rs1, GPR:$Rs2, pred:$DDDI), AsmStr,
-           Pattern>;
-
-let F = 0 in {
-  let JJJJJ = 0b10000 in
-    def SHL_R : ShiftRR<"sh$DDDI\t$Rs1, $Rs2, $Rd",
-                        [(set GPR:$Rd, (shl GPR:$Rs1, GPR:$Rs2))]>;
-  let isCodeGenOnly = 1 in {
-    let JJJJJ = 0b10000 in
-      def SRL_R : ShiftRR<"sh$DDDI\t$Rs1, $Rs2, $Rd", []>;
-  }
-  let JJJJJ = 0b11000 in
-    def SRA_R : ShiftRR<"sha$DDDI\t$Rs1, $Rs2, $Rd", []>;
-}
-
-let F = 1, Defs = [SR] in {
-  let JJJJJ = 0b10000 in
-    def SHL_F_R : ShiftRR<"sh.f$DDDI\t$Rs1, $Rs2, $Rd", []>;
-  let isCodeGenOnly = 1 in {
-    let JJJJJ = 0b10000 in
-      def SRL_F_R : ShiftRR<"sh.f$DDDI\t$Rs1, $Rs2, $Rd", []>;
-  }
-  let JJJJJ = 0b11000 in
-    def SRA_F_R : ShiftRR<"sha.f$DDDI\t$Rs1, $Rs2, $Rd", []>;
-}
-
-// Expand shift-right operations
-def : Pat<(srl GPR:$Rs1, GPR:$Rs2),
-          (SRL_R GPR:$Rs1, (SUB_R R0, GPR:$Rs2))>;
-def : Pat<(sra GPR:$Rs1, GPR:$Rs2),
-          (SRA_R GPR:$Rs1, (SUB_R R0, GPR:$Rs2))>;
-
-// -------------------------------------------------- //
-// LOAD instructions
-// -------------------------------------------------- //
-
-class LoadRR<string OpcString, PatFrag OpNode, ValueType Ty>
-  : InstRRM<0b0, (outs GPR:$Rd), (ins MEMrr:$src),
-            !strconcat(OpcString, "\t$src, $Rd"),
-            [(set (Ty GPR:$Rd), (OpNode ADDRrr:$src))]>,
-    Sched<[WriteLD]> {
-  bits<20> src;
-
-  let Rs1 = src{19-15};
-  let Rs2 = src{14-10};
-  let P = src{9};
-  let Q = src{8};
-  let BBB = src{7-5};
-  let JJJJJ = src{4-0};
-  let mayLoad = 1;
-}
-
-class LoadRI<string OpcString, PatFrag OpNode, ValueType Ty>
-  : InstRM<0b0, (outs GPR:$Rd), (ins MEMri:$src),
-           !strconcat(OpcString, "\t$src, $Rd"),
-           [(set (Ty GPR:$Rd), (OpNode ADDRri:$src))]>,
-    Sched<[WriteLD]> {
-  bits<23> src;
-
-  let Itinerary = IIC_LD;
-  let Rs1 = src{22-18};
-  let P = src{17};
-  let Q = src{16};
-  let imm16 = src{15-0};
-  let isReMaterializable = 1;
-  let mayLoad = 1;
-}
-
-let E = 0 in {
-  let YL = 0b01 in {
-    // uld is used here and ld in the alias as the alias is printed out first if
-    // an alias exist
-    def LDW_RI : LoadRI<"uld", load, i32>;
-    def LDW_RR : LoadRR<"ld", load, i32>;
-  }
-}
-
-def : InstAlias<"ld $src, $dst", (LDW_RI GPR:$dst, MEMri:$src)>;
-
-let E = 1 in {
-  let YL = 0b01 in {
-    def LDWz_RR : LoadRR<"uld", zextloadi32, i32>;
-  }
-}
-
-let E = 1 in {
-  let YL = 0b00 in
-    def LDHz_RR : LoadRR<"uld.h", zextloadi16, i32>;
-  let YL = 0b10 in
-    def LDBz_RR : LoadRR<"uld.b", zextloadi8, i32>;
-}
-
-let E = 0 in {
-  let YL = 0b00 in
-    def LDHs_RR : LoadRR<"ld.h", sextloadi16, i32>;
-  let YL = 0b10 in
-    def LDBs_RR : LoadRR<"ld.b", sextloadi8, i32>;
-}
-
-def LDADDR : InstSLS<0x0, (outs GPR:$Rd), (ins MEMi:$src),
-                     "ld\t$src, $Rd",
-                     [(set (i32 GPR:$Rd), (load ADDRsls:$src))]>,
-    Sched<[WriteLD]> {
-  bits<21> src;
-
-  let Itinerary = IIC_LD;
-  let msb = src{20-16};
-  let lsb = src{15-0};
-  let isReMaterializable = 1;
-  let mayLoad = 1;
-}
-
-class LoadSPLS<string asmstring, PatFrag opNode>
-  : InstSPLS<(outs GPR:$Rd), (ins MEMspls:$src),
-             !strconcat(asmstring, "\t$src, $Rd"),
-             [(set (i32 GPR:$Rd), (opNode ADDRspls:$src))]>,
-    Sched<[WriteLDSW]> {
-  bits<17> src;
-  let Itinerary = IIC_LDSW;
-  let Rs1 = src{16-12};
-  let P = src{11};
-  let Q = src{10};
-  let imm10 = src{9-0};
-  let mayLoad = 1;
-  let isReMaterializable = 1;
-}
-
-let Y = 0, S = 0, E = 1 in
-  def LDHz_RI : LoadSPLS<"uld.h", zextloadi16>;
-
-let Y = 0, S = 0, E = 0 in
-  def LDHs_RI : LoadSPLS<"ld.h", sextloadi16>;
-
-let Y = 1, S = 0, E = 1 in
-  def LDBz_RI : LoadSPLS<"uld.b", zextloadi8>;
-
-let Y = 1, S = 0, E = 0 in
-  def LDBs_RI : LoadSPLS<"ld.b", sextloadi8>;
-
-def SLI : InstSLI<(outs GPR:$Rd), (ins i32lo21:$imm),
-                  "mov\t$imm, $Rd",
-                  [(set GPR:$Rd, i32lo21:$imm)]> {
-  bits<21> imm;
-
-  let msb = imm{20-16};
-  let lsb = imm{15-0};
-  let isReMaterializable = 1;
-  let isAsCheapAsAMove = 1;
-}
-
-// -------------------------------------------------- //
-// STORE instructions
-// -------------------------------------------------- //
-
-class StoreRR<string OpcString, PatFrag OpNode, ValueType Ty>
-  : InstRRM<0b1, (outs), (ins GPR:$Rd, MEMrr:$dst),
-            !strconcat(OpcString, "\t$Rd, $dst"),
-            [(OpNode (Ty GPR:$Rd), ADDRrr:$dst)]>,
-    Sched<[WriteST]> {
-  bits<20> dst;
-
-  let Itinerary = IIC_ST;
-  let Rs1 = dst{19-15};
-  let Rs2 = dst{14-10};
-  let P = dst{9};
-  let Q = dst{8};
-  let BBB = dst{7-5};
-  let JJJJJ = dst{4-0};
-  let mayStore = 1;
-}
-
-class StoreRI<string OpcString, PatFrag OpNode, ValueType Ty>
-  : InstRM<0b1, (outs), (ins GPR:$Rd, MEMri:$dst),
-           !strconcat(OpcString, "\t$Rd, $dst"),
-           [(OpNode (Ty GPR:$Rd), ADDRri:$dst)]>,
-    Sched<[WriteST]> {
-  bits<23> dst;
-
-  let Itinerary = IIC_ST;
-  let Rs1 = dst{22-18};
-  let P = dst{17};
-  let Q = dst{16};
-  let imm16 = dst{15-0};
-  let mayStore = 1;
-}
-
-let YL = 0b01, E = 0 in {
-  def SW_RR : StoreRR<"st", store, i32>;
-  def SW_RI : StoreRI<"st", store, i32>;
-}
-
-let E = 0 in {
-  let YL = 0b00 in
-    def STH_RR : StoreRR<"st.h", truncstorei16, i32>;
-  let YL = 0b10 in
-    def STB_RR : StoreRR<"st.b", truncstorei8, i32>;
-}
-
-def STADDR : InstSLS<0x1, (outs), (ins GPR:$Rd, MEMi:$dst),
-                     "st\t$Rd, $dst",
-                     [(store (i32 GPR:$Rd), ADDRsls:$dst)]>,
-    Sched<[WriteST]> {
-  bits<21> dst;
-
-  let Itinerary = IIC_ST;
-  let msb = dst{20-16};
-  let lsb = dst{15-0};
-  let mayStore = 1;
-}
-
-class StoreSPLS<string asmstring, PatFrag opNode>
-  : InstSPLS<(outs), (ins GPR:$Rd, MEMspls:$dst),
-             !strconcat(asmstring, "\t$Rd, $dst"),
-             [(opNode (i32 GPR:$Rd), ADDRspls:$dst)]>,
-    Sched<[WriteSTSW]> {
-  bits<17> dst;
-
-  let Itinerary = IIC_STSW;
-  let Rs1 = dst{16-12};
-  let P = dst{11};
-  let Q = dst{10};
-  let imm10 = dst{9-0};
-  let mayStore = 1;
-}
-
-let Y = 0, S = 1, E = 0 in
-  def STH_RI : StoreSPLS<"st.h", truncstorei16>;
-
-let Y = 1, S = 1, E = 0 in
-  def STB_RI : StoreSPLS<"st.b", truncstorei8>;
-
-// -------------------------------------------------- //
-// BRANCH instructions
-// -------------------------------------------------- //
-
-let isBranch = 1, isBarrier = 1, isTerminator = 1, hasDelaySlot = 1 in {
-  def BT : InstBR<(outs), (ins BrTarget:$addr),
-                  "bt\t$addr",
-                  [(br bb:$addr)]> {
-    let DDDI = 0b0000;
-  }
-  let Uses = [SR] in
-    def BRCC : InstBR<(outs), (ins BrTarget:$addr, CCOp:$DDDI),
-                      "b$DDDI\t$addr",
-                      [(EZHBrCC bb:$addr, imm:$DDDI)]>;
-
-  let isIndirectBranch = 1 in {
-    def JR : InstRR<0b101, (outs), (ins GPR:$Rs2), "bt\t$Rs2",
-                    [(brind GPR:$Rs2)]> {
-      let Rs1 = R0.Num;
-      let Rd = R2.Num;
-      let F = 0;
-      let JJJJJ = 0;
-      let DDDI = 0;
+    def !if(inv, "N_F", "_F") # name_suffix
+      : EZHInstALUShifted<op, 4, inv, (outs GPR:$Rd), (ins GPR:$Rs1, GPR:$Rs2, pred:$Cond),
+                          opc_str # inv_suffix # "_f" # sf_suffix # "$Cond $Rd, $Rs1, $Rs2", []> {
+      let ShAmt = 0;
     }
   }
 }
 
-// -------------------------------------------------- //
-// Condition/SF instructions
-// -------------------------------------------------- //
+multiclass RegShiftBaseOps<bits<2> shift_type, string shift_name, SDPatternOperator shift_node,
+                           string sf_suffix, dag ins_basic> {
+  defvar ins_basic_pred = !con(ins_basic, (ins pred:$Cond));
 
-// Instructions to set flags used in lowering comparisons.
-multiclass SF<bits<3> op2Val, string AsmStr> {
-  let F = 1, Rd = R0.Num, JJJJJ = 0, Defs = [SR], DDDI = 0 in
-    def _RR : InstRR<op2Val, (outs), (ins GPR:$Rs1, GPR:$Rs2),
-                     !strconcat(AsmStr, "\t$Rs1, $Rs2, %r0"),
-                     [(EZHSetFlag (i32 GPR:$Rs1), (i32 GPR:$Rs2))]>;
-  let F = 1, Rd = R0.Num, H = 0, Defs = [SR] in
-    def _RI_LO : InstRI<op2Val, (outs), (ins GPR:$Rs1, i32lo16z:$imm16),
-                     !strconcat(AsmStr, "\t$Rs1, $imm16, %r0"),
-                     [(EZHSetFlag (i32 GPR:$Rs1), i32lo16z:$imm16)]>;
-  let F = 1, Rd = R0.Num, H = 1, Defs = [SR] in
-    def _RI_HI : InstRI<op2Val, (outs), (ins GPR:$Rs1, i32hi16:$imm16),
-                     !strconcat(AsmStr, "\t$Rs1, $imm16, %r0"),
-                     [(EZHSetFlag (i32 GPR:$Rs1), i32hi16:$imm16)]>;
-}
-let isCodeGenOnly = 1, isCompare = 1 in {
-  defm SFSUB_F : SF<0b010, "sub.f">;
-}
+  foreach is_inv = [0, 1] in {
+    defvar inv_suffix = !if(is_inv, "N", "");
+    defvar name_inv_suffix = !if(is_inv, "n", "");
 
-// Jump and link
-let isCall = 1, hasDelaySlot = 1, isCodeGenOnly = 1, Uses = [SP],
-    Defs = [RCA] in {
-  def CALL : Pseudo<(outs), (ins CallTarget:$addr), "", []>;
-  def CALLR : Pseudo<(outs), (ins GPR:$Rs1), "", [(Call GPR:$Rs1)]>;
-}
-
-let isReturn = 1, isTerminator = 1, hasDelaySlot = 1, isBarrier = 1,
-    Uses = [RCA] in {
-  def RET : InstRM<0b0, (outs), (ins),
-                   "ld\t-4[%fp], %pc ! return",
-                   [(RetGlue)]> {
-    let Rd = PC.Num;
-    let Rs1 = FP.Num;
-    let P = 1;
-    let Q = 0;
-    let imm16 = -4;
-
-    // Post encoding is not needed for RET.
-    let PostEncoderMethod = "";
+    def !if(is_inv, "N", "") # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+      : EZHInstRegShiftALU<0, shift_type, 0, is_inv, (outs GPR:$Rd), ins_basic_pred,
+                            "r"#shift_name#name_inv_suffix#sf_suffix#"$Cond $Rd, $Rs2, $Rshift",
+                            !if(is_inv,
+                                [(set i32:$Rd, (not (shift_node i32:$Rs2, i32:$Rshift)))],
+                                [(set i32:$Rd, (shift_node i32:$Rs2, i32:$Rshift))])> {
+      let Rs1 = 0;
+    }
   }
 }
 
-// ADJCALLSTACKDOWN/UP implicitly use/def SP because they may be expanded into
-// a stack adjustment and the codegen must know that they may modify the stack
-// pointer before prolog-epilog rewriting occurs.
-// Pessimistically assume ADJCALLSTACKDOWN / ADJCALLSTACKUP will become
-// sub / add which can clobber SP.
-let Defs = [SP], Uses = [SP] in {
-  def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
-                                "#ADJCALLSTACKDOWN $amt1 $amt2",
-                                [(CallSeqStart timm:$amt1, timm:$amt2)]>;
-  def ADJCALLSTACKUP   : Pseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
-                                "#ADJCALLSTACKUP $amt1 $amt2",
-                                [(CallSeqEnd timm:$amt1, timm:$amt2)]>;
-}
+multiclass RegShiftALUOps<bits<2> shift_type, string shift_name, SDPatternOperator shift_node,
+                          string sf_suffix, bits<1> is_post, dag ins_alu> {
+  defvar ins_alu_pred = !con(ins_alu, (ins pred:$Cond));
 
-let Defs = [SP], Uses = [SP] in {
-  def ADJDYNALLOC : Pseudo<(outs GPR:$dst), (ins GPR:$src),
-                           "#ADJDYNALLOC $dst $src",
-                           [(set GPR:$dst, (EZHAdjDynAlloc GPR:$src))]>;
-}
+  foreach alu = EZHShiftAluOpsList in {
+    foreach is_inv = [0, 1] in {
+      defvar inv_suffix = !if(is_inv, "N", "");
+      defvar name_inv_suffix = !if(is_inv, "n", "");
 
-let Uses = [SR] in {
-  def SCC : InstSCC<(outs GPR:$Rs1), (ins CCOp:$DDDI),
-                    "s$DDDI\t$Rs1",
-                    [(set (i32 GPR:$Rs1), (EZHSetCC imm:$DDDI))]>;
-}
+      defvar shifted = (shift_node i32:$Rs2, i32:$Rshift);
 
-// Select with hardware support
-let Uses = [SR], isSelect = 1 in {
-  def SELECT : InstRR<0b111, (outs GPR:$Rd),
-                      (ins GPR:$Rs1, GPR:$Rs2, CCOp:$DDDI),
-                      "sel.$DDDI $Rs1, $Rs2, $Rd",
-                      [(set (i32 GPR:$Rd),
-                       (EZHSelectCC (i32 GPR:$Rs1), (i32 GPR:$Rs2),
-                                      (imm:$DDDI)))]> {
-    let JJJJJ = 0;
-    let F = 0;
+      defvar alu_op_pre = !if(alu.Rev, (alu.Node shifted, i32:$Rs1), (alu.Node i32:$Rs1, shifted));
+      defvar pre_pat = !if(is_inv, (not alu_op_pre), alu_op_pre);
+
+      defvar alu_op_post = !if(alu.Rev, (alu.Node i32:$Rs2, i32:$Rs1), (alu.Node i32:$Rs1, i32:$Rs2));
+      defvar post_pat = (shift_node !if(is_inv, (not alu_op_post), alu_op_post), i32:$Rshift);
+
+      defvar selected_pat = !if(is_post, post_pat, pre_pat);
+      defvar pat = !if(alu.HasPat, [(set i32:$Rd, selected_pat)], []<dag>);
+
+      def "_" # alu.UpperName # inv_suffix # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+        : EZHInstRegShiftALU<alu.AluOp, shift_type, is_post, is_inv, (outs GPR:$Rd), ins_alu_pred,
+                             !if(is_post,
+                                 alu.Name # name_inv_suffix # "_r" # shift_name # sf_suffix # "$Cond $Rd, $Rs1, $Rs2, $Rshift",
+                                 "r" # shift_name # "_" # alu.Name # name_inv_suffix # sf_suffix # "$Cond $Rd, $Rs1, $Rs2, $Rshift"),
+                             pat>;
+    }
   }
 }
 
-let isBranch = 1, isBarrier = 1, isTerminator = 1, hasDelaySlot = 1,
-    isIndirectBranch = 1, Uses = [SR] in {
-  def BRIND_CC : InstRR<0b101, (outs), (ins GPR:$Rs1, CCOp:$DDDI),
-                        "b$DDDI\t$Rs1", []> {
-    let F = 0;
-    let JJJJJ = 0;
-    let Rd = PC.Num;
-    let Rs2 = R0.Num;
+multiclass RegShiftOps<bits<2> shift_type, string shift_name, SDPatternOperator shift_node,
+                        string sf_suffix,
+                        dag ins_basic, dag ins_alu> {
+  defvar ins_basic_pred = !con(ins_basic, (ins pred:$Cond));
+  defvar ins_alu_pred = !con(ins_alu, (ins pred:$Cond));
+
+  // Basic shift: RLSL, RLSR, RASR, RROR
+  def !if(!empty(sf_suffix), "", "_" # sf_suffix)
+    : EZHInstRegShiftALU<0, shift_type, 0, 0, (outs GPR:$Rd), ins_basic_pred,
+                         "r"#shift_name#sf_suffix#"$Cond $Rd, $Rs2, $Rshift",
+                         [(set i32:$Rd, (shift_node i32:$Rs2, i32:$Rshift))]> {
+    let Rs1 = 0;
   }
 
-  def BRIND_CCA : InstRR<0b101, (outs), (ins GPR:$Rs1, GPR:$Rs2, CCOp:$DDDI),
-                         "b${DDDI}\t$Rs1 add $Rs2", []> {
-    let F = 0;
-    let Rd = PC.Num;
-    let JJJJJ = 0;
+  // Shift then ALU: RLSL_AND, RLSL_OR ...
+  foreach alu = EZHShiftAluOpsList in {
+    def "_" # alu.UpperName # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+      : EZHInstRegShiftALU<alu.AluOp, shift_type, 0, 0, (outs GPR:$Rd), ins_alu_pred,
+                           "r"#shift_name#"_"#alu.Name#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $Rshift",
+                           !if(alu.HasPat,
+                               [(set i32:$Rd, !if(alu.Rev,
+                                                  (alu.Node (shift_node i32:$Rs2, i32:$Rshift), i32:$Rs1),
+                                                  (alu.Node i32:$Rs1, (shift_node i32:$Rs2, i32:$Rshift))))],
+                               [])>;
   }
 }
 
-// TODO: This only considers the case where BROFF is an immediate and not where
-// it is a register. Add support for register relative branching.
-let isBranch = 1, isBarrier = 1, isTerminator = 1, hasDelaySlot = 1, Rs1 = 0,
-    Uses = [SR] in
-  def BRR : InstBRR<(outs), (ins i16imm:$imm16, CCOp:$DDDI),
-                    "b${DDDI}.r\t$imm16", []>;
+multiclass ShiftOps<bits<2> basic_shift_type, bits<2> reg_shift_type, string shift_name, SDPatternOperator shift_node,
+                    string sf_suffix,
+                    dag ins_shift, dag ins_shift_alu,
+                    dag ins_reg_shift, dag ins_reg_shift_alu> {
+  defvar ins_shift_pred = !con(ins_shift, (ins pred:$Cond));
+  defvar ins_shift_alu_pred = !con(ins_shift_alu, (ins pred:$Cond));
 
-let F = 0 in {
-// Population Count (POPC)
-def POPC: InstSpecial<0b001, (outs GPR:$Rd), (ins GPR:$Rs1),
-                      "popc\t$Rs1, $Rd",
-                      [(set GPR:$Rd, (ctpop GPR:$Rs1))]>;
+  // Basic shift: LSL, LSR, ASR, ROR (no "i" suffix!)
+  def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+    : EZHInstShift<basic_shift_type, (outs GPR:$Rd), ins_shift_pred,
+                   shift_name#sf_suffix#"$Cond $Rd, $Rs, $ShAmt",
+                   [(set i32:$Rd, (shift_node i32:$Rs, (i32 imm:$ShAmt)))]>;
 
-// Count Leading Zeros (LEADZ)
-def LEADZ: InstSpecial<0b010, (outs GPR:$Rd), (ins GPR:$Rs1),
-                       "leadz\t$Rs1, $Rd", [(set GPR:$Rd, (ctlz GPR:$Rs1))]>;
+  // Shift-ALU: LSL_AND, LSL_OR ... generated dynamically
+  foreach alu = EZHShiftAluOpsList in {
+    def "_" # alu.UpperName # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+      : EZHInstShiftALU<alu.AluOp, reg_shift_type, (outs GPR:$Rd), ins_shift_alu_pred,
+                        shift_name#"_"#alu.Name#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $ShAmt",
+                        !if(alu.HasPat,
+                            [(set i32:$Rd, !if(alu.Rev,
+                                               (alu.Node (shift_node i32:$Rs2, (i32 imm:$ShAmt)), i32:$Rs1),
+                                               (alu.Node i32:$Rs1, (shift_node i32:$Rs2, (i32 imm:$ShAmt)))))],
+                            [])>;
+  }
 
-// Count Trailing Zeros (TRAILZ)
-def TRAILZ : InstSpecial<0b011, (outs GPR:$Rd), (ins GPR:$Rs1),
-                         "trailz\t$Rs1, $Rd",
-                         [(set GPR:$Rd, (cttz GPR:$Rs1))]>;
+  // Register Shifts (Pseudonymous defm with R prefix!)
+  defm R#NAME : RegShiftBaseOps<reg_shift_type, shift_name, shift_node, sf_suffix,
+                               ins_reg_shift>;
+  defm R#NAME#_PRE : RegShiftALUOps<reg_shift_type, shift_name, shift_node, sf_suffix, 0,
+                                   ins_reg_shift_alu>;
+  defm R#NAME#_POST : RegShiftALUOps<reg_shift_type, shift_name, shift_node, sf_suffix, 1,
+                                    ins_reg_shift_alu>;
+}
+
+multiclass FlipShiftOps<bit is_fbit, string opc_name, string sf_suffix, dag ins_flip> {
+  defvar ins_flip_pred = !con(ins_flip, (ins pred:$Cond));
+
+  def "_LSR" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstFlipALU<0, 0, is_fbit, (outs GPR:$Rd), ins_flip_pred,
+                                                 opc_name#"_lsr"#sf_suffix#"$Cond $Rd, $Rs2, $ShAmt", []> {
+    let Rs1 = 0;
+  }
+  def "_ASR" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstFlipALU<0, 1, is_fbit, (outs GPR:$Rd), ins_flip_pred,
+                                                 opc_name#"_asr"#sf_suffix#"$Cond $Rd, $Rs2, $ShAmt", []> {
+    let Rs1 = 0;
+  }
+}
+
+multiclass FlipALUOps<bits<3> op, string opc_str, string sf_suffix> {
+  defvar ins_flip = (ins GPR:$Rs1, GPR:$Rs2, imm5:$ShAmt, pred:$Cond);
+
+  def "_FBIT_LSR" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstFlipALU<op, 0, 1, (outs GPR:$Rd), ins_flip, "fbit_lsr_"#opc_str#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $ShAmt", []>;
+  def "_FBIT_ASR" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstFlipALU<op, 1, 1, (outs GPR:$Rd), ins_flip, "fbit_asr_"#opc_str#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $ShAmt", []>;
+  def "_FEND_LSR" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstFlipALU<op, 0, 0, (outs GPR:$Rd), ins_flip, "fend_lsr_"#opc_str#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $ShAmt", []>;
+  def "_FEND_ASR" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstFlipALU<op, 1, 0, (outs GPR:$Rd), ins_flip, "fend_asr_"#opc_str#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $ShAmt", []>;
+}
+
+multiclass ALUOps<bits<5> op, bits<3> flip_op, string opc_str,
+                   string sf_suffix,
+                   dag ins_rr, dag ins_ri,
+                   RegisterClass rc_ri = GPR,
+                   SDPatternOperator op_node = null_frag,
+                   SDPatternOperator op_node_e = null_frag> {
+  defvar ins_rr_pred = !con(ins_rr, (ins pred:$Cond));
+  defvar ins_ri_pred = !con(ins_ri, (ins pred:$Cond));
+
+  // Register-Register (no suffix)
+  def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstALU<op, 0, (outs GPR:$Rd), ins_rr_pred,
+    opc_str#sf_suffix#"$Cond $Rd, $Rs1, $Rs2",
+    !if(!and(!empty(sf_suffix), !ne(op_node, null_frag)),
+        [(set GPR:$Rd, (op_node GPR:$Rs1, GPR:$Rs2))],
+        !if(!and(!empty(sf_suffix), !ne(op_node_e, null_frag)),
+            [(set GPR:$Rd, (op_node_e GPR:$Rs1, GPR:$Rs2))],
+            []))>;
+
+  // Register-Register Negated (N)
+  def "N" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstALU<op, 1, (outs GPR:$Rd), ins_rr_pred,
+    opc_str#"n"#sf_suffix#"$Cond $Rd, $Rs1, $Rs2",
+    !if(!and(!empty(sf_suffix), !ne(op_node, null_frag)),
+        [(set GPR:$Rd, (not (op_node GPR:$Rs1, GPR:$Rs2)))],
+        [])>;
+
+  // Register-Immediate (_IMM)
+  def "_IMM" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstALUI12<op, 0, (outs rc_ri:$Rd), ins_ri_pred,
+    opc_str#"_imm"#sf_suffix#"$Cond $Rd, $Rs1, $Imm",
+    !if(!and(!empty(sf_suffix), !ne(op_node, null_frag)),
+        [(set GPR:$Rd, (op_node GPR:$Rs1, (i32 imm:$Imm)))],
+        !if(!and(!empty(sf_suffix), !ne(op_node_e, null_frag)),
+            [(set GPR:$Rd, (op_node_e GPR:$Rs1, (i32 imm:$Imm)))],
+            []))>;
+
+  // Register-Immediate Negated (N_IMM)
+  def "N_IMM" # !if(!empty(sf_suffix), "", "_" # sf_suffix) : EZHInstALUI12<op, 1, (outs GPR:$Rd), ins_ri_pred,
+    opc_str#"n_imm"#sf_suffix#"$Cond $Rd, $Rs1, $Imm",
+    !if(!and(!empty(sf_suffix), !ne(op_node, null_frag)),
+        [(set GPR:$Rd, (not (op_node GPR:$Rs1, (i32 imm:$Imm))))],
+        [])>;
+
+  // Flip ALU Operations (Anonymous defm)
+  defm "" : FlipALUOps<flip_op, opc_str, sf_suffix>;
+}
+
+multiclass UnaryALUOps<bits<5> op, string opc_str, string sf_suffix, bit is_mvn = 0,
+                       SDPatternOperator op_node = null_frag> {
+  defvar ins_GPR_pred = (ins GPR:$Rs1, pred:$Cond);
+
+  def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+    : EZHInstALU<op, 0, (outs GPR:$Rd), ins_GPR_pred,
+                 opc_str#sf_suffix#"$Cond $Rd, $Rs1",
+                 !if(!and(!empty(sf_suffix), !ne(op_node, null_frag)),
+                     [(set GPR:$Rd, (op_node GPR:$Rs1))],
+                     [])> {
+    let Rs2 = 0;
+    let Inst{31} = is_mvn;
+  }
+}
+
+multiclass LoadImmOps<string opc_str, string sf_suffix, bit is_immn = 0> {
+  defvar ins_imm_pred = (ins imms11:$Imm, pred:$Cond);
+
+  def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+    : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd), ins_imm_pred,
+                  opc_str#sf_suffix#"$Cond $Rd, $Imm",
+                  !if(!empty(sf_suffix),
+                      !if(is_immn,
+                          [(set GPR:$Rd, (not (i32 imm:$Imm)))],
+                          [(set GPR:$Rd, (i32 imm:$Imm))]),
+                      [])> {
+    let Rs1 = 0;
+    let Inst{31} = is_immn;
+  }
+}
+
+multiclass LoadSimmOps<string opc_str, string sf_suffix, bit invert_val> {
+  defvar ins_simm_pred = (ins shifted_imms11:$Imm, imm5:$ShAmt, pred:$Cond);
+
+  let AsmMatchConverter = "cvtShiftedImm" in {
+    def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+      : EZHInstALUIShifted<OP_MOV, invert_val, (outs GPR:$Rd), ins_simm_pred,
+                           opc_str#sf_suffix#"$Cond $Rd, $Imm",
+                           []>;
+  }
+}
+
+multiclass BitOps<bits<2> op_type, bit s_bit, string opc_str, string sf_suffix> {
+  defvar ins_reg_pred = (ins GPR:$Rs, GPR:$Rbit, pred:$Cond);
+  defvar ins_imm_pred = (ins GPR:$Rs, imm5:$Bit5, pred:$Cond);
+
+  def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+    : EZHInstBitReg<op_type, (outs GPR:$Rd), ins_reg_pred,
+                    opc_str#sf_suffix#"$Cond $Rd, $Rs, $Rbit",
+                    []> {
+    let S_bit = s_bit;
+  }
+
+  def "_IMM" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+    : EZHInstBit<op_type, (outs GPR:$Rd), ins_imm_pred,
+                 opc_str#"_imm"#sf_suffix#"$Cond $Rd, $Rs, $Bit5",
+                 []> {
+    let S_bit = s_bit;
+  }
+}
+
+multiclass AndOrOps<string sf_suffix> {
+  defvar ins_andor_pred = (ins GPR:$Rs1, GPR:$Rs2, GPR:$Rs3, pred:$Cond);
+
+  def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
+    : EZHInstAndOr<(outs GPR:$Rd), ins_andor_pred,
+                   "andor"#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $Rs3",
+                   []>;
 }
 
 //===----------------------------------------------------------------------===//
-// Non-Instruction Patterns
+// Pseudo Instructions
+//===----------------------------------------------------------------------===//
+let mayLoad = 1 in {
+  def LOAD_CONSTANT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm), "", []>;
+  def LOAD_CONSTANT_COND : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm, pred:$Cond), "", []>;
+}
+let isNotDuplicable = 1, isBarrier = 1, hasSideEffects = 1 in {
+def CONSTPOOL_ENTRY : EZHPseudo<(outs), (ins unknown:$sym, unknown:$val), "$sym:\n\t.long $val", []>;
+def JUMPTABLE_ADDRS : EZHPseudo<(outs), (ins i32imm:$instid, i32imm:$cpidx, i32imm:$size), "", []>;
+}
+
+let hasSideEffects = 1 in {
+def LEApcrelJT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$label), "", [(set GPR:$Rd, (EZHWrapperJT tjumptable:$label))]>;
+def LEApcrel : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$label), "", [(set GPR:$Rd, (EZHWrapper tconstpool:$label))]>;
+def ADR : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$label), "add $Rd, pc, $label", []>;
+}
+
+let isCall = 1, Defs = [R0, R1, R2, R3, RA], isCodeGenOnly = 1 in {
+  def CALL_INDIRECT : EZHInstGotoReg<1, (outs), (ins GPRNoFPBP:$raddr), "goto_regl $raddr", [(EZH_call i32:$raddr)]> {
+    let isPredicable = 0;
+    let Cond = 0;
+  }
+}
+
+let isTerminator = 1, isBarrier = 1, isBranch = 1, isIndirectBranch = 1,
+    isNotDuplicable = 1 in {
+  def BR_JTr : EZHPseudo<(outs), (ins GPR:$target, i32imm:$jt), "# BR_JTr $target, $jt", [(EZHbrjt GPR:$target, tjumptable:$jt)]>;
+}
+
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1, mayLoad = 1 in
+def BRIND_LDR : EZHPseudo<(outs), (ins GPR:$Rn, imms8_word_offset:$Offset, pred:$Cond),
+                          "# BRIND_LDR $Rn, $Offset", []>;
+
+let usesCustomInserter = 1, hasSideEffects = 1 in {
+  def PseudoCMP : EZHPseudo<(outs), (ins GPR:$lhs, GPR:$rhs), "", [(EZHcmp i32:$lhs, i32:$rhs)]>;
+  def PseudoCMPi : EZHPseudo<(outs), (ins GPR:$lhs, imms12:$rhs), "", [(EZHcmp i32:$lhs, imms12:$rhs)]>;
+}
+
+let usesCustomInserter = 1, isTerminator = 1, isBranch = 1 in {
+  def PseudoBR_CC : EZHPseudo<(outs), (ins brtarget:$dest, i32imm:$cc), "", [(EZHbrcc bb:$dest, timm:$cc)]>;
+}
+
+let usesCustomInserter = 1 in {
+  def PseudoSELECT_CC : EZHPseudo<(outs GPR:$dst), (ins GPR:$truev, GPR:$falsev, i32imm:$cc), "", [(set i32:$dst, (EZHselectcc i32:$truev, i32:$falsev, timm:$cc))]>;
+}
+
+let isPseudo = 1, hasSideEffects = 1 in {
+  def ADJCALLSTACKDOWN : EZHPseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+    "",
+    [(EZH_adjcallstackdown timm:$amt1, timm:$amt2)]>;
+  def ADJCALLSTACKUP : EZHPseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+    "",
+    [(EZH_adjcallstackup timm:$amt1, timm:$amt2)]>;
+
+  let usesCustomInserter = 1 in {
+    let Defs = [R0, R1, R2, R3, R4, R5, R6, R7, RA], isBarrier = 1 in {
+      def EH_SjLj_SetJmp : EZHPseudo<(outs GPR:$dst), (ins GPR:$buf), "",
+                          [(set i32:$dst, (EZHsjlj_setjmp i32:$buf))]>;
+    }
+    let isTerminator = 1, isBarrier = 1 in {
+      def EH_SjLj_LongJmp : EZHPseudo<(outs), (ins GPR:$buf), "",
+                            [(EZHsjlj_longjmp i32:$buf)]>;
+    }
+    let isBarrier = 1, hasSideEffects = 1 in {
+      def EH_SjLj_Setup_Dispatch : EZHPseudo<(outs), (ins), "",
+                            [(EZHsjlj_setup_dispatch)]>;
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Real Instructions
 //===----------------------------------------------------------------------===//
 
-// unsigned 16-bit immediate
-def : Pat<(i32 i32lo16z:$imm), (OR_I_LO (i32 R0), imm:$imm)>;
+// HOLD family
+def HOLD : EZHCondInst<(outs), (ins pred:$Cond), "hold$Cond", []> {
+  let Opcode = OP_HOLD;
+  let Inst{13-10} = REG_PC; // PC
+  let Inst{14} = 0;
+  let Inst{15} = 1;
+  let Inst{31-16} = 0;
+  let Inst{9} = 0; // Force S bit to 0
+}
+def VECTORED_HOLD : EZHInstVectoredHold<0, 0, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold$Cond $table", []>;
+def VECTORED_HOLD_NRA : EZHInstVectoredHold<1, 0, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_nra$Cond $table", []>;
+def VECTORED_HOLD_LV : EZHInstVectoredHold<0, 1, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_lv$Cond $table", []>;
+def VECTORED_HOLD_LV_NRA : EZHInstVectoredHold<1, 1, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_lv_nra$Cond $table", []>;
+def ACC_VECTORED_HOLD : EZHInstAccVectoredHold<0, 0, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold$Cond $table, $vectors", []>;
+def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_nra$Cond $table, $vectors", []>;
+def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv$Cond $table, $vectors", []>;
+def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $table, $vectors", []>;
 
-// arbitrary immediate
-def : Pat<(i32 imm:$imm), (OR_I_LO (MOVHI (HI16 imm:$imm)), (LO16 imm:$imm))>;
+// Tight Loop
+def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Cond), "tight_loop$Cond $Rend, $Rcount", []>;
 
-// Calls
-def : Pat<(Call tglobaladdr:$dst), (CALL tglobaladdr:$dst)>;
-def : Pat<(Call texternalsym:$dst), (CALL texternalsym:$dst)>;
+// Reg Offset Load/Store
+def LDR_REG : EZHInstMemReg<OP_MEM_REG, 0, 1, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_reg$Cond $Rd, $Rn, $Rm", []>;
+def LDR_REGB : EZHInstMemReg<OP_MEM_REG, 0, 0, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regb$Cond $Rd, $Rn, $Rm", []>;
+def LDR_REGBS : EZHInstMemReg<OP_MEM_REG, 0, 0, 1, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regbs$Cond $Rd, $Rn, $Rm", []>;
+def STR_REG : EZHInstMemReg<OP_MEM_REG, 1, 1, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_reg$Cond $Rn, $Rd, $Rm", []>;
+def STR_REGB : EZHInstMemReg<OP_MEM_REG, 1, 0, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_regb$Cond $Rn, $Rd, $Rm", []>;
 
-// Loads
-def : Pat<(extloadi8  ADDRspls:$src), (i32 (LDBz_RI ADDRspls:$src))>;
-def : Pat<(extloadi16 ADDRspls:$src), (i32 (LDHz_RI ADDRspls:$src))>;
-// Loads up to 32-bits are already atomic.
-// TODO: This is a workaround for a particular failing case and should be
-// handled more generally.
-def : Pat<(atomic_load_azext_8  ADDRspls:$src), (i32 (LDBz_RI ADDRspls:$src))>;
+// Push / Pop (Upward Stack)
+def PUSH : EZHInstMem<OP_STR, 1, 1, 0, 1, 1, (outs), (ins GPR:$Rd, pred:$Cond), "push$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 1;
+}
+def POP : EZHInstMem<OP_LDR, 0, 1, 0, 0, 1, (outs GPR:$Rd), (ins pred:$Cond), "pop$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 0xFF;
+}
+def PUSHB : EZHInstMem<OP_STR, 1, 0, 0, 1, 1, (outs), (ins GPR:$Rd, pred:$Cond), "pushb$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 1;
+}
+def POPB : EZHInstMem<OP_LDR, 0, 0, 0, 0, 1, (outs GPR:$Rd), (ins pred:$Cond), "popb$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 0xFF;
+}
+def POPBS : EZHInstMem<OP_LDR, 0, 0, 1, 0, 1, (outs GPR:$Rd), (ins pred:$Cond), "popbs$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 0xFF;
+}
 
-// GlobalAddress, ExternalSymbol, Jumptable, ConstantPool
-def : Pat<(EZHHi tglobaladdr:$dst), (MOVHI tglobaladdr:$dst)>;
-def : Pat<(EZHLo tglobaladdr:$dst), (OR_I_LO (i32 R0), tglobaladdr:$dst)>;
-def : Pat<(EZHSmall tglobaladdr:$dst), (SLI tglobaladdr:$dst)>;
-def : Pat<(EZHHi texternalsym:$dst), (MOVHI texternalsym:$dst)>;
-def : Pat<(EZHLo texternalsym:$dst), (OR_I_LO (i32 R0), texternalsym:$dst)>;
-def : Pat<(EZHSmall texternalsym:$dst), (SLI texternalsym:$dst)>;
-def : Pat<(EZHHi tblockaddress:$dst), (MOVHI tblockaddress:$dst)>;
-def : Pat<(EZHLo tblockaddress:$dst), (OR_I_LO (i32 R0), tblockaddress:$dst)>;
-def : Pat<(EZHSmall tblockaddress:$dst), (SLI tblockaddress:$dst)>;
-def : Pat<(EZHHi tjumptable:$dst), (MOVHI tjumptable:$dst)>;
-def : Pat<(EZHLo tjumptable:$dst), (OR_I_LO (i32 R0), tjumptable:$dst)>;
-def : Pat<(EZHSmall tjumptable:$dst), (SLI tjumptable:$dst)>;
-def : Pat<(EZHHi tconstpool:$dst), (MOVHI tconstpool:$dst)>;
-def : Pat<(EZHLo tconstpool:$dst), (OR_I_LO (i32 R0), tconstpool:$dst)>;
-def : Pat<(EZHSmall tconstpool:$dst), (SLI tconstpool:$dst)>;
+// Push / Pop Down (Downward Stack)
+def PUSHD : EZHInstMem<OP_STR, 1, 1, 0, 0, 1, (outs), (ins GPR:$Rd, pred:$Cond), "pushd$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 0xFF;
+}
+def POPD : EZHInstMem<OP_LDR, 0, 1, 0, 1, 1, (outs GPR:$Rd), (ins pred:$Cond), "popd$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 1;
+}
+def PUSHDB : EZHInstMem<OP_STR, 1, 0, 0, 0, 1, (outs), (ins GPR:$Rd, pred:$Cond), "pushdb$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 0xFF;
+}
+def POPDB : EZHInstMem<OP_LDR, 0, 0, 0, 1, 1, (outs GPR:$Rd), (ins pred:$Cond), "popdb$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 1;
+}
+def POPDBS : EZHInstMem<OP_LDR, 0, 0, 1, 1, 1, (outs GPR:$Rd), (ins pred:$Cond), "popdbs$Cond $Rd", []> {
+  let Rn = REG_SP;
+  let Offset = 1;
+}
 
-def : Pat<(or GPR:$hi, (EZHLo tglobaladdr:$lo)),
-          (OR_I_LO GPR:$hi, tglobaladdr:$lo)>;
-def : Pat<(or R0, (EZHSmall tglobaladdr:$small)),
-          (SLI tglobaladdr:$small)>;
-def : Pat<(or GPR:$hi, (EZHLo texternalsym:$lo)),
-          (OR_I_LO GPR:$hi, texternalsym:$lo)>;
-def : Pat<(or R0, (EZHSmall texternalsym:$small)),
-          (SLI texternalsym:$small)>;
-def : Pat<(or GPR:$hi, (EZHLo tblockaddress:$lo)),
-          (OR_I_LO GPR:$hi, tblockaddress:$lo)>;
-def : Pat<(or R0, (EZHSmall tblockaddress:$small)),
-          (SLI tblockaddress:$small)>;
-def : Pat<(or GPR:$hi, (EZHLo tjumptable:$lo)),
-          (OR_I_LO GPR:$hi, tjumptable:$lo)>;
-def : Pat<(or R0, (EZHSmall tjumptable:$small)),
-          (SLI tjumptable:$small)>;
-def : Pat<(or GPR:$hi, (EZHLo tconstpool:$lo)),
-          (OR_I_LO GPR:$hi, tconstpool:$lo)>;
-def : Pat<(or R0, (EZHSmall tconstpool:$small)),
-          (SLI tconstpool:$small)>;
+// Peripheral Read/Write
+def PER_READ : EZHInstPerRead<OP_PER_READ, (outs GPR:$Rd), (ins imm20:$addr, pred:$Cond), "per_read$Cond $Rd, $addr", []>;
+def PER_WRITE : EZHInstPerWrite<OP_PER_WRITE, (outs), (ins GPR:$Rs, imm20:$addr, pred:$Cond), "per_write$Cond $Rs, $addr", []>;
+
+//===----------------------------------------------------------------------===//
+// Predicated ALU & Shift Instructions
+//===----------------------------------------------------------------------===//
+
+defvar ins_ALU_rr = (ins GPR:$Rs1, GPR:$Rs2);
+defvar ins_ALU_ri = (ins GPR:$Rs1, imms12:$Imm);
+defvar ins_ALU_reg_shift = (ins GPR:$Rs1, GPR:$Rs2, GPR3Bit:$Rshift);
+
+defvar ins_Shift_s = (ins GPR:$Rs, imm5:$ShAmt);
+defvar ins_Shift_sa = (ins GPR:$Rs1, GPR:$Rs2, imm5:$ShAmt);
+defvar ins_Shift_rs = (ins GPR:$Rs2, GPR3Bit:$Rshift);
+defvar ins_Shift_rsa = (ins GPR:$Rs1, GPR:$Rs2, GPR3Bit:$Rshift);
+defvar ins_Shift_f = (ins GPR:$Rs2, imm5:$ShAmt); // Flip shifts expect Rs2!
+
+foreach sf = SetFlags in {
+  defvar sf_suffix = sf.Suffix;
+  let S = sf.Value in {
+    // ALU
+    defm ADD : ALUOps<ALU_ADD, FLIP_ADD, "add", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, add, null_frag>;
+    defm SUB : ALUOps<ALU_SUB, FLIP_SUB, "sub", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, sub, null_frag>;
+
+    // Post-Shifted ALU
+    defm ADD : ALUShiftedOps<ALU_ADD, "add", sf_suffix>;
+    defm SUB : ALUShiftedOps<ALU_SUB, "sub", sf_suffix>;
+    defm ADC : ALUShiftedOps<ALU_ADC, "adc", sf_suffix>;
+    defm SBC : ALUShiftedOps<ALU_SBC, "sbc", sf_suffix>;
+    defm OR  : ALUShiftedOps<ALU_OR,  "or",  sf_suffix>;
+    defm AND : ALUShiftedOps<ALU_AND, "and", sf_suffix>;
+    defm XOR : ALUShiftedOps<ALU_XOR, "xor", sf_suffix>;
+    defm ADC : ALUOps<ALU_ADC, FLIP_ADC, "adc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, adde>;
+    defm SBC : ALUOps<ALU_SBC, FLIP_SBC, "sbc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, sube>;
+    defm OR  : ALUOps<ALU_OR,  FLIP_OR,  "or",  sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, or, null_frag>;
+    defm AND : ALUOps<ALU_AND, FLIP_AND, "and", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, and, null_frag>;
+    defm XOR : ALUOps<ALU_XOR, FLIP_XOR, "xor", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, xor, null_frag>;
+
+    // Shifts
+    defm LSL : ShiftOps<SHIFT3_LSL, SHIFT2_LSL, "lsl", shl, sf_suffix, ins_Shift_s, ins_Shift_sa, ins_Shift_rs, ins_Shift_rsa>;
+    defm LSR : ShiftOps<SHIFT3_LSR, SHIFT2_LSR, "lsr", srl, sf_suffix, ins_Shift_s, ins_Shift_sa, ins_Shift_rs, ins_Shift_rsa>;
+    defm ASR : ShiftOps<SHIFT3_ASR, SHIFT2_ASR, "asr", sra, sf_suffix, ins_Shift_s, ins_Shift_sa, ins_Shift_rs, ins_Shift_rsa>;
+    defm ROR : ShiftOps<SHIFT3_ROR, SHIFT2_ROR, "ror", rotr, sf_suffix, ins_Shift_s, ins_Shift_sa, ins_Shift_rs, ins_Shift_rsa>;
+
+    // Flip Shifts
+    defm FBIT : FlipShiftOps<1, "fbit", sf_suffix, ins_Shift_f>;
+    defm FEND : FlipShiftOps<0, "fend", sf_suffix, ins_Shift_f>;
+
+    // Unary ALU
+    defm MOV : UnaryALUOps<OP_MOV, "mov", sf_suffix, 0>;
+    defm MVN : UnaryALUOps<OP_MOV, "mvn", sf_suffix, 1, not>;
+
+    // Load Imm
+    defm LOAD_IMM : LoadImmOps<"load_imm", sf_suffix, 0>;
+    defm LOAD_IMMN : LoadImmOps<"load_immn", sf_suffix, 1>;
+
+    // Load Shifted Imm
+    defm LOAD_SIMM : LoadSimmOps<"load_simm", sf_suffix, 0>;
+    defm LOAD_SIMMN : LoadSimmOps<"load_simmn", sf_suffix, 1>;
+
+    // Bit Ops
+    defm BSET : BitOps<2, 1, "bset", sf_suffix>;
+    defm BCLR : BitOps<1, 0, "bclr", sf_suffix>;
+    defm BTST : BitOps<1, 1, "btst", sf_suffix>;
+    defm BTOG : BitOps<3, 1, "btog", sf_suffix>;
+
+    // ANDOR
+    defm ANDOR : AndOrOps<sf_suffix>;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Predicated Memory Instructions
+//===----------------------------------------------------------------------===//
+
+defm LDR : MemOps<OP_LDR, 0, 1, 0, "ldr",   imms8_word_offset,
+  [(set i32:$Rd, (load (add i32:$Rn, imms8_word:$Offset)))],
+  "$Rd, $Rn, $Offset", "$Rd, $Rn, $Offset", "$Rn, $Rd, $Offset">;
+
+defm STR : MemOps<OP_STR, 1, 1, 0, "str",   imms8_word_offset,
+  [(store i32:$Rd, (add i32:$Rn, imms8_word:$Offset))],
+  "$Rn, $Rd, $Offset", "$Rn, $Rd, $Offset", "$Rn, $Rd, $Offset">;
+
+defm LDRB : MemOps<OP_LDR, 0, 0, 0, "ldrb",  imms8,
+  [(set i32:$Rd, (zextloadi8 (add i32:$Rn, imms8:$Offset)))],
+  "$Rd, $Rn, $Offset", "$Rd, $Rn, $Offset", "$Rd, $Rn, $Offset">;
+
+defm LDRBS : MemOps<OP_LDR, 0, 0, 1, "ldrbs", imms8,
+  [(set i32:$Rd, (sextloadi8 (add i32:$Rn, imms8:$Offset)))],
+  "$Rd, $Rn, $Offset", "$Rd, $Rn, $Offset", "$Rd, $Rn, $Offset">;
+
+defm STRB : MemOps<OP_STR, 1, 0, 0, "strb",  imms8,
+  [(truncstorei8 i32:$Rd, (add i32:$Rn, imms8:$Offset))],
+  "$Rn, $Rd, $Offset", "$Rn, $Rd, $Offset", "$Rn, $Rd, $Offset">;
+
+//===----------------------------------------------------------------------===//
+// Predicated Branch Instructions
+//===----------------------------------------------------------------------===//
+
+let isBranch = 1, isTerminator = 1, isBarrier = 1 in {
+  def GOTO : EZHInstGoto<0, (outs), (ins brtarget:$addr, pred:$Cond), "goto$Cond $addr", [(br bb:$addr)]>;
+  def GOTOL : EZHInstGoto<1, (outs), (ins brtarget:$addr, pred:$Cond), "gotol$Cond $addr", []> { let Defs = [RA]; }
+  def GOTO_REG : EZHInstGotoReg<0, (outs), (ins GPR:$raddr, pred:$Cond), "goto_reg$Cond $raddr", [(brind i32:$raddr)]>;
+  def GOTO_REGL : EZHInstGotoReg<1, (outs), (ins GPR:$raddr, pred:$Cond), "goto_regl$Cond $raddr", []> { let Defs = [RA]; }
+}
+
+// Unconditional instructions
+def NOP : EZHInstSingle<OP_NOP, (outs), (ins), "nop", []> { let Inst{31-5} = 0; }
+def INT_TRIGGER : EZHInstSingle<OP_INT_TRIGGER, (outs), (ins imm24:$Imm), "int_trigger $Imm", []> { bits<24> Imm; let Inst{31-8} = Imm; let Inst{7-5} = 0; }
+def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins imms8:$AndMask, imms8:$OrMask, imms8:$XorMask),
+                        "modify_gpo_byte $AndMask, $OrMask, $XorMask", []>;
+
+def HEART_RYTHM_IMM : EZHInstSingle<OP_NOP, (outs), (ins imm16:$Imm), "heart_rythm_imm $Imm", []> {
+  bits<16> Imm;
+  let Inst{31-16} = Imm;
+  let Inst{15-6} = 0;
+  let Inst{5} = 1;
+}
+
+def HEART_RYTHM : EZHInstSingle<OP_NOP, (outs), (ins GPR:$Rs), "heart_rythm $Rs", []> {
+  bits<4> Rs;
+  let Inst{31-18} = 0;
+  let Inst{17-14} = Rs;
+  let Inst{13-10} = 0;
+  let Inst{9} = 1;
+  let Inst{8-6} = 0;
+  let Inst{5} = 1;
+}
+
+def WAIT_FOR_BEAT : EZHInstSingle<OP_NOP, (outs), (ins), "wait_for_beat", []> {
+  let Inst{31-7} = 0;
+  let Inst{6} = 1;
+  let Inst{5} = 1;
+  let Inst{4-0} = OP_NOP;
+}
+
+def SYNCH_ALL_TO_BEAT : EZHInstSingle<OP_NOP, (outs), (ins imm1:$Imm), "synch_all_to_beat $Imm", []> {
+  bits<1> Imm;
+  let Inst{31} = Imm;
+  let Inst{30-7} = 0;
+  let Inst{6} = 1;
+  let Inst{5} = 0;
+  let Inst{4-0} = OP_NOP;
+}
+
+// Call instructions
+let isCall = 1, Defs = [R0, R1, R2, R3, RA] in {
+  def CALL : EZHInstCall<OP_GOSUB, (outs), (ins calltarget:$addr), "gosub $addr", [(EZH_call tglobaladdr:$addr)]>;
+  let isCodeGenOnly = 1 in
+  def CALLExt : EZHInstCall<OP_GOSUB, (outs), (ins calltarget:$addr), "gosub $addr", [(EZH_call texternalsym:$addr)]>;
+}
+
+// Return
+let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
+  def RET : EZHInstGotoReg<0, (outs), (ins variable_ops), "goto ra", [(EZH_ret_glue_node)]> {
+    let raddr = REG_RA;
+    let isPredicable = 0;
+    let Cond = 0;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Instruction Selection Patterns
+//===----------------------------------------------------------------------===//
+def : Pat<(EZHbtog i32:$Rs, (i32 imm:$Bit)), (BTOG_IMM GPR:$Rs, imm:$Bit, 0)>;
+
+// Memory Patterns (Words and Bytes)
+// 16-bit access is handled by the Legalizer's Expand mechanism into bytes.
+// Memory Patterns (Words and Bytes)
+// 16-bit access is handled by the Legalizer's Expand mechanism into bytes.
+def : Pat<(i32 (load GPR:$Rn)), (LDR GPR:$Rn, 0, 0)>;
+def : Pat<(store i32:$Rd, GPR:$Rn), (STR GPR:$Rd, GPR:$Rn, 0, 0)>;
+
+def : Pat<(i32 (zextloadi8 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
+def : Pat<(i32 (sextloadi8 GPR:$Rn)), (LDRBS GPR:$Rn, 0, 0)>;
+def : Pat<(i32 (extloadi8 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
+def : Pat<(truncstorei8 GPR:$Rd, GPR:$Rn), (STRB GPR:$Rd, GPR:$Rn, 0, 0)>;
+
+def : Pat<(i32 (extloadi1 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
+def : Pat<(i32 (zextloadi1 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
+
+//===----------------------------------------------------------------------===//
+// Instruction Selection Patterns (ISel lowering)
+//===----------------------------------------------------------------------===//
+
+// Selection patterns for peripheral read/write (target-specific nodes)
+def : Pat<(EZHper_read timm:$addr),
+          (PER_READ timm:$addr, 0)>;
+
+def : Pat<(EZHper_write GPR:$Rs, timm:$addr),
+          (PER_WRITE GPR:$Rs, timm:$addr, 0)>;
+
+// Variable shift patterns
+def : Pat<(shl GPR:$Rs2, GPR3Bit:$Rshift), (RLSL GPR:$Rs2, GPR3Bit:$Rshift, 0)>;
+def : Pat<(srl GPR:$Rs2, GPR3Bit:$Rshift), (RLSR GPR:$Rs2, GPR3Bit:$Rshift, 0)>;
+def : Pat<(sra GPR:$Rs2, GPR3Bit:$Rshift), (RASR GPR:$Rs2, GPR3Bit:$Rshift, 0)>;
+
+def : Pat<(not (shl GPR:$Rs2, GPR3Bit:$Rshift)), (RLSLN GPR:$Rs2, GPR3Bit:$Rshift, 0)>;
+def : Pat<(not (srl GPR:$Rs2, GPR3Bit:$Rshift)), (RLSRN GPR:$Rs2, GPR3Bit:$Rshift, 0)>;
+def : Pat<(not (sra GPR:$Rs2, GPR3Bit:$Rshift)), (RASRN GPR:$Rs2, GPR3Bit:$Rshift, 0)>;
+
+
+// Negate-Result ALU
+def : Pat<(not (add i32:$Rs1, i32:$Rs2)), (ADDN GPR:$Rs1, GPR:$Rs2, 0)>;
+def : Pat<(not (sub i32:$Rs1, i32:$Rs2)), (SUBN GPR:$Rs1, GPR:$Rs2, 0)>;
+def : Pat<(not (and i32:$Rs1, i32:$Rs2)), (ANDN GPR:$Rs1, GPR:$Rs2, 0)>;
+def : Pat<(not (or i32:$Rs1, i32:$Rs2)), (ORN GPR:$Rs1, GPR:$Rs2, 0)>;
+def : Pat<(not (xor i32:$Rs1, i32:$Rs2)), (XORN GPR:$Rs1, GPR:$Rs2, 0)>;
+
+// Combined AND-then-OR
+def : Pat<(or (and i32:$Rs1, i32:$Rs2), i32:$Rs3), (ANDOR GPR:$Rs1, GPR:$Rs2, GPR:$Rs3, 0)>;
+
+// Dynamic Bit Manipulation
+def : Pat<(or i32:$Rs, (shl 1, i32:$Rbit)), (BSET GPR:$Rs, GPR:$Rbit, 0)>;
+def : Pat<(and i32:$Rs, (not (shl 1, i32:$Rbit))), (BCLR GPR:$Rs, GPR:$Rbit, 0)>;
+def : Pat<(xor i32:$Rs, (shl 1, i32:$Rbit)), (BTOG GPR:$Rs, GPR:$Rbit, 0)>;
+def : Pat<(and i32:$Rs, (shl 1, i32:$Rbit)), (BTST GPR:$Rs, GPR:$Rbit, 0)>;
+
+// Immediate Bit Manipulation (Power of 2 Matching)
+def : Pat<(or i32:$Rs, power_of_2:$Bit), (BSET_IMM GPR:$Rs, power_of_2:$Bit, 0)>;
+def : Pat<(and i32:$Rs, power_of_2_inv:$Bit), (BCLR_IMM GPR:$Rs, power_of_2_inv:$Bit, 0)>;
+def : Pat<(xor i32:$Rs, power_of_2:$Bit), (BTOG_IMM GPR:$Rs, power_of_2:$Bit, 0)>;
+
+def : Pat<(bswap i32:$Rs2), (FEND_LSR GPR:$Rs2, 0, 0)>;
+def : Pat<(bitreverse i32:$Rs2), (FBIT_LSR GPR:$Rs2, 0, 0)>;
+
+// Indirect branch folding patterns
+def : Pat<(brind (load (add GPR:$Rn, imms8_word:$Offset))),
+          (BRIND_LDR GPR:$Rn, imms8_word:$Offset, (i32 0))>;
+def : Pat<(brind (load GPR:$Rn)),
+          (BRIND_LDR GPR:$Rn, 0, (i32 0))>;

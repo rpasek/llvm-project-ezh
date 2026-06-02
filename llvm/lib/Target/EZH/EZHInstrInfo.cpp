@@ -8,23 +8,44 @@
 //
 // This file contains the EZH implementation of the TargetInstrInfo class.
 //
+// Description:
+//   Implements branch analysis (analyzeBranch), branch modification
+//   (insertBranch, removeBranch, reverseBranchCondition), and instruction
+//   property queries.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiInstrInfo.cpp).
+//
+// Changes:
+//   Customized analyzeBranch to decode EZH conditional branch encodings and
+//   preceding condition codes; implemented branch reversal handling EZH flag
+//   semantics.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZHInstrInfo.h"
-#include "EZHAluCode.h"
 #include "EZHCondCode.h"
 #include "EZHSubtarget.h"
 #include "MCTargetDesc/EZHBaseInfo.h"
+#include "MCTargetDesc/EZHMCTargetDesc.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
 #define GET_INSTRINFO_CTOR_DTOR
 #include "EZHGenInstrInfo.inc"
+
+#define DEBUG_TYPE "ezh-instr-info"
 
 EZHInstrInfo::EZHInstrInfo(const EZHSubtarget &STI)
     : EZHGenInstrInfo(STI, RegisterInfo, EZH::ADJCALLSTACKDOWN,
@@ -40,9 +61,9 @@ void EZHInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     llvm_unreachable("Impossible reg-to-reg copy");
   }
 
-  BuildMI(MBB, Position, DL, get(EZH::OR_I_LO), DestinationRegister)
+  BuildMI(MBB, Position, DL, get(EZH::MOV), DestinationRegister)
       .addReg(SourceRegister, getKillRegState(KillSource))
-      .addImm(0);
+      .addImm(EZHCC::ICC_EU);
 }
 
 void EZHInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
@@ -51,7 +72,7 @@ void EZHInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                        int FrameIndex,
                                        const TargetRegisterClass *RegisterClass,
                                        Register /*VReg*/,
-                                       MachineInstr::MIFlag /*Flags*/) const {
+                                       MachineInstr::MIFlag Flags) const {
   DebugLoc DL;
   if (Position != MBB.end()) {
     DL = Position->getDebugLoc();
@@ -60,18 +81,19 @@ void EZHInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   if (!EZH::GPRRegClass.hasSubClassEq(RegisterClass)) {
     llvm_unreachable("Can't store this register to stack slot");
   }
-  BuildMI(MBB, Position, DL, get(EZH::SW_RI))
+  BuildMI(MBB, Position, DL, get(EZH::STR))
       .addReg(SourceRegister, getKillRegState(IsKill))
       .addFrameIndex(FrameIndex)
       .addImm(0)
-      .addImm(LPAC::ADD);
+      .addImm(EZHCC::ICC_EU)
+      .setMIFlags(Flags);
 }
 
 void EZHInstrInfo::loadRegFromStackSlot(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Position,
     Register DestinationRegister, int FrameIndex,
     const TargetRegisterClass *RegisterClass, Register /*VReg*/,
-    unsigned /*SubReg*/, MachineInstr::MIFlag /*Flags*/) const {
+    unsigned /*SubReg*/, MachineInstr::MIFlag Flags) const {
   DebugLoc DL;
   if (Position != MBB.end()) {
     DL = Position->getDebugLoc();
@@ -80,455 +102,14 @@ void EZHInstrInfo::loadRegFromStackSlot(
   if (!EZH::GPRRegClass.hasSubClassEq(RegisterClass)) {
     llvm_unreachable("Can't load this register from stack slot");
   }
-  BuildMI(MBB, Position, DL, get(EZH::LDW_RI), DestinationRegister)
+  BuildMI(MBB, Position, DL, get(EZH::LDR), DestinationRegister)
       .addFrameIndex(FrameIndex)
       .addImm(0)
-      .addImm(LPAC::ADD);
+      .addImm(EZHCC::ICC_EU)
+      .setMIFlags(Flags);
 }
 
-bool EZHInstrInfo::areMemAccessesTriviallyDisjoint(
-    const MachineInstr &MIa, const MachineInstr &MIb) const {
-  assert(MIa.mayLoadOrStore() && "MIa must be a load or store.");
-  assert(MIb.mayLoadOrStore() && "MIb must be a load or store.");
-
-  if (MIa.hasUnmodeledSideEffects() || MIb.hasUnmodeledSideEffects() ||
-      MIa.hasOrderedMemoryRef() || MIb.hasOrderedMemoryRef())
-    return false;
-
-  // Retrieve the base register, offset from the base register and width. Width
-  // is the size of memory that is being loaded/stored (e.g. 1, 2, 4).  If
-  // base registers are identical, and the offset of a lower memory access +
-  // the width doesn't overlap the offset of a higher memory access,
-  // then the memory accesses are different.
-  const TargetRegisterInfo *TRI = &getRegisterInfo();
-  const MachineOperand *BaseOpA = nullptr, *BaseOpB = nullptr;
-  int64_t OffsetA = 0, OffsetB = 0;
-  LocationSize WidthA = LocationSize::precise(0),
-               WidthB = LocationSize::precise(0);
-  if (getMemOperandWithOffsetWidth(MIa, BaseOpA, OffsetA, WidthA, TRI) &&
-      getMemOperandWithOffsetWidth(MIb, BaseOpB, OffsetB, WidthB, TRI)) {
-    if (BaseOpA->isIdenticalTo(*BaseOpB)) {
-      int LowOffset = std::min(OffsetA, OffsetB);
-      int HighOffset = std::max(OffsetA, OffsetB);
-      LocationSize LowWidth = (LowOffset == OffsetA) ? WidthA : WidthB;
-      if (LowWidth.hasValue() &&
-          LowOffset + (int)LowWidth.getValue() <= HighOffset)
-        return true;
-    }
-  }
-  return false;
-}
-
-bool EZHInstrInfo::expandPostRAPseudo(MachineInstr & /*MI*/) const {
-  return false;
-}
-
-static LPCC::CondCode getOppositeCondition(LPCC::CondCode CC) {
-  switch (CC) {
-  case LPCC::ICC_T: //  true
-    return LPCC::ICC_F;
-  case LPCC::ICC_F: //  false
-    return LPCC::ICC_T;
-  case LPCC::ICC_HI: //  high
-    return LPCC::ICC_LS;
-  case LPCC::ICC_LS: //  low or same
-    return LPCC::ICC_HI;
-  case LPCC::ICC_CC: //  carry cleared
-    return LPCC::ICC_CS;
-  case LPCC::ICC_CS: //  carry set
-    return LPCC::ICC_CC;
-  case LPCC::ICC_NE: //  not equal
-    return LPCC::ICC_EQ;
-  case LPCC::ICC_EQ: //  equal
-    return LPCC::ICC_NE;
-  case LPCC::ICC_VC: //  oVerflow cleared
-    return LPCC::ICC_VS;
-  case LPCC::ICC_VS: //  oVerflow set
-    return LPCC::ICC_VC;
-  case LPCC::ICC_PL: //  plus (note: 0 is "minus" too here)
-    return LPCC::ICC_MI;
-  case LPCC::ICC_MI: //  minus
-    return LPCC::ICC_PL;
-  case LPCC::ICC_GE: //  greater than or equal
-    return LPCC::ICC_LT;
-  case LPCC::ICC_LT: //  less than
-    return LPCC::ICC_GE;
-  case LPCC::ICC_GT: //  greater than
-    return LPCC::ICC_LE;
-  case LPCC::ICC_LE: //  less than or equal
-    return LPCC::ICC_GT;
-  default:
-    llvm_unreachable("Invalid condtional code");
-  }
-}
-
-std::pair<unsigned, unsigned>
-EZHInstrInfo::decomposeMachineOperandsTargetFlags(unsigned TF) const {
-  return std::make_pair(TF, 0u);
-}
-
-ArrayRef<std::pair<unsigned, const char *>>
-EZHInstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
-  using namespace EZHII;
-  static const std::pair<unsigned, const char *> TargetFlags[] = {
-      {MO_ABS_HI, "ezh-hi"}, {MO_ABS_LO, "ezh-lo"}, {MO_NO_FLAG, "ezh-nf"}};
-  return ArrayRef(TargetFlags);
-}
-
-bool EZHInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
-                                  Register &SrcReg2, int64_t &CmpMask,
-                                  int64_t &CmpValue) const {
-  switch (MI.getOpcode()) {
-  default:
-    break;
-  case EZH::SFSUB_F_RI_LO:
-  case EZH::SFSUB_F_RI_HI:
-    SrcReg = MI.getOperand(0).getReg();
-    SrcReg2 = Register();
-    CmpMask = ~0;
-    CmpValue = MI.getOperand(1).getImm();
-    return true;
-  case EZH::SFSUB_F_RR:
-    SrcReg = MI.getOperand(0).getReg();
-    SrcReg2 = MI.getOperand(1).getReg();
-    CmpMask = ~0;
-    CmpValue = 0;
-    return true;
-  }
-
-  return false;
-}
-
-// isRedundantFlagInstr - check whether the first instruction, whose only
-// purpose is to update flags, can be made redundant.
-// * SFSUB_F_RR can be made redundant by SUB_RI if the operands are the same.
-// * SFSUB_F_RI can be made redundant by SUB_I if the operands are the same.
-inline static bool isRedundantFlagInstr(MachineInstr *CmpI, unsigned SrcReg,
-                                        unsigned SrcReg2, int64_t ImmValue,
-                                        MachineInstr *OI) {
-  if (CmpI->getOpcode() == EZH::SFSUB_F_RR && OI->getOpcode() == EZH::SUB_R &&
-      ((OI->getOperand(1).getReg() == SrcReg &&
-        OI->getOperand(2).getReg() == SrcReg2) ||
-       (OI->getOperand(1).getReg() == SrcReg2 &&
-        OI->getOperand(2).getReg() == SrcReg)))
-    return true;
-
-  if (((CmpI->getOpcode() == EZH::SFSUB_F_RI_LO &&
-        OI->getOpcode() == EZH::SUB_I_LO) ||
-       (CmpI->getOpcode() == EZH::SFSUB_F_RI_HI &&
-        OI->getOpcode() == EZH::SUB_I_HI)) &&
-      OI->getOperand(1).getReg() == SrcReg &&
-      OI->getOperand(2).getImm() == ImmValue)
-    return true;
-  return false;
-}
-
-inline static unsigned flagSettingOpcodeVariant(unsigned OldOpcode) {
-  switch (OldOpcode) {
-  case EZH::ADD_I_HI:
-    return EZH::ADD_F_I_HI;
-  case EZH::ADD_I_LO:
-    return EZH::ADD_F_I_LO;
-  case EZH::ADD_R:
-    return EZH::ADD_F_R;
-  case EZH::ADDC_I_HI:
-    return EZH::ADDC_F_I_HI;
-  case EZH::ADDC_I_LO:
-    return EZH::ADDC_F_I_LO;
-  case EZH::ADDC_R:
-    return EZH::ADDC_F_R;
-  case EZH::AND_I_HI:
-    return EZH::AND_F_I_HI;
-  case EZH::AND_I_LO:
-    return EZH::AND_F_I_LO;
-  case EZH::AND_R:
-    return EZH::AND_F_R;
-  case EZH::OR_I_HI:
-    return EZH::OR_F_I_HI;
-  case EZH::OR_I_LO:
-    return EZH::OR_F_I_LO;
-  case EZH::OR_R:
-    return EZH::OR_F_R;
-  case EZH::SL_I:
-    return EZH::SL_F_I;
-  case EZH::SRL_R:
-    return EZH::SRL_F_R;
-  case EZH::SA_I:
-    return EZH::SA_F_I;
-  case EZH::SRA_R:
-    return EZH::SRA_F_R;
-  case EZH::SUB_I_HI:
-    return EZH::SUB_F_I_HI;
-  case EZH::SUB_I_LO:
-    return EZH::SUB_F_I_LO;
-  case EZH::SUB_R:
-    return EZH::SUB_F_R;
-  case EZH::SUBB_I_HI:
-    return EZH::SUBB_F_I_HI;
-  case EZH::SUBB_I_LO:
-    return EZH::SUBB_F_I_LO;
-  case EZH::SUBB_R:
-    return EZH::SUBB_F_R;
-  case EZH::XOR_I_HI:
-    return EZH::XOR_F_I_HI;
-  case EZH::XOR_I_LO:
-    return EZH::XOR_F_I_LO;
-  case EZH::XOR_R:
-    return EZH::XOR_F_R;
-  default:
-    return EZH::NOP;
-  }
-}
-
-bool EZHInstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
-                                        Register SrcReg2, int64_t /*CmpMask*/,
-                                        int64_t CmpValue,
-                                        const MachineRegisterInfo *MRI) const {
-  // Get the unique definition of SrcReg.
-  MachineInstr *MI = MRI->getUniqueVRegDef(SrcReg);
-  if (!MI)
-    return false;
-
-  // Get ready to iterate backward from CmpInstr.
-  MachineBasicBlock::iterator I = CmpInstr, E = MI,
-                              B = CmpInstr.getParent()->begin();
-
-  // Early exit if CmpInstr is at the beginning of the BB.
-  if (I == B)
-    return false;
-
-  // There are two possible candidates which can be changed to set SR:
-  // One is MI, the other is a SUB instruction.
-  // * For SFSUB_F_RR(r1,r2), we are looking for SUB(r1,r2) or SUB(r2,r1).
-  // * For SFSUB_F_RI(r1, CmpValue), we are looking for SUB(r1, CmpValue).
-  MachineInstr *Sub = nullptr;
-  if (SrcReg2 != 0)
-    // MI is not a candidate to transform into a flag setting instruction.
-    MI = nullptr;
-  else if (MI->getParent() != CmpInstr.getParent() || CmpValue != 0) {
-    // Conservatively refuse to convert an instruction which isn't in the same
-    // BB as the comparison. Don't return if SFSUB_F_RI and CmpValue != 0 as Sub
-    // may still be a candidate.
-    if (CmpInstr.getOpcode() == EZH::SFSUB_F_RI_LO)
-      MI = nullptr;
-    else
-      return false;
-  }
-
-  // Check that SR isn't set between the comparison instruction and the
-  // instruction we want to change while searching for Sub.
-  const TargetRegisterInfo *TRI = &getRegisterInfo();
-  for (--I; I != E; --I) {
-    const MachineInstr &Instr = *I;
-
-    if (Instr.modifiesRegister(EZH::SR, TRI) ||
-        Instr.readsRegister(EZH::SR, TRI))
-      // This instruction modifies or uses SR after the one we want to change.
-      // We can't do this transformation.
-      return false;
-
-    // Check whether CmpInstr can be made redundant by the current instruction.
-    if (isRedundantFlagInstr(&CmpInstr, SrcReg, SrcReg2, CmpValue, &*I)) {
-      Sub = &*I;
-      break;
-    }
-
-    // Don't search outside the containing basic block.
-    if (I == B)
-      return false;
-  }
-
-  // Return false if no candidates exist.
-  if (!MI && !Sub)
-    return false;
-
-  // The single candidate is called MI.
-  if (!MI)
-    MI = Sub;
-
-  if (flagSettingOpcodeVariant(MI->getOpcode()) != EZH::NOP) {
-    bool isSafe = false;
-
-    SmallVector<std::pair<MachineOperand *, LPCC::CondCode>, 4>
-        OperandsToUpdate;
-    I = CmpInstr;
-    E = CmpInstr.getParent()->end();
-    while (!isSafe && ++I != E) {
-      const MachineInstr &Instr = *I;
-      for (unsigned IO = 0, EO = Instr.getNumOperands(); !isSafe && IO != EO;
-           ++IO) {
-        const MachineOperand &MO = Instr.getOperand(IO);
-        if (MO.isRegMask() && MO.clobbersPhysReg(EZH::SR)) {
-          isSafe = true;
-          break;
-        }
-        if (!MO.isReg() || MO.getReg() != EZH::SR)
-          continue;
-        if (MO.isDef()) {
-          isSafe = true;
-          break;
-        }
-        // Condition code is after the operand before SR.
-        LPCC::CondCode CC;
-        CC = (LPCC::CondCode)Instr.getOperand(IO - 1).getImm();
-
-        if (Sub) {
-          LPCC::CondCode NewCC = getOppositeCondition(CC);
-          if (NewCC == LPCC::ICC_T)
-            return false;
-          // If we have SUB(r1, r2) and CMP(r2, r1), the condition code based on
-          // CMP needs to be updated to be based on SUB.  Push the condition
-          // code operands to OperandsToUpdate.  If it is safe to remove
-          // CmpInstr, the condition code of these operands will be modified.
-          if (SrcReg2 != 0 && Sub->getOperand(1).getReg() == SrcReg2 &&
-              Sub->getOperand(2).getReg() == SrcReg) {
-            OperandsToUpdate.push_back(
-                std::make_pair(&((*I).getOperand(IO - 1)), NewCC));
-          }
-        } else {
-          // No Sub, so this is x = <op> y, z; cmp x, 0.
-          switch (CC) {
-          case LPCC::ICC_EQ: // Z
-          case LPCC::ICC_NE: // Z
-          case LPCC::ICC_MI: // N
-          case LPCC::ICC_PL: // N
-          case LPCC::ICC_F:  // none
-          case LPCC::ICC_T:  // none
-            // SR can be used multiple times, we should continue.
-            break;
-          case LPCC::ICC_CS: // C
-          case LPCC::ICC_CC: // C
-          case LPCC::ICC_VS: // V
-          case LPCC::ICC_VC: // V
-          case LPCC::ICC_HI: // C Z
-          case LPCC::ICC_LS: // C Z
-          case LPCC::ICC_GE: // N V
-          case LPCC::ICC_LT: // N V
-          case LPCC::ICC_GT: // Z N V
-          case LPCC::ICC_LE: // Z N V
-            // The instruction uses the V bit or C bit which is not safe.
-            return false;
-          case LPCC::UNKNOWN:
-            return false;
-          }
-        }
-      }
-    }
-
-    // If SR is not killed nor re-defined, we should check whether it is
-    // live-out. If it is live-out, do not optimize.
-    if (!isSafe) {
-      MachineBasicBlock *MBB = CmpInstr.getParent();
-      for (const MachineBasicBlock *Succ : MBB->successors())
-        if (Succ->isLiveIn(EZH::SR))
-          return false;
-    }
-
-    // Toggle the optional operand to SR.
-    MI->setDesc(get(flagSettingOpcodeVariant(MI->getOpcode())));
-    MI->addRegisterDefined(EZH::SR);
-    CmpInstr.eraseFromParent();
-    return true;
-  }
-
-  return false;
-}
-
-// Identify instructions that can be folded into a SELECT instruction, and
-// return the defining instruction.
-static MachineInstr *canFoldIntoSelect(Register Reg,
-                                       const MachineRegisterInfo &MRI) {
-  if (!Reg.isVirtual())
-    return nullptr;
-  if (!MRI.hasOneNonDBGUse(Reg))
-    return nullptr;
-  MachineInstr *MI = MRI.getVRegDef(Reg);
-  if (!MI)
-    return nullptr;
-  // MI is folded into the SELECT by predicating it.
-  if (!MI->isPredicable())
-    return nullptr;
-  // Check if MI has any non-dead defs or physreg uses. This also detects
-  // predicated instructions which will be reading SR.
-  for (const MachineOperand &MO : llvm::drop_begin(MI->operands(), 1)) {
-    // Reject frame index operands.
-    if (MO.isFI() || MO.isCPI() || MO.isJTI())
-      return nullptr;
-    if (!MO.isReg())
-      continue;
-    // MI can't have any tied operands, that would conflict with predication.
-    if (MO.isTied())
-      return nullptr;
-    if (MO.getReg().isPhysical())
-      return nullptr;
-    if (MO.isDef() && !MO.isDead())
-      return nullptr;
-  }
-  bool DontMoveAcrossStores = true;
-  if (!MI->isSafeToMove(DontMoveAcrossStores))
-    return nullptr;
-  return MI;
-}
-
-MachineInstr *
-EZHInstrInfo::optimizeSelect(MachineInstr &MI,
-                             SmallPtrSetImpl<MachineInstr *> &SeenMIs,
-                             bool /*PreferFalse*/) const {
-  assert(MI.getOpcode() == EZH::SELECT && "unknown select instruction");
-  MachineRegisterInfo &MRI = MI.getParent()->getParent()->getRegInfo();
-  MachineInstr *DefMI = canFoldIntoSelect(MI.getOperand(1).getReg(), MRI);
-  bool Invert = !DefMI;
-  if (!DefMI)
-    DefMI = canFoldIntoSelect(MI.getOperand(2).getReg(), MRI);
-  if (!DefMI)
-    return nullptr;
-
-  // Find new register class to use.
-  MachineOperand FalseReg = MI.getOperand(Invert ? 1 : 2);
-  Register DestReg = MI.getOperand(0).getReg();
-  const TargetRegisterClass *PreviousClass = MRI.getRegClass(FalseReg.getReg());
-  if (!MRI.constrainRegClass(DestReg, PreviousClass))
-    return nullptr;
-
-  // Create a new predicated version of DefMI.
-  MachineInstrBuilder NewMI =
-      BuildMI(*MI.getParent(), MI, MI.getDebugLoc(), DefMI->getDesc(), DestReg);
-
-  // Copy all the DefMI operands, excluding its (null) predicate.
-  const MCInstrDesc &DefDesc = DefMI->getDesc();
-  for (unsigned i = 1, e = DefDesc.getNumOperands();
-       i != e && !DefDesc.operands()[i].isPredicate(); ++i)
-    NewMI.add(DefMI->getOperand(i));
-
-  unsigned CondCode = MI.getOperand(3).getImm();
-  if (Invert)
-    NewMI.addImm(getOppositeCondition(LPCC::CondCode(CondCode)));
-  else
-    NewMI.addImm(CondCode);
-  NewMI.copyImplicitOps(MI);
-
-  // The output register value when the predicate is false is an implicit
-  // register operand tied to the first def.  The tie makes the register
-  // allocator ensure the FalseReg is allocated the same register as operand 0.
-  FalseReg.setImplicit();
-  NewMI.add(FalseReg);
-  NewMI->tieOperands(0, NewMI->getNumOperands() - 1);
-
-  // Update SeenMIs set: register newly created MI and erase removed DefMI.
-  SeenMIs.insert(NewMI);
-  SeenMIs.erase(DefMI);
-
-  // If MI is inside a loop, and DefMI is outside the loop, then kill flags on
-  // DefMI would be invalid when transferred inside the loop.  Checking for a
-  // loop is expensive, but at least remove kill flags if they are in different
-  // BBs.
-  if (DefMI->getParent() != MI.getParent())
-    NewMI->clearKillInfo();
-
-  // The caller will erase MI, but not DefMI.
-  DefMI->eraseFromParent();
-  return NewMI;
-}
+bool EZHInstrInfo::expandPostRAPseudo(MachineInstr &MI) const { return false; }
 
 // The analyzeBranch function is used to examine conditional instructions and
 // remove unnecessary instructions. This method is used by BranchFolder and
@@ -545,91 +126,90 @@ bool EZHInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
                                  MachineBasicBlock *&FalseBlock,
                                  SmallVectorImpl<MachineOperand> &Condition,
                                  bool AllowModify) const {
-  // Iterator to current instruction being considered.
-  MachineBasicBlock::iterator Instruction = MBB.end();
+  TrueBlock = nullptr;
+  FalseBlock = nullptr;
+  unsigned NumTerminatorsSeen = 0;
 
   // Start from the bottom of the block and work up, examining the
   // terminator instructions.
-  while (Instruction != MBB.begin()) {
-    --Instruction;
+  MachineBasicBlock::iterator I = MBB.end();
+  if (I == MBB.begin())
+    return false;
+  --I;
 
-    // Skip over debug instructions.
-    if (Instruction->isDebugInstr())
-      continue;
-
+  while (I->isTerminator() || I->isDebugInstr()) {
+    // Skip debug instructions.
+    while (I->isDebugInstr()) {
+      if (I == MBB.begin())
+        return false;
+      --I;
+    }
     // Working from the bottom, when we see a non-terminator
     // instruction, we're done.
-    if (!isUnpredicatedTerminator(*Instruction))
+    if (!I->isTerminator())
       break;
 
-    // A terminator that isn't a branch can't easily be handled
-    // by this analysis.
-    if (!Instruction->isBranch())
+    ++NumTerminatorsSeen;
+
+    if (I->getOpcode() == EZH::GOTO) {
+      if (!I->getOperand(0).isMBB())
+        return true;
+
+      unsigned CC = I->getOperand(1).getImm();
+      if (CC != EZHCC::ICC_EU) {
+        // Conditional Branch
+        if (!Condition.empty())
+          return true; // Only support one conditional branch
+
+        FalseBlock = TrueBlock;
+        TrueBlock = I->getOperand(0).getMBB();
+        Condition.push_back(MachineOperand::CreateImm(CC));
+      } else {
+        // Unconditional Branch
+        if (NumTerminatorsSeen > 1) {
+          // We already saw a branch (which must be conditional, since we scan
+          // upwards and we don't support multiple unconditional branches). If
+          // we see an unconditional branch before a conditional one, it is
+          // invalid CFG.
+          return true;
+        }
+
+        TrueBlock = I->getOperand(0).getMBB();
+        Condition.clear();
+        FalseBlock = nullptr;
+      }
+    } else {
+      // Unrecognized terminator.
       return true;
-
-    // Handle unconditional branches.
-    if (Instruction->getOpcode() == EZH::BT) {
-      if (!AllowModify) {
-        TrueBlock = Instruction->getOperand(0).getMBB();
-        continue;
-      }
-
-      // If the block has any instructions after a branch, delete them.
-      MBB.erase(std::next(Instruction), MBB.end());
-
-      Condition.clear();
-      FalseBlock = nullptr;
-
-      // Delete the jump if it's equivalent to a fall-through.
-      if (MBB.isLayoutSuccessor(Instruction->getOperand(0).getMBB())) {
-        TrueBlock = nullptr;
-        Instruction->eraseFromParent();
-        Instruction = MBB.end();
-        continue;
-      }
-
-      // TrueBlock is used to indicate the unconditional destination.
-      TrueBlock = Instruction->getOperand(0).getMBB();
-      continue;
     }
 
-    // Handle conditional branches
-    unsigned Opcode = Instruction->getOpcode();
-    if (Opcode != EZH::BRCC)
-      return true; // Unknown opcode.
-
-    // Multiple conditional branches are not handled here so only proceed if
-    // there are no conditions enqueued.
-    if (Condition.empty()) {
-      LPCC::CondCode BranchCond =
-          static_cast<LPCC::CondCode>(Instruction->getOperand(1).getImm());
-
-      // TrueBlock is the target of the previously seen unconditional branch.
-      FalseBlock = TrueBlock;
-      TrueBlock = Instruction->getOperand(0).getMBB();
-      Condition.push_back(MachineOperand::CreateImm(BranchCond));
-      continue;
+    // Cleanup code - only for unconditional branches that are the last
+    // instruction.
+    if (I->getOpcode() == EZH::GOTO &&
+        I->getOperand(1).getImm() == EZHCC::ICC_EU) {
+      if (NumTerminatorsSeen > 1) {
+        if (AllowModify) {
+          MachineBasicBlock::iterator DI = std::next(I);
+          while (DI != MBB.end()) {
+            MachineInstr &InstToDelete = *DI;
+            ++DI;
+            InstToDelete.eraseFromParent();
+          }
+          NumTerminatorsSeen = 1;
+          TrueBlock = I->getOperand(0).getMBB();
+          Condition.clear();
+          FalseBlock = nullptr;
+        } else {
+          return true;
+        }
+      }
     }
 
-    // Multiple conditional branches are not handled.
-    return true;
+    if (I == MBB.begin())
+      return false;
+    --I;
   }
 
-  // Return false indicating branch successfully analyzed.
-  return false;
-}
-
-// reverseBranchCondition - Reverses the branch condition of the specified
-// condition list, returning false on success and true if it cannot be
-// reversed.
-bool EZHInstrInfo::reverseBranchCondition(
-    SmallVectorImpl<llvm::MachineOperand> &Condition) const {
-  assert((Condition.size() == 1) &&
-         "EZH branch conditions should have one component.");
-
-  LPCC::CondCode BranchCond =
-      static_cast<LPCC::CondCode>(Condition[0].getImm());
-  Condition[0].setImm(getOppositeCondition(BranchCond));
   return false;
 }
 
@@ -641,159 +221,185 @@ unsigned EZHInstrInfo::insertBranch(MachineBasicBlock &MBB,
                                     MachineBasicBlock *FalseBlock,
                                     ArrayRef<MachineOperand> Condition,
                                     const DebugLoc &DL, int *BytesAdded) const {
-  // Shouldn't be a fall through.
-  assert(TrueBlock && "insertBranch must not be told to insert a fallthrough");
-  assert(!BytesAdded && "code size not handled");
+  if (BytesAdded)
+    *BytesAdded = 0;
 
   // If condition is empty then an unconditional branch is being inserted.
   if (Condition.empty()) {
-    assert(!FalseBlock && "Unconditional branch with multiple successors!");
-    BuildMI(&MBB, DL, get(EZH::BT)).addMBB(TrueBlock);
+    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(TrueBlock).addImm(EZHCC::ICC_EU);
+    if (BytesAdded)
+      *BytesAdded += 4;
     return 1;
   }
 
   // Else a conditional branch is inserted.
-  assert((Condition.size() == 1) &&
-         "EZH branch conditions should have one component.");
-  unsigned ConditionalCode = Condition[0].getImm();
-  BuildMI(&MBB, DL, get(EZH::BRCC)).addMBB(TrueBlock).addImm(ConditionalCode);
+  unsigned CC = Condition[0].getImm();
+  BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(TrueBlock).addImm(CC);
+  if (BytesAdded)
+    *BytesAdded += 4;
 
   // If no false block, then false behavior is fall through and no branch needs
   // to be inserted.
-  if (!FalseBlock)
-    return 1;
+  if (FalseBlock) {
+    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(FalseBlock).addImm(EZHCC::ICC_EU);
+    if (BytesAdded)
+      *BytesAdded += 4;
+    return 2;
+  }
 
-  BuildMI(&MBB, DL, get(EZH::BT)).addMBB(FalseBlock);
-  return 2;
+  return 1;
 }
 
 unsigned EZHInstrInfo::removeBranch(MachineBasicBlock &MBB,
                                     int *BytesRemoved) const {
-  assert(!BytesRemoved && "code size not handled");
+  if (BytesRemoved)
+    *BytesRemoved = 0;
 
-  MachineBasicBlock::iterator Instruction = MBB.end();
-  unsigned Count = 0;
+  MachineBasicBlock::iterator I = MBB.getLastNonDebugInstr();
+  if (I == MBB.end())
+    return 0;
 
-  while (Instruction != MBB.begin()) {
-    --Instruction;
-    if (Instruction->isDebugInstr())
-      continue;
-    if (Instruction->getOpcode() != EZH::BT &&
-        Instruction->getOpcode() != EZH::BRCC) {
+  if (!I->isBranch())
+    return 0;
+
+  // Remove the last branch (unconditional or conditional).
+  I->eraseFromParent();
+  if (BytesRemoved)
+    *BytesRemoved += 4;
+  unsigned Count = 1;
+
+  I = MBB.getLastNonDebugInstr();
+  if (I == MBB.end()) {
+    return Count;
+  }
+  if (!I->isBranch()) {
+    return Count;
+  }
+
+  // Remove the joint conditional branch.
+  I->eraseFromParent();
+  if (BytesRemoved)
+    *BytesRemoved += 4;
+  return Count + 1;
+}
+
+// reverseBranchCondition - Reverses the branch condition of the specified
+// condition list, returning false on success and true if it cannot be
+// reversed.
+bool EZHInstrInfo::reverseBranchCondition(
+    SmallVectorImpl<MachineOperand> &Cond) const {
+  assert(Cond.size() == 1 && "Invalid branch condition!");
+  unsigned CC = Cond[0].getImm();
+  EZHCC::CondCode RevCC =
+      EZHCC::getReversedCondCode(static_cast<EZHCC::CondCode>(CC));
+  if (RevCC == EZHCC::UNKNOWN)
+    return true;
+  Cond[0].setImm(RevCC);
+  return false;
+}
+
+bool EZHInstrInfo::isPredicated(const MachineInstr &MI) const {
+  int PIdx = -1;
+  const MCInstrDesc &MCID = MI.getDesc();
+  for (unsigned i = 0, e = MCID.getNumOperands(); i != e; ++i) {
+    if (MCID.operands()[i].Flags & (1 << MCOI::Predicate)) {
+      PIdx = i;
       break;
     }
-
-    // Remove the branch.
-    Instruction->eraseFromParent();
-    Instruction = MBB.end();
-    ++Count;
+  }
+  if (PIdx >= 0) {
+    if (static_cast<unsigned>(PIdx) < MI.getNumOperands())
+      return MI.getOperand(PIdx).getImm() != EZHCC::ICC_EU;
+    return false; // Malformed instruction, assume not predicated to avoid crash
   }
 
-  return Count;
+  return (MCID.TSFlags & EZHII::IsPredicated) != 0;
 }
 
-Register EZHInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
-                                           int &FrameIndex) const {
-  if (MI.getOpcode() == EZH::LDW_RI)
-    if (MI.getOperand(1).isFI() && MI.getOperand(2).isImm() &&
-        MI.getOperand(2).getImm() == 0) {
-      FrameIndex = MI.getOperand(1).getIndex();
-      return MI.getOperand(0).getReg();
-    }
-  return 0;
+bool EZHInstrInfo::isPredicable(const MachineInstr &MI) const {
+  return (MI.getDesc().TSFlags & EZHII::IsPredicable) != 0;
 }
 
-Register EZHInstrInfo::isLoadFromStackSlotPostFE(const MachineInstr &MI,
-                                                 int &FrameIndex) const {
-  if (MI.getOpcode() == EZH::LDW_RI) {
-    unsigned Reg;
-    if ((Reg = isLoadFromStackSlot(MI, FrameIndex)))
-      return Reg;
-    // Check for post-frame index elimination operations
-    SmallVector<const MachineMemOperand *, 1> Accesses;
-    if (hasLoadFromStackSlot(MI, Accesses)) {
-      FrameIndex =
-          cast<FixedStackPseudoSourceValue>(Accesses.front()->getPseudoValue())
-              ->getFrameIndex();
-      return 1;
+bool EZHInstrInfo::canPredicatePredicatedInstr(const MachineInstr &MI) const {
+  return false;
+}
+
+bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
+                                        ArrayRef<MachineOperand> Pred) const {
+  assert(!Pred.empty() && "Empty predicate!");
+  EZHCC::CondCode CC = static_cast<EZHCC::CondCode>(Pred[0].getImm());
+
+  const MCInstrDesc &MCID = MI.getDesc();
+  int PIdx = -1;
+  for (unsigned i = 0, e = MCID.getNumOperands(); i != e; ++i) {
+    if (MCID.operands()[i].Flags & (1 << MCOI::Predicate)) {
+      PIdx = i;
+      break;
     }
   }
-  return 0;
-}
 
-Register EZHInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
-                                          int &FrameIndex) const {
-  if (MI.getOpcode() == EZH::SW_RI)
-    if (MI.getOperand(0).isFI() && MI.getOperand(1).isImm() &&
-        MI.getOperand(1).getImm() == 0) {
-      FrameIndex = MI.getOperand(0).getIndex();
-      return MI.getOperand(2).getReg();
+  if (PIdx >= 0) {
+    if (static_cast<unsigned>(PIdx) < MI.getNumOperands()) {
+      MI.getOperand(PIdx).setImm(CC);
+
+      // Add implicit use of the destination register to preserve its value
+      // if the condition is false!
+      if (MI.getNumOperands() > 0 && MI.getOperand(0).isReg() &&
+          MI.getOperand(0).isDef()) {
+        Register RdReg = MI.getOperand(0).getReg();
+        MI.addOperand(
+            MachineOperand::CreateReg(RdReg, /*isDef=*/false, /*isImp=*/true));
+      }
+      return true;
     }
-  return 0;
-}
-
-bool EZHInstrInfo::getMemOperandWithOffsetWidth(
-    const MachineInstr &LdSt, const MachineOperand *&BaseOp, int64_t &Offset,
-    LocationSize &Width, const TargetRegisterInfo * /*TRI*/) const {
-  // Handle only loads/stores with base register followed by immediate offset
-  // and with add as ALU op.
-  if (LdSt.getNumOperands() != 4)
-    return false;
-  if (!LdSt.getOperand(1).isReg() || !LdSt.getOperand(2).isImm() ||
-      !(LdSt.getOperand(3).isImm() && LdSt.getOperand(3).getImm() == LPAC::ADD))
-    return false;
-
-  switch (LdSt.getOpcode()) {
-  default:
-    return false;
-  case EZH::LDW_RI:
-  case EZH::LDW_RR:
-  case EZH::SW_RR:
-  case EZH::SW_RI:
-    Width = LocationSize::precise(4);
-    break;
-  case EZH::LDHs_RI:
-  case EZH::LDHz_RI:
-  case EZH::STH_RI:
-    Width = LocationSize::precise(2);
-    break;
-  case EZH::LDBs_RI:
-  case EZH::LDBz_RI:
-  case EZH::STB_RI:
-    Width = LocationSize::precise(1);
-    break;
+    return false; // Malformed instruction, cannot predicate
   }
 
-  BaseOp = &LdSt.getOperand(1);
-  Offset = LdSt.getOperand(2).getImm();
+  return false;
+}
 
-  if (!BaseOp->isReg())
-    return false;
-
+bool EZHInstrInfo::isProfitableToIfCvt(MachineBasicBlock &MBB,
+                                       unsigned NumCycles,
+                                       unsigned ExtraPredCycles,
+                                       BranchProbability Probability) const {
   return true;
 }
 
-bool EZHInstrInfo::getMemOperandsWithOffsetWidth(
-    const MachineInstr &LdSt, SmallVectorImpl<const MachineOperand *> &BaseOps,
-    int64_t &Offset, bool &OffsetIsScalable, LocationSize &Width,
-    const TargetRegisterInfo *TRI) const {
-  switch (LdSt.getOpcode()) {
-  default:
-    return false;
-  case EZH::LDW_RI:
-  case EZH::LDW_RR:
-  case EZH::SW_RR:
-  case EZH::SW_RI:
-  case EZH::LDHs_RI:
-  case EZH::LDHz_RI:
-  case EZH::STH_RI:
-  case EZH::LDBs_RI:
-  case EZH::LDBz_RI:
-    const MachineOperand *BaseOp;
-    OffsetIsScalable = false;
-    if (!getMemOperandWithOffsetWidth(LdSt, BaseOp, Offset, Width, TRI))
-      return false;
-    BaseOps.push_back(BaseOp);
-    return true;
+bool EZHInstrInfo::isProfitableToIfCvt(
+    MachineBasicBlock &TMBB, unsigned NumTCycles, unsigned ExtraTCycles,
+    MachineBasicBlock &FMBB, unsigned NumFCycles, unsigned ExtraFCycles,
+    BranchProbability Probability) const {
+  return true;
+}
+
+unsigned EZHInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+  if (MI.isInlineAsm()) {
+    const MachineFunction *MF = MI.getParent()->getParent();
+    const MCAsmInfo &MAI = MF->getTarget().getMCAsmInfo();
+    unsigned Size = getInlineAsmLength(MI.getOperand(0).getSymbolName(), MAI);
+    return alignTo(Size, 4);
   }
+  if (MI.getOpcode() == EZH::CONSTPOOL_ENTRY ||
+      MI.getOpcode() == EZH::JUMPTABLE_ADDRS) {
+    return MI.getOperand(2).getImm();
+  }
+  unsigned Size = MI.getDesc().getSize();
+  if (Size > 0)
+    return Size;
+  if (MI.isMetaInstruction())
+    return 0;
+  return 4;
+}
+
+int EZHInstrInfo::getJumpTableIndex(const MachineInstr &MI) const {
+  if (MI.getOpcode() == EZH::BR_JTr) {
+    if (MI.getNumOperands() >= 2) {
+      const MachineOperand &MO = MI.getOperand(1);
+      if (MO.isJTI())
+        return MO.getIndex();
+      if (MO.isImm())
+        return MO.getImm();
+    }
+  }
+  return -1;
 }

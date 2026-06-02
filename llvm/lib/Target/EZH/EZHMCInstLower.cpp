@@ -9,22 +9,27 @@
 // This file contains code to lower EZH MachineInstrs to their corresponding
 // MCInst records.
 //
+// Description:
+//   Implements MachineInstr to MCInst lowering, translating basic block
+//   labels, symbol references, and immediate operands.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiMCInstLower.cpp).
+//
+// Changes:
+//   Adapted symbol translation to handle EZH symbol fixups and PC-relative
+//   constant pool symbols.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZHMCInstLower.h"
-
-#include "MCTargetDesc/EZHBaseInfo.h"
-#include "MCTargetDesc/EZHMCAsmInfo.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstr.h"
-#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -44,46 +49,25 @@ EZHMCInstLower::GetExternalSymbolSymbol(const MachineOperand &MO) const {
 }
 
 MCSymbol *EZHMCInstLower::GetJumpTableSymbol(const MachineOperand &MO) const {
-  SmallString<256> Name;
+  const DataLayout &DL = Printer.getDataLayout();
+  SmallString<60> Name;
   raw_svector_ostream(Name)
-      << Printer.MAI.getInternalSymbolPrefix() << "JTI"
-      << Printer.getFunctionNumber() << '_' << MO.getIndex();
-  // Create a symbol for the name.
-  return Ctx.getOrCreateSymbol(Name.str());
+      << DL.getInternalSymbolPrefix() << "JTI" << Printer.getFunctionNumber()
+      << '_' << MO.getIndex();
+  return Ctx.getOrCreateSymbol(Name);
 }
 
 MCSymbol *
 EZHMCInstLower::GetConstantPoolIndexSymbol(const MachineOperand &MO) const {
-  SmallString<256> Name;
-  raw_svector_ostream(Name)
-      << Printer.MAI.getInternalSymbolPrefix() << "CPI"
-      << Printer.getFunctionNumber() << '_' << MO.getIndex();
-  // Create a symbol for the name.
-  return Ctx.getOrCreateSymbol(Name.str());
+  return Printer.GetCPISymbol(MO.getIndex());
 }
 
 MCOperand EZHMCInstLower::LowerSymbolOperand(const MachineOperand &MO,
                                              MCSymbol *Sym) const {
-  EZH::Specifier Kind;
-  switch (MO.getTargetFlags()) {
-  case EZHII::MO_NO_FLAG:
-    Kind = EZH::S_None;
-    break;
-  case EZHII::MO_ABS_HI:
-    Kind = EZH::S_ABS_HI;
-    break;
-  case EZHII::MO_ABS_LO:
-    Kind = EZH::S_ABS_LO;
-    break;
-  default:
-    llvm_unreachable("Unknown target flag on GV operand");
-  }
-
   const MCExpr *Expr = MCSymbolRefExpr::create(Sym, Ctx);
   if (!MO.isJTI() && MO.getOffset())
     Expr = MCBinaryExpr::createAdd(
         Expr, MCConstantExpr::create(MO.getOffset(), Ctx), Ctx);
-  Expr = MCSpecifierExpr::create(Expr, Kind, Ctx);
   return MCOperand::createExpr(Expr);
 }
 
@@ -106,8 +90,6 @@ void EZHMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       MCOp = MCOperand::createExpr(
           MCSymbolRefExpr::create(MO.getMBB()->getSymbol(), Ctx));
       break;
-    case MachineOperand::MO_RegisterMask:
-      continue;
     case MachineOperand::MO_GlobalAddress:
       MCOp = LowerSymbolOperand(MO, GetGlobalAddressSymbol(MO));
       break;
@@ -123,8 +105,9 @@ void EZHMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     case MachineOperand::MO_ConstantPoolIndex:
       MCOp = LowerSymbolOperand(MO, GetConstantPoolIndexSymbol(MO));
       break;
+    case MachineOperand::MO_RegisterMask:
+      continue;
     default:
-      MI->print(errs());
       llvm_unreachable("unknown operand type");
     }
 

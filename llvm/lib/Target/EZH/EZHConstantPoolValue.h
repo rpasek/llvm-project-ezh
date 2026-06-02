@@ -1,4 +1,4 @@
-//===- EZHConstantPoolValue.h - EZH constantpool value ----------*- C++ -*-===//
+//===-- EZHConstantPoolValue.h - EZH Constant Pool Value ------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,27 +6,41 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements the EZH specific constantpool value class.
+// This file implements the EZH specific constant pool value classes.
+//
+// Description:
+//   Defines EZH-specific constant pool value classes, representing
+//   custom PC-relative displacement entries (GlobalValues, ExternalSymbols,
+//   BlockAddresses, MachineBasicBlocks) for the constant island pass.
+//
+// Copied From:
+//   ARM target backend (llvm/lib/Target/ARM/ARMConstantPoolValue.h).
+//
+// Changes:
+//   Adapted references to EZH (EZHCP namespaces, EZHConstantPoolValue classes);
+//   simplified to only support active EZH constant pool kinds.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZHCONSTANTPOOLVALUE_H
 #define LLVM_LIB_TARGET_EZH_EZHCONSTANTPOOLVALUE_H
 
-#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/iterator_range.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <string>
 #include <vector>
 
 namespace llvm {
 
 class BlockAddress;
-class Constant;
 class GlobalValue;
-class GlobalVariable;
 class LLVMContext;
 class MachineBasicBlock;
 class raw_ostream;
@@ -34,46 +48,16 @@ class Type;
 
 namespace EZHCP {
 
-enum EZHCPKind {
-  CPValue,
-  CPExtSymbol,
-  CPBlockAddress,
-  CPLSDA,
-  CPMachineBasicBlock,
-  CPPromotedGlobal
-};
-
-enum EZHCPModifier {
-  no_modifier, /// None
-  TLSGD,       /// Thread Local Storage (General Dynamic Mode)
-  GOT_PREL,    /// Global Offset Table, PC Relative
-  GOTTPOFF,    /// Global Offset Table, Thread Pointer Offset
-  TPOFF,       /// Thread Pointer Offset
-  SECREL,      /// Section Relative (Windows TLS)
-  SBREL,       /// Static Base Relative (RWPI)
-};
-
+enum EZHCPKind { CPConstant, CPExtSymbol, CPBlockAddress, CPMachineBasicBlock };
 } // end namespace EZHCP
 
-/// EZHConstantPoolValue - EZH specific constantpool value. This is used to
-/// represent PC-relative displacement between the address of the load
-/// instruction and the constant being loaded, i.e. (&GV-(LPIC+8)).
+/// EZHConstantPoolValue - EZH specific constant pool value base class.
 class EZHConstantPoolValue : public MachineConstantPoolValue {
-  unsigned LabelId;       // Label id of the load.
-  EZHCP::EZHCPKind Kind;  // Kind of constant.
-  unsigned char PCAdjust; // Extra adjustment if constantpool is pc-relative.
-                          // 8 for EZH, 4 for Thumb.
-  EZHCP::EZHCPModifier Modifier; // GV modifier i.e. (&GV(modifier)-(LPIC+8))
-  bool AddCurrentAddress;
+  unsigned LabelId;
+  EZHCP::EZHCPKind Kind;
 
 protected:
-  EZHConstantPoolValue(Type *Ty, unsigned id, EZHCP::EZHCPKind Kind,
-                       unsigned char PCAdj, EZHCP::EZHCPModifier Modifier,
-                       bool AddCurrentAddress);
-
-  EZHConstantPoolValue(LLVMContext &C, unsigned id, EZHCP::EZHCPKind Kind,
-                       unsigned char PCAdj, EZHCP::EZHCPModifier Modifier,
-                       bool AddCurrentAddress);
+  EZHConstantPoolValue(Type *Ty, unsigned id, EZHCP::EZHCPKind Kind);
 
   template <typename Derived>
   int getExistingMachineCPValueImpl(MachineConstantPool *CP, Align Alignment) {
@@ -93,28 +77,22 @@ protected:
   }
 
 public:
-  ~EZHConstantPoolValue() override;
-
-  EZHCP::EZHCPModifier getModifier() const { return Modifier; }
-  StringRef getModifierText() const;
-  bool hasModifier() const { return Modifier != EZHCP::no_modifier; }
-
-  bool mustAddCurrentAddress() const { return AddCurrentAddress; }
+  ~EZHConstantPoolValue() override = default;
 
   unsigned getLabelId() const { return LabelId; }
-  unsigned char getPCAdjustment() const { return PCAdjust; }
+  void setLabelId(unsigned ID) { LabelId = ID; }
+  EZHCP::EZHCPKind getKind() const { return Kind; }
 
-  bool isGlobalValue() const { return Kind == EZHCP::CPValue; }
+  bool isConstant() const { return Kind == EZHCP::CPConstant; }
   bool isExtSymbol() const { return Kind == EZHCP::CPExtSymbol; }
   bool isBlockAddress() const { return Kind == EZHCP::CPBlockAddress; }
-  bool isLSDA() const { return Kind == EZHCP::CPLSDA; }
   bool isMachineBasicBlock() const {
     return Kind == EZHCP::CPMachineBasicBlock;
   }
-  bool isPromotedGlobal() const { return Kind == EZHCP::CPPromotedGlobal; }
+  bool isGlobalValue() const { return isConstant(); }
 
   int getExistingMachineCPValue(MachineConstantPool *CP,
-                                Align Alignment) override;
+                                Align Alignment) override = 0;
 
   void addSelectionDAGCSEId(FoldingSetNodeID &ID) override;
 
@@ -123,61 +101,35 @@ public:
   virtual bool hasSameValue(EZHConstantPoolValue *ACPV);
 
   bool equals(const EZHConstantPoolValue *A) const {
-    return this->LabelId == A->LabelId && this->PCAdjust == A->PCAdjust &&
-           this->Modifier == A->Modifier;
+    return Kind == A->Kind && LabelId == A->LabelId &&
+           MachineConstantPoolValue::getType() == A->getType();
   }
 
-  void print(raw_ostream &O) const override;
-  void print(raw_ostream *O) const {
-    if (O)
-      print(*O);
-  }
-  void dump() const;
+  void print(raw_ostream &O) const override = 0;
+
+  static bool classof(const MachineConstantPoolValue *V) { return true; }
 };
 
-inline raw_ostream &operator<<(raw_ostream &O, const EZHConstantPoolValue &V) {
-  V.print(O);
-  return O;
-}
-
 /// EZHConstantPoolConstant - EZH-specific constant pool values for Constants,
-/// Functions, and BlockAddresses.
+/// GlobalValues, and BlockAddresses.
 class EZHConstantPoolConstant : public EZHConstantPoolValue {
-  const Constant *CVal; // Constant being loaded.
-  SmallPtrSet<const GlobalVariable *, 1> GVars;
+  const Constant *CVal;
+  int64_t Offset;
 
-  EZHConstantPoolConstant(const Constant *C, unsigned ID, EZHCP::EZHCPKind Kind,
-                          unsigned char PCAdj, EZHCP::EZHCPModifier Modifier,
-                          bool AddCurrentAddress);
-  EZHConstantPoolConstant(Type *Ty, const Constant *C, unsigned ID,
-                          EZHCP::EZHCPKind Kind, unsigned char PCAdj,
-                          EZHCP::EZHCPModifier Modifier,
-                          bool AddCurrentAddress);
-  EZHConstantPoolConstant(const GlobalVariable *GV, const Constant *Init);
+  EZHConstantPoolConstant(Type *Ty, const Constant *C, int64_t Offset,
+                          unsigned ID, EZHCP::EZHCPKind Kind);
 
 public:
-  static EZHConstantPoolConstant *Create(const Constant *C, unsigned ID);
-  static EZHConstantPoolConstant *Create(const GlobalValue *GV,
-                                         EZHCP::EZHCPModifier Modifier);
-  static EZHConstantPoolConstant *Create(const GlobalVariable *GV,
-                                         const Constant *Initializer);
-  static EZHConstantPoolConstant *Create(const Constant *C, unsigned ID,
-                                         EZHCP::EZHCPKind Kind,
-                                         unsigned char PCAdj);
-  static EZHConstantPoolConstant *Create(const Constant *C, unsigned ID,
-                                         EZHCP::EZHCPKind Kind,
-                                         unsigned char PCAdj,
-                                         EZHCP::EZHCPModifier Modifier,
-                                         bool AddCurrentAddress);
+  static EZHConstantPoolConstant *Create(const Constant *C, unsigned ID = 0);
+  static EZHConstantPoolConstant *Create(const GlobalValue *GV, int64_t Offset,
+                                         Type *Ty, unsigned ID = 0);
+  static EZHConstantPoolConstant *Create(const BlockAddress *BA,
+                                         unsigned ID = 0);
 
-  const GlobalValue *getGV() const;
+  const GlobalValue *getGlobalValue() const;
   const BlockAddress *getBlockAddress() const;
-
-  using promoted_iterator = SmallPtrSet<const GlobalVariable *, 1>::iterator;
-
-  iterator_range<promoted_iterator> promotedGlobals() { return GVars; }
-
-  const Constant *getPromotedGlobalInit() const { return CVal; }
+  const Constant *getConstant() const { return CVal; }
+  int64_t getOffset() const { return Offset; }
 
   int getExistingMachineCPValue(MachineConstantPool *CP,
                                 Align Alignment) override;
@@ -191,27 +143,24 @@ public:
   void print(raw_ostream &O) const override;
 
   static bool classof(const EZHConstantPoolValue *APV) {
-    return APV->isGlobalValue() || APV->isBlockAddress() || APV->isLSDA() ||
-           APV->isPromotedGlobal();
+    return APV->isConstant() || APV->isBlockAddress();
   }
 
   bool equals(const EZHConstantPoolConstant *A) const {
-    return CVal == A->CVal && EZHConstantPoolValue::equals(A);
+    return CVal == A->CVal && Offset == A->Offset &&
+           EZHConstantPoolValue::equals(A);
   }
 };
 
-/// EZHConstantPoolSymbol - EZH-specific constantpool values for external
+/// EZHConstantPoolSymbol - EZH-specific constant pool values for external
 /// symbols.
 class EZHConstantPoolSymbol : public EZHConstantPoolValue {
   const std::string S; // ExtSymbol being loaded.
 
-  EZHConstantPoolSymbol(LLVMContext &C, StringRef s, unsigned id,
-                        unsigned char PCAdj, EZHCP::EZHCPModifier Modifier,
-                        bool AddCurrentAddress);
+  EZHConstantPoolSymbol(Type *Ty, StringRef s, unsigned id);
 
 public:
-  static EZHConstantPoolSymbol *Create(LLVMContext &C, StringRef s, unsigned ID,
-                                       unsigned char PCAdj);
+  static EZHConstantPoolSymbol *Create(Type *Ty, StringRef s, unsigned ID = 0);
 
   StringRef getSymbol() const { return S; }
 
@@ -235,19 +184,16 @@ public:
   }
 };
 
-/// EZHConstantPoolMBB - EZH-specific constantpool value of a machine basic
+/// EZHConstantPoolMBB - EZH-specific constant pool value of a machine basic
 /// block.
 class EZHConstantPoolMBB : public EZHConstantPoolValue {
   const MachineBasicBlock *MBB; // Machine basic block.
 
-  EZHConstantPoolMBB(LLVMContext &C, const MachineBasicBlock *mbb, unsigned id,
-                     unsigned char PCAdj, EZHCP::EZHCPModifier Modifier,
-                     bool AddCurrentAddress);
+  EZHConstantPoolMBB(Type *Ty, const MachineBasicBlock *mbb, unsigned id);
 
 public:
-  static EZHConstantPoolMBB *Create(LLVMContext &C,
-                                    const MachineBasicBlock *mbb, unsigned ID,
-                                    unsigned char PCAdj);
+  static EZHConstantPoolMBB *Create(Type *Ty, const MachineBasicBlock *mbb,
+                                    unsigned ID = 0);
 
   const MachineBasicBlock *getMBB() const { return MBB; }
 

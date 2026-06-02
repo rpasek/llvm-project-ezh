@@ -5,59 +5,61 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//  Declarations that describe the EZH register file
+//
+// Description:
+//   TableGen definitions for EZH physical registers (r0-r7, gp0-gp7, sp, pc,
+//   ra) and general purpose register classes.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiRegisterInfo.td).
+//
+// Changes:
+//   Replaced Lanai register definitions with exact EZH register ordering
+//   matching assembler macros in fsl_smartdma_prv.h; defined core system
+//   registers and GPR classes.
+//
 //===----------------------------------------------------------------------===//
 
-// Registers are identified with 5-bit ID numbers.
-class EZHReg<bits<5> num, string n, list<Register> subregs = [],
-               list<string> altNames = []> : Register<n, altNames> {
-  field bits<5> Num;
+class EZHReg<bits<4> num, string n> : Register<n> {
+  field bits<4> Num;
   let Num = num;
   let Namespace = "EZH";
-  let SubRegs = subregs;
+  let HWEncoding{3-0} = num;
 }
 
-let Namespace = "EZH" in {
-  def sub_32 : SubRegIndex<32>;
-}
-
-// Integer registers
-foreach i = 0-31 in {
+// General Purpose Registers
+foreach i = 0-7 in {
   def R#i : EZHReg<i, "r"#i>, DwarfRegNum<[i]>;
 }
 
-// Register aliases
-let SubRegIndices = [sub_32] in {
-  def PC  : EZHReg< 2,  "pc",  [R2]>,  DwarfRegAlias<R2>;
-  def SP  : EZHReg< 4,  "sp",  [R4]>,  DwarfRegAlias<R4>;
-  def FP  : EZHReg< 5,  "fp",  [R5]>,  DwarfRegAlias<R5>;
-  def RV  : EZHReg< 8,  "rv",  [R8]>,  DwarfRegAlias<R8>;
-  def RR1 : EZHReg<10, "rr1", [R10]>, DwarfRegAlias<R10>;
-  def RR2 : EZHReg<11, "rr2", [R11]>, DwarfRegAlias<R11>;
-  def RCA : EZHReg<15, "rca", [R15]>, DwarfRegAlias<R15>;
-}
+// Special Purpose Registers
+def GPO : EZHReg<8,  "gpo">, DwarfRegNum<[8]>;
+def GPD : EZHReg<9,  "gpd">, DwarfRegNum<[9]>;
+def CFS : EZHReg<10, "cfs">, DwarfRegNum<[10]>;
+def CFM : EZHReg<11, "cfm">, DwarfRegNum<[11]>;
+def SP  : EZHReg<12, "sp">, DwarfRegNum<[12]>;
+def PC  : EZHReg<13, "pc">, DwarfRegNum<[13]>;
+def GPI : EZHReg<14, "gpi">, DwarfRegNum<[14]>;
+def RA  : EZHReg<15, "ra">, DwarfRegNum<[15]>;
 
-// Define a status register to capture the dependencies between the set flag
-// and setcc instructions
-def SR : EZHReg< 0, "sw">;
+def sub_even : SubRegIndex<32>;
+def sub_odd  : SubRegIndex<32, 32>;
 
-// Register classes.
-def GPR : RegisterClass<"EZH", [i32], 32,
-    (add R3, R9, R12, R13, R14, R16, R17,
-     (sequence "R%i", 20, 31),
-     R6, R7, R18, R19, // registers for passing arguments
-     R15, RCA, // register for constant addresses
-     R10, RR1, R11, RR2, // programmer controlled registers
-     R8,  RV,  // return value
-     R5,  FP,  // frame pointer
-     R4,  SP,  // stack pointer
-     R2,  PC,  // program counter
-     R1,       // all 1s (0xffffffff)
-     R0        // constant 0
-    )>;
+def R0_R1 : RegisterTuples<[sub_even, sub_odd], [(add R0), (add R1)]>;
+def R2_R3 : RegisterTuples<[sub_even, sub_odd], [(add R2), (add R3)]>;
+def R4_R5 : RegisterTuples<[sub_even, sub_odd], [(add R4), (add R5)]>;
+def R6_R7 : RegisterTuples<[sub_even, sub_odd], [(add R6), (add R7)]>;
 
-// Condition code register class
-def CCR : RegisterClass<"EZH", [i32], 32, (add SR)> {
-  let CopyCost = -1; // Don't allow copying of status registers
-  let isAllocatable = 0;
-}
+// Register classes
+def GPR : RegisterClass<"EZH", [i32], 32, (add
+  R0, R1, R2, R3, R4, R5, R6, R7, RA, SP, PC, GPO, GPD, CFS, CFM, GPI
+)>;
+
+def GPRPair : RegisterClass<"EZH", [i64], 64, (add R0_R1, R2_R3, R4_R5, R6_R7)>;
+
+def GPRNoFPBP : RegisterClass<"EZH", [i32], 32, (add R0, R1, R2, R3, R4, R5)>;
+
+def GPR3Bit : RegisterClass<"EZH", [i32], 32, (add
+  R0, R1, R2, R3, R4, R5, R6, R7
+)>;
+

@@ -5,6 +5,18 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// Description:
+//   Declares global accessor getTheEZHTarget(), returning the singleton Target
+//   reference for EZH.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/TargetInfo/LanaiTargetInfo.h).
+//
+// Changes:
+//   Renamed getTheLanaiTarget to getTheEZHTarget.
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_TARGETINFO_EZHTARGETINFO_H
 #define LLVM_LIB_TARGET_EZH_TARGETINFO_EZHTARGETINFO_H

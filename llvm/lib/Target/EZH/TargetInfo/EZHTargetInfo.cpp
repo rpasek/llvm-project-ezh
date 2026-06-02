@@ -5,6 +5,19 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// Description:
+//   Implements TargetRegistry::RegisterTarget entry point for registering the
+//   EZH target architecture (ezh).
+//
+// Copied From:
+//   Lanai target backend
+//   (llvm/lib/Target/Lanai/TargetInfo/LanaiTargetInfo.cpp).
+//
+// Changes:
+//   Registered the ezh target name and description (NXP EZH / SmartDMA Core).
+//
+//===----------------------------------------------------------------------===//
 
 #include "TargetInfo/EZHTargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"

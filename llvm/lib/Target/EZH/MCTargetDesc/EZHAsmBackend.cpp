@@ -5,34 +5,102 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// Description:
+//   Implements EZHAsmBackend, handling object file layout, relaxation of
+//   instructions, and applying relocation fixups to binary code.
+//
+// Copied From:
+//   Lanai target backend
+//   (llvm/lib/Target/Lanai/MCTargetDesc/LanaiAsmBackend.cpp).
+//
+// Changes:
+//   Implemented applyFixup to patch encoded instruction bytes with evaluated
+//   branch and load offsets for EZH machine code.
+//
+//===----------------------------------------------------------------------===//
 
 #include "EZHFixupKinds.h"
 #include "MCTargetDesc/EZHMCTargetDesc.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAssembler.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
 // Prepare value for the target space
-static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
+static unsigned adjustFixupValue(unsigned Kind, uint64_t Value, bool IsResolved,
+                                 MCContext &Ctx, SMLoc Loc) {
   switch (Kind) {
   case FK_Data_1:
   case FK_Data_2:
   case FK_Data_4:
   case FK_Data_8:
     return Value;
-  case EZH::FIXUP_EZH_21:
-  case EZH::FIXUP_EZH_21_F:
-  case EZH::FIXUP_EZH_25:
+  case EZH::FIXUP_EZH_8_PCREL: {
+    // PC evaluates to Loc + 8. The Value passed in is Target - Loc.
+    // We need (Target - (Loc + 8)) = Target - Loc - 8 = Value - 8.
+    // The hardware expects an 8-bit signed word offset (-128 to 127).
+    int64_t Offset = Value - 8;
+    if (IsResolved) {
+      assert((Offset & 3) == 0 && "Offset must be 4-byte aligned!");
+      int64_t WordOffset = Offset >> 2;
+      if (!isInt<8>(WordOffset)) {
+        Ctx.reportError(
+            Loc,
+            "EZH: PC-relative LDR offset out of 8-bit signed word range: " +
+                Twine(WordOffset));
+      }
+      return WordOffset & 0xFF;
+    }
+    return (Offset >> 2) & 0xFF;
+  }
+  case EZH::FIXUP_EZH_21: {
+    if (IsResolved) {
+      assert((Value & 3) == 0 && "Branch target must be 4-byte aligned!");
+      int64_t WordAddr = Value >> 2;
+      if (!isUInt<21>(WordAddr)) {
+        Ctx.reportError(Loc,
+                        "EZH: GOTO target address out of 21-bit word range: " +
+                            Twine(WordAddr));
+      }
+    }
+    return Value >> 2;
+  }
+  case EZH::FIXUP_EZH_30: {
+    if (IsResolved) {
+      assert((Value & 3) == 0 && "GOSUB target must be 4-byte aligned!");
+      int64_t WordAddr = Value >> 2;
+      if (!isUInt<30>(WordAddr)) {
+        Ctx.reportError(Loc,
+                        "EZH: GOSUB target address out of 30-bit word range: " +
+                            Twine(WordAddr));
+      }
+    }
+    return Value >> 2;
+  }
+  case EZH::FIXUP_EZH_11:
+    if (IsResolved && !isInt<11>(Value)) {
+      Ctx.reportError(Loc, "EZH: 11-bit immediate out of range: " +
+                               Twine((int64_t)Value));
+    }
+    return Value;
+  case EZH::FIXUP_EZH_12:
+    if (IsResolved && !isInt<12>(Value)) {
+      Ctx.reportError(Loc, "EZH: 12-bit immediate out of range: " +
+                               Twine((int64_t)Value));
+    }
+    return Value;
   case EZH::FIXUP_EZH_32:
-  case EZH::FIXUP_EZH_HI16:
-  case EZH::FIXUP_EZH_LO16:
     return Value;
   default:
     llvm_unreachable("Unknown fixup kind!");
@@ -45,7 +113,7 @@ class EZHAsmBackend : public MCAsmBackend {
 
 public:
   EZHAsmBackend(const Target &T, Triple::OSType OST)
-      : MCAsmBackend(llvm::endianness::big), OSType(OST) {}
+      : MCAsmBackend(llvm::endianness::little), OSType(OST) {}
 
   void applyFixup(const MCFragment &, const MCFixup &, const MCValue &Target,
                   uint8_t *Data, uint64_t Value, bool IsResolved) override;
@@ -53,10 +121,24 @@ public:
   std::unique_ptr<MCObjectTargetWriter>
   createObjectTargetWriter() const override;
 
+  std::optional<MCFixupKind> getFixupKind(StringRef Name) const override;
+
   MCFixupKindInfo getFixupKindInfo(MCFixupKind Kind) const override;
 
   bool writeNopData(raw_ostream &OS, uint64_t Count,
                     const MCSubtargetInfo *STI) const override;
+
+  bool shouldForceRelocation(const MCFixup &Fixup) const {
+    switch (static_cast<unsigned>(Fixup.getKind())) {
+    case EZH::FIXUP_EZH_21:
+    case EZH::FIXUP_EZH_30:
+      // GOTOs and GOSUBs are absolute word addresses.
+      // We must force the linker to process them to handle section offsets.
+      return true;
+    default:
+      return false;
+    }
+  }
 };
 
 bool EZHAsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
@@ -73,37 +155,29 @@ bool EZHAsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
 void EZHAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
                                const MCValue &Target, uint8_t *Data,
                                uint64_t Value, bool IsResolved) {
-  if (!IsResolved)
-    Asm->getWriter().recordRelocation(F, Fixup, Target, Value);
+  if (shouldForceRelocation(Fixup))
+    IsResolved = false;
+
+  maybeAddReloc(F, Fixup, Target, Value, IsResolved);
 
   MCFixupKind Kind = Fixup.getKind();
-  Value = adjustFixupValue(static_cast<unsigned>(Kind), Value);
+  if (mc::isRelocation(Kind))
+    return;
+  MCContext &Ctx = getContext();
+  Value = adjustFixupValue(static_cast<unsigned>(Kind), Value, IsResolved, Ctx,
+                           Fixup.getLoc());
   if (!Value)
     return; // This value doesn't change the encoding
 
-  // Where in the object and where the number of bytes that need
-  // fixing up
-  unsigned NumBytes = (getFixupKindInfo(Kind).TargetSize + 7) / 8;
-  unsigned FullSize = 4;
-
-  // Grab current value, if any, from bits.
-  uint64_t CurVal = 0;
-
-  // Load instruction and apply value
-  for (unsigned i = 0; i != NumBytes; ++i) {
-    unsigned Idx = (FullSize - 1 - i);
-    CurVal |= static_cast<uint64_t>(static_cast<uint8_t>(Data[Idx])) << (i * 8);
-  }
+  // Read 32-bit little-endian instruction
+  uint32_t CurVal = llvm::support::endian::read32le(Data);
 
   uint64_t Mask =
       (static_cast<uint64_t>(-1) >> (64 - getFixupKindInfo(Kind).TargetSize));
-  CurVal |= Value & Mask;
+  CurVal |= (Value & Mask) << getFixupKindInfo(Kind).TargetOffset;
 
-  // Write out the fixed up bytes back to the code/data bits.
-  for (unsigned i = 0; i != NumBytes; ++i) {
-    unsigned Idx = (FullSize - 1 - i);
-    Data[Idx] = static_cast<uint8_t>((CurVal >> (i * 8)) & 0xff);
-  }
+  // Write 32-bit little-endian instruction back
+  llvm::support::endian::write32le(Data, CurVal);
 }
 
 std::unique_ptr<MCObjectTargetWriter>
@@ -116,17 +190,12 @@ MCFixupKindInfo EZHAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       // This table *must* be in same the order of fixup_* kinds in
       // EZHFixupKinds.h.
       // Note: The number of bits indicated here are assumed to be contiguous.
-      //   This does not hold true for EZH_21 and EZH_21_F which are applied
-      //   to bits 0x7cffff and 0x7cfffc, respectively. Since the 'bits' counts
-      //   here are used only for cosmetic purposes, we set the size to 16 bits
-      //   for these 21-bit relocation as llvm/lib/MC/MCAsmStreamer.cpp checks
-      //   no bits are set in the fixup range.
       //
       // name          offset bits flags
-      {"FIXUP_EZH_NONE", 0, 32, 0},         {"FIXUP_EZH_21", 16, 16 /*21*/, 0},
-      {"FIXUP_EZH_21_F", 16, 16 /*21*/, 0}, {"FIXUP_EZH_25", 7, 25, 0},
-      {"FIXUP_EZH_32", 0, 32, 0},           {"FIXUP_EZH_HI16", 16, 16, 0},
-      {"FIXUP_EZH_LO16", 16, 16, 0}};
+      {"FIXUP_EZH_NONE", 0, 32, 0},   {"FIXUP_EZH_11", 20, 11, 0},
+      {"FIXUP_EZH_12", 20, 12, 0},    {"FIXUP_EZH_21", 11, 21, 0},
+      {"FIXUP_EZH_30", 5, 27, 0},     {"FIXUP_EZH_32", 0, 32, 0},
+      {"FIXUP_EZH_8_PCREL", 24, 8, 0}};
 
   if (Kind < FirstTargetFixupKind)
     return MCAsmBackend::getFixupKindInfo(Kind);
@@ -134,6 +203,19 @@ MCFixupKindInfo EZHAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
   assert(unsigned(Kind - FirstTargetFixupKind) < EZH::NumTargetFixupKinds &&
          "Invalid kind!");
   return Infos[Kind - FirstTargetFixupKind];
+}
+
+std::optional<MCFixupKind> EZHAsmBackend::getFixupKind(StringRef Name) const {
+  unsigned Type = llvm::StringSwitch<unsigned>(Name)
+#define ELF_RELOC(NAME, ID) .Case(#NAME, ID)
+#include "llvm/BinaryFormat/ELFRelocs/EZH.def"
+#undef ELF_RELOC
+                      .Case("BFD_RELOC_NONE", ELF::R_EZH_NONE)
+                      .Case("BFD_RELOC_32", ELF::R_EZH_32)
+                      .Default(-1u);
+  if (Type != -1u)
+    return static_cast<MCFixupKind>(FirstLiteralRelocationKind + Type);
+  return std::nullopt;
 }
 
 } // namespace
