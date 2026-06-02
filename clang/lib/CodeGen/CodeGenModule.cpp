@@ -165,6 +165,9 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
     return createWebAssemblyTargetCodeGenInfo(CGM, Kind);
   }
 
+  case llvm::Triple::ezh:
+    return createEZHTargetCodeGenInfo(CGM);
+
   case llvm::Triple::arm:
   case llvm::Triple::armeb:
   case llvm::Triple::thumb:

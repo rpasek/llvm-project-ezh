@@ -10,6 +10,7 @@
 #include "Arch/AArch64.h"
 #include "Arch/ARM.h"
 #include "Arch/CSKY.h"
+#include "Arch/EZH.h"
 #include "Arch/LoongArch.h"
 #include "Arch/M68k.h"
 #include "Arch/Mips.h"
@@ -645,6 +646,8 @@ const char *tools::getLDMOption(const llvm::Triple &T, const ArgList &Args) {
     return "elf64ve";
   case llvm::Triple::csky:
     return "cskyelf_linux";
+  case llvm::Triple::ezh:
+    return "elf32ezh";
   default:
     return nullptr;
   }
@@ -918,6 +921,9 @@ void tools::getTargetFeatures(const Driver &D, const llvm::Triple &Triple,
     break;
   case llvm::Triple::csky:
     csky::getCSKYTargetFeatures(D, Triple, Args, CmdArgs, Features);
+    break;
+  case llvm::Triple::ezh:
+    ezh::getEZHTargetFeatures(D, Triple, Args, Features);
     break;
   case llvm::Triple::loongarch32:
   case llvm::Triple::loongarch64:
