@@ -8,259 +8,371 @@
 //
 // This file contains the EZH implementation of the TargetRegisterInfo class.
 //
+// Description:
+//   Implements physical register management, reserved register tracking
+//   (reserving core system registers SP, PC, RA), and eliminateFrameIndex for
+//   stack offset resolution.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiRegisterInfo.cpp).
+//
+// Changes:
+//   Implemented getReservedRegs reserving internal core system registers SP,
+//   PC, and RA; implemented eliminateFrameIndex converting frame indices into
+//   base register plus immediate offset loads/stores.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZHRegisterInfo.h"
-#include "EZHAluCode.h"
 #include "EZHCondCode.h"
 #include "EZHFrameLowering.h"
 #include "EZHInstrInfo.h"
+#include "EZHMachineFunctionInfo.h"
+#include "MCTargetDesc/EZHBaseInfo.h"
+#include "MCTargetDesc/EZHMCTargetDesc.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
-#include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Type.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
 
 #define GET_REGINFO_TARGET_DESC
 #include "EZHGenRegisterInfo.inc"
 
 using namespace llvm;
 
-EZHRegisterInfo::EZHRegisterInfo() : EZHGenRegisterInfo(EZH::RCA) {}
+EZHRegisterInfo::EZHRegisterInfo() : EZHGenRegisterInfo(EZH::RA) {}
 
 const uint16_t *
-EZHRegisterInfo::getCalleeSavedRegs(const MachineFunction * /*MF*/) const {
-  return CSR_SaveList;
+EZHRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
+  return CSR_EZH_SaveList;
 }
 
 BitVector EZHRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
 
-  Reserved.set(EZH::R0);
-  Reserved.set(EZH::R1);
-  Reserved.set(EZH::PC);
-  Reserved.set(EZH::R2);
-  Reserved.set(EZH::SP);
-  Reserved.set(EZH::R4);
-  Reserved.set(EZH::FP);
-  Reserved.set(EZH::R5);
-  Reserved.set(EZH::RR1);
-  Reserved.set(EZH::R10);
-  Reserved.set(EZH::RR2);
-  Reserved.set(EZH::R11);
-  Reserved.set(EZH::RCA);
-  Reserved.set(EZH::R15);
+  auto ReserveRegAndAliases = [&](Register Reg) {
+    for (MCRegAliasIterator Alias(Reg, this, true); Alias.isValid(); ++Alias)
+      Reserved.set(*Alias);
+  };
+
+  ReserveRegAndAliases(EZH::SP);
+  ReserveRegAndAliases(EZH::PC);
+  ReserveRegAndAliases(EZH::RA);
+  ReserveRegAndAliases(EZH::GPO);
+  ReserveRegAndAliases(EZH::GPD);
+  ReserveRegAndAliases(EZH::CFS);
+  ReserveRegAndAliases(EZH::CFM);
+  ReserveRegAndAliases(EZH::GPI);
+
+  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+  if (TFI->hasFP(MF))
+    ReserveRegAndAliases(EZH::R7);
+
   if (hasBasePointer(MF))
-    Reserved.set(getBaseRegister());
+    ReserveRegAndAliases(getBaseRegister());
+
   return Reserved;
 }
 
 bool EZHRegisterInfo::requiresRegisterScavenging(
-    const MachineFunction & /*MF*/) const {
+    const MachineFunction &MF) const {
   return true;
-}
-
-static bool isALUArithLoOpcode(unsigned Opcode) {
-  switch (Opcode) {
-  case EZH::ADD_I_LO:
-  case EZH::SUB_I_LO:
-  case EZH::ADD_F_I_LO:
-  case EZH::SUB_F_I_LO:
-  case EZH::ADDC_I_LO:
-  case EZH::SUBB_I_LO:
-  case EZH::ADDC_F_I_LO:
-  case EZH::SUBB_F_I_LO:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static unsigned getOppositeALULoOpcode(unsigned Opcode) {
-  switch (Opcode) {
-  case EZH::ADD_I_LO:
-    return EZH::SUB_I_LO;
-  case EZH::SUB_I_LO:
-    return EZH::ADD_I_LO;
-  case EZH::ADD_F_I_LO:
-    return EZH::SUB_F_I_LO;
-  case EZH::SUB_F_I_LO:
-    return EZH::ADD_F_I_LO;
-  case EZH::ADDC_I_LO:
-    return EZH::SUBB_I_LO;
-  case EZH::SUBB_I_LO:
-    return EZH::ADDC_I_LO;
-  case EZH::ADDC_F_I_LO:
-    return EZH::SUBB_F_I_LO;
-  case EZH::SUBB_F_I_LO:
-    return EZH::ADDC_F_I_LO;
-  default:
-    llvm_unreachable("Invalid ALU lo opcode");
-  }
-}
-
-static unsigned getRRMOpcodeVariant(unsigned Opcode) {
-  switch (Opcode) {
-  case EZH::LDBs_RI:
-    return EZH::LDBs_RR;
-  case EZH::LDBz_RI:
-    return EZH::LDBz_RR;
-  case EZH::LDHs_RI:
-    return EZH::LDHs_RR;
-  case EZH::LDHz_RI:
-    return EZH::LDHz_RR;
-  case EZH::LDW_RI:
-    return EZH::LDW_RR;
-  case EZH::STB_RI:
-    return EZH::STB_RR;
-  case EZH::STH_RI:
-    return EZH::STH_RR;
-  case EZH::SW_RI:
-    return EZH::SW_RR;
-  default:
-    llvm_unreachable("Opcode has no RRM variant");
-  }
 }
 
 bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                           int SPAdj, unsigned FIOperandNum,
                                           RegScavenger *RS) const {
-  assert(SPAdj == 0 && "Unexpected");
-
   MachineInstr &MI = *II;
-  MachineFunction &MF = *MI.getParent()->getParent();
-  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
-  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
-  bool HasFP = TFI->hasFP(MF);
+  MachineBasicBlock &MBB = *MI.getParent();
+  MachineFunction &MF = *MBB.getParent();
+  const EZHInstrInfo *TII =
+      static_cast<const EZHInstrInfo *>(MF.getSubtarget().getInstrInfo());
   DebugLoc DL = MI.getDebugLoc();
 
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
+  int Offset = MI.getOperand(FIOperandNum + 1).getImm();
 
-  int Offset = MF.getFrameInfo().getObjectOffset(FrameIndex) +
-               MI.getOperand(FIOperandNum + 1).getImm();
+  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+  Register FrameReg = EZH::SP;
 
-  // Addressable stack objects are addressed using neg. offsets from fp
-  // or pos. offsets from sp/basepointer
-  if (!HasFP || (hasStackRealignment(MF) && FrameIndex >= 0))
-    Offset += MF.getFrameInfo().getStackSize();
+  bool HasFP = TFI->hasFP(MF);
+  bool HasBP = hasBasePointer(MF);
+  bool IsFixed = MF.getFrameInfo().isFixedObjectIndex(FrameIndex);
 
-  Register FrameReg = getFrameRegister(MF);
-  if (FrameIndex >= 0) {
-    if (hasBasePointer(MF))
-      FrameReg = getBaseRegister();
-    else if (hasStackRealignment(MF))
-      FrameReg = EZH::SP;
+  if (HasBP && !IsFixed) {
+    FrameReg = getBaseRegister(); // R6
+    Offset += MF.getFrameInfo().getObjectOffset(FrameIndex);
+    Offset += MF.getFrameInfo().getStackSize() + SPAdj;
+  } else if (HasFP) {
+    FrameReg = EZH::R7;
+    const std::vector<CalleeSavedInfo> &CSI =
+        MF.getFrameInfo().getCalleeSavedInfo();
+    int FPFI = 0;
+    bool FoundFP = false;
+    for (const auto &Info : CSI) {
+      if (Info.getReg() == EZH::R7) {
+        FPFI = Info.getFrameIdx();
+        FoundFP = true;
+        break;
+      }
+    }
+    assert(FoundFP && "FP not found in CSI!");
+    Offset += MF.getFrameInfo().getObjectOffset(FrameIndex) -
+              MF.getFrameInfo().getObjectOffset(FPFI);
+  } else {
+    Offset += MF.getFrameInfo().getObjectOffset(FrameIndex);
+    Offset += MF.getFrameInfo().getStackSize() + SPAdj;
   }
 
-  // Replace frame index with a frame pointer reference.
-  // If the offset is small enough to fit in the immediate field, directly
-  // encode it.
-  // Otherwise scavenge a register and encode it into a MOVHI, OR_I_LO sequence.
-  if ((isSPLSOpcode(MI.getOpcode()) && !isInt<10>(Offset)) ||
-      !isInt<16>(Offset)) {
-    assert(RS && "Register scavenging must be on");
-    Register Reg = RS->FindUnusedReg(&EZH::GPRRegClass);
-    if (!Reg)
-      Reg = RS->scavengeRegisterBackwards(EZH::GPRRegClass, II, false, SPAdj);
-    assert(Reg && "Register scavenger failed");
+  // Determine if the offset fits in the immediate field of the memory
+  // instruction.
+  unsigned Opc = MI.getOpcode();
+  const MCInstrDesc &Desc = TII->get(Opc);
+  bool IsWordMem = (Desc.TSFlags & EZHII::IsWordMem);
 
-    bool HasNegOffset = false;
-    // ALU ops have unsigned immediate values. If the Offset is negative, we
-    // negate it here and reverse the opcode later.
-    if (Offset < 0) {
-      HasNegOffset = true;
-      Offset = -Offset;
-    }
+  bool Fits = false;
+  if (IsWordMem) {
+    if (Offset >= -512 && Offset <= 508 && (Offset & 3) == 0)
+      Fits = true;
+  } else {
+    if (Offset >= -128 && Offset <= 127)
+      Fits = true;
+  }
 
-    if (!isInt<16>(Offset)) {
-      // Reg = hi(offset) | lo(offset)
-      BuildMI(*MI.getParent(), II, DL, TII->get(EZH::MOVHI), Reg)
-          .addImm(static_cast<uint32_t>(Offset) >> 16);
-      BuildMI(*MI.getParent(), II, DL, TII->get(EZH::OR_I_LO), Reg)
-          .addReg(Reg)
-          .addImm(Offset & 0xffffU);
-    } else {
-      // Reg = mov(offset)
-      BuildMI(*MI.getParent(), II, DL, TII->get(EZH::ADD_I_LO), Reg)
-          .addImm(0)
-          .addImm(Offset);
-    }
-    // Reg = FrameReg OP Reg
-    if (MI.getOpcode() == EZH::ADD_I_LO) {
-      BuildMI(*MI.getParent(), II, DL,
-              HasNegOffset ? TII->get(EZH::SUB_R) : TII->get(EZH::ADD_R),
-              MI.getOperand(0).getReg())
-          .addReg(FrameReg)
-          .addReg(Reg)
-          .addImm(LPCC::ICC_T);
-      MI.eraseFromParent();
-      return true;
-    }
-    if (isSPLSOpcode(MI.getOpcode()) || isRMOpcode(MI.getOpcode())) {
-      MI.setDesc(TII->get(getRRMOpcodeVariant(MI.getOpcode())));
-      if (HasNegOffset) {
-        // Change the ALU op (operand 3) from LPAC::ADD (the default) to
-        // LPAC::SUB with the already negated offset.
-        assert((MI.getOperand(3).getImm() == LPAC::ADD) &&
-               "Unexpected ALU op in RRM instruction");
-        MI.getOperand(3).setImm(LPAC::SUB);
-      }
-    } else
-      llvm_unreachable("Unexpected opcode in frame index operation");
-
-    MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, /*isDef=*/false);
-    MI.getOperand(FIOperandNum + 1)
-        .ChangeToRegister(Reg, /*isDef=*/false, /*isImp=*/false,
-                          /*isKill=*/true);
+  if (Fits) {
+    MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, false);
+    MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
     return false;
   }
 
-  // ALU arithmetic ops take unsigned immediates. If the offset is negative,
-  // we replace the instruction with one that inverts the opcode and negates
-  // the immediate.
-  if ((Offset < 0) && isALUArithLoOpcode(MI.getOpcode())) {
-    unsigned NewOpcode = getOppositeALULoOpcode(MI.getOpcode());
-    // We know this is an ALU op, so we know the operands are as follows:
-    // 0: destination register
-    // 1: source register (frame register)
-    // 2: immediate
-    BuildMI(*MI.getParent(), II, DL, TII->get(NewOpcode),
-            MI.getOperand(0).getReg())
-        .addReg(FrameReg)
-        .addImm(-Offset);
-    MI.eraseFromParent();
-    return true;
+  // Offset does not fit natively. Use the RegScavenger to materialize it.
+  Register ScratchReg;
+  bool PushPopFallback = false;
+
+  if (RS) {
+    ScratchReg = RS->FindUnusedReg(&EZH::GPRRegClass);
+    // Ensure the scavenged scratch register is not actively used by the memory
+    // instruction itself!
+    if (ScratchReg && (MI.readsRegister(ScratchReg, this) ||
+                       MI.definesRegister(ScratchReg, this))) {
+      ScratchReg = EZH::NoRegister;
+    }
+    // Bypass scavengeRegisterBackwards to avoid risky spills that cause
+    // recursion crashes. If no free register is found, we safe-fallback to
+    // pushing/popping a temporary register.
   }
 
-  MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, /*isDef=*/false);
-  MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
+  if (!ScratchReg) {
+    Register FallbackReg = EZH::NoRegister;
+    static const Register Candidates[] = {EZH::R4, EZH::R5, EZH::R6, EZH::R7};
+    for (Register Reg : Candidates) {
+      if (Reg != FrameReg && !MI.readsRegister(Reg, this) &&
+          !MI.definesRegister(Reg, this)) {
+        FallbackReg = Reg;
+        break;
+      }
+    }
+    if (!FallbackReg) {
+      static const Register Callers[] = {EZH::R0, EZH::R1, EZH::R2, EZH::R3};
+      for (Register Reg : Callers) {
+        if (Reg != FrameReg && !MI.readsRegister(Reg, this) &&
+            !MI.definesRegister(Reg, this)) {
+          FallbackReg = Reg;
+          break;
+        }
+      }
+    }
+    assert(FallbackReg != EZH::NoRegister &&
+           "Could not find any fallback register!");
+    ScratchReg = FallbackReg;
+    PushPopFallback = true;
+  }
+
+  if (PushPopFallback) {
+    if (FrameReg == EZH::SP)
+      Offset += 4; // Compensate for SP decrement due to push when SP is base
+    BuildMI(MBB, II, DL, TII->get(EZH::STR_PRE), EZH::SP)
+        .addReg(ScratchReg)
+        .addReg(EZH::SP)
+        .addImm(-4)
+        .addImm(EZHCC::ICC_EU);
+  }
+
+  if (Offset > 0 && Offset <= 2047) {
+    BuildMI(MBB, II, DL, TII->get(EZH::ADD_IMM))
+        .addDef(ScratchReg)
+        .addReg(FrameReg)
+        .addImm(Offset)
+        .addImm(EZHCC::ICC_EU);
+  } else if (Offset < 0 && Offset >= -2048) {
+    BuildMI(MBB, II, DL, TII->get(EZH::SUB_IMM))
+        .addDef(ScratchReg)
+        .addReg(FrameReg)
+        .addImm(-Offset)
+        .addImm(EZHCC::ICC_EU);
+  } else {
+    // Load Offset into ScratchReg, then add SP
+    uint32_t UOffset = static_cast<uint32_t>(Offset);
+    uint32_t ShiftAmt = 0;
+    while ((UOffset & 1) == 0 && ShiftAmt < 31 && UOffset != 0) {
+      UOffset >>= 1;
+      ++ShiftAmt;
+    }
+    if (UOffset < 1024) {
+      BuildMI(MBB, II, DL, TII->get(EZH::LOAD_SIMM))
+          .addDef(ScratchReg)
+          .addImm(UOffset)
+          .addImm(ShiftAmt)
+          .addImm(EZHCC::ICC_EU);
+    } else {
+      // Process strictly from High-to-Low (MSB to LSB)
+      // This allows us to load the highest non-zero byte chunk natively via
+      // MOVri (or MOVSri), left-shift the scratch register by 8 bits, and
+      // directly OR the next lower-order non-zero byte chunk via ORri.
+      // This keeps code size minimal and avoids secondary scratch registers.
+      uint32_t UOffset = static_cast<uint32_t>(Offset);
+
+      // Extract non-zero byte chunks
+      uint8_t Bytes[4];
+      Bytes[3] = (UOffset >> 24) & 0xFF;
+      Bytes[2] = (UOffset >> 16) & 0xFF;
+      Bytes[1] = (UOffset >> 8) & 0xFF;
+      Bytes[0] = UOffset & 0xFF;
+
+      int FirstNonZeroIdx = -1;
+      for (int i = 3; i >= 0; --i) {
+        if (Bytes[i] != 0) {
+          FirstNonZeroIdx = i;
+          break;
+        }
+      }
+
+      if (FirstNonZeroIdx != -1) {
+        int NextNonZeroIdx = -1;
+        for (int i = FirstNonZeroIdx - 1; i >= 0; --i) {
+          if (Bytes[i] != 0) {
+            NextNonZeroIdx = i;
+            break;
+          }
+        }
+
+        if (NextNonZeroIdx != -1) {
+          unsigned FirstShift = (FirstNonZeroIdx - NextNonZeroIdx) * 8;
+          BuildMI(MBB, II, DL, TII->get(EZH::LOAD_SIMM), ScratchReg)
+              .addImm(Bytes[FirstNonZeroIdx])
+              .addImm(FirstShift)
+              .addImm(EZHCC::ICC_EU);
+
+          BuildMI(MBB, II, DL, TII->get(EZH::OR_IMM), ScratchReg)
+              .addReg(ScratchReg)
+              .addImm(Bytes[NextNonZeroIdx])
+              .addImm(EZHCC::ICC_EU);
+
+          unsigned ShiftAccum = 0;
+          for (int i = NextNonZeroIdx - 1; i >= 0; --i) {
+            ShiftAccum += 8;
+            if (Bytes[i] != 0) {
+              BuildMI(MBB, II, DL, TII->get(EZH::LSL), ScratchReg)
+                  .addReg(ScratchReg)
+                  .addImm(ShiftAccum)
+                  .addImm(EZHCC::ICC_EU);
+              ShiftAccum = 0;
+
+              BuildMI(MBB, II, DL, TII->get(EZH::OR_IMM), ScratchReg)
+                  .addReg(ScratchReg)
+                  .addImm(Bytes[i])
+                  .addImm(EZHCC::ICC_EU);
+            }
+          }
+          if (ShiftAccum > 0) {
+            BuildMI(MBB, II, DL, TII->get(EZH::LSL), ScratchReg)
+                .addReg(ScratchReg)
+                .addImm(ShiftAccum)
+                .addImm(EZHCC::ICC_EU);
+          }
+        } else {
+          BuildMI(MBB, II, DL, TII->get(EZH::LOAD_IMM), ScratchReg)
+              .addImm(Bytes[FirstNonZeroIdx])
+              .addImm(EZHCC::ICC_EU);
+          if (FirstNonZeroIdx > 0) {
+            BuildMI(MBB, II, DL, TII->get(EZH::LSL), ScratchReg)
+                .addReg(ScratchReg)
+                .addImm(FirstNonZeroIdx * 8)
+                .addImm(EZHCC::ICC_EU);
+          }
+        }
+      }
+    }
+    BuildMI(MBB, II, DL, TII->get(EZH::ADD))
+        .addDef(ScratchReg)
+        .addReg(ScratchReg)
+        .addReg(FrameReg)
+        .addImm(EZHCC::ICC_EU);
+  }
+
+  MI.getOperand(FIOperandNum).ChangeToRegister(ScratchReg, false);
+  MI.getOperand(FIOperandNum + 1).ChangeToImmediate(0);
+
+  if (PushPopFallback) {
+    MachineBasicBlock::iterator NextII = std::next(II);
+    BuildMI(MBB, NextII, DL, TII->get(EZH::LDR_POST), ScratchReg)
+        .addReg(EZH::SP, RegState::Define)
+        .addReg(EZH::SP)
+        .addImm(4)
+        .addImm(EZHCC::ICC_EU);
+  }
+
   return false;
 }
 
-bool EZHRegisterInfo::hasBasePointer(const MachineFunction &MF) const {
-  const MachineFrameInfo &MFI = MF.getFrameInfo();
-  // When we need stack realignment and there are dynamic allocas, we can't
-  // reference off of the stack pointer, so we reserve a base pointer.
-  if (hasStackRealignment(MF) && MFI.hasVarSizedObjects())
-    return true;
-
-  return false;
+Register EZHRegisterInfo::getFrameRegister(const MachineFunction &MF) const {
+  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+  return TFI->hasFP(MF) ? EZH::R7 : EZH::SP;
 }
-
-unsigned EZHRegisterInfo::getRARegister() const { return EZH::RCA; }
-
-Register
-EZHRegisterInfo::getFrameRegister(const MachineFunction & /*MF*/) const {
-  return EZH::FP;
-}
-
-Register EZHRegisterInfo::getBaseRegister() const { return EZH::R14; }
 
 const uint32_t *
-EZHRegisterInfo::getCallPreservedMask(const MachineFunction & /*MF*/,
-                                      CallingConv::ID /*CC*/) const {
-  return CSR_RegMask;
+EZHRegisterInfo::getCallPreservedMask(const MachineFunction &MF,
+                                      CallingConv::ID CC) const {
+  return CSR_EZH_RegMask;
+}
+
+unsigned EZHRegisterInfo::getRARegister() const { return EZH::RA; }
+
+Register EZHRegisterInfo::getBaseRegister() const { return EZH::R6; }
+
+bool EZHRegisterInfo::hasBasePointer(const MachineFunction &MF) const {
+  return hasStackRealignment(MF);
+}
+
+bool EZHRegisterInfo::shouldCoalesce(
+    MachineInstr *MI, const TargetRegisterClass *SrcRC, unsigned SubReg,
+    const TargetRegisterClass *DstRC, unsigned DstSubReg,
+    const TargetRegisterClass *NewRC, LiveIntervals &LIS) const {
+  // Protect stack pointer allocations, saves, and restores from aggressive
+  // register coalescing.
+  for (const MachineOperand &MO : MI->operands()) {
+    if (MO.isReg() && MO.getReg() == EZH::SP)
+      return false;
+  }
+
+  return true;
+}
+
+bool EZHRegisterInfo::isAsmClobberable(const MachineFunction &MF,
+                                       MCRegister PhysReg) const {
+  return !getReservedRegs(MF).test(PhysReg);
+}
+
+bool EZHRegisterInfo::isInlineAsmReadOnlyReg(const MachineFunction &MF,
+                                             MCRegister PhysReg) const {
+  return false;
 }

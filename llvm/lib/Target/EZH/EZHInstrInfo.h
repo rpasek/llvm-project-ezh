@@ -8,14 +8,29 @@
 //
 // This file contains the EZH implementation of the TargetInstrInfo class.
 //
+// Description:
+//   Declares EZHInstrInfo, providing opcode queries, branch analysis, branch
+//   manipulation interfaces (insertBranch, removeBranch), and instruction
+//   properties.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiInstrInfo.h).
+//
+// Changes:
+//   Renamed LanaiInstrInfo to EZHInstrInfo; added declarations for EZH
+//   conditional branch analysis, opcode mapping, and constant pool entry
+//   helpers.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZHINSTRINFO_H
 #define LLVM_LIB_TARGET_EZH_EZHINSTRINFO_H
 
 #include "EZHRegisterInfo.h"
-#include "MCTargetDesc/EZHMCTargetDesc.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/Support/BranchProbability.h"
 
 #define GET_INSTRINFO_HEADER
 #include "EZHGenInstrInfo.inc"
@@ -24,30 +39,14 @@ namespace llvm {
 
 class EZHSubtarget;
 
+/// EZH Instruction Information.
 class EZHInstrInfo : public EZHGenInstrInfo {
   const EZHRegisterInfo RegisterInfo;
 
 public:
   EZHInstrInfo(const EZHSubtarget &STI);
 
-  // getRegisterInfo - TargetInstrInfo is a superset of MRegister info.  As
-  // such, whenever a client has an instance of instruction info, it should
-  // always be able to get register info as well (through this method).
-  virtual const EZHRegisterInfo &getRegisterInfo() const {
-    return RegisterInfo;
-  }
-
-  bool areMemAccessesTriviallyDisjoint(const MachineInstr &MIa,
-                                       const MachineInstr &MIb) const override;
-
-  Register isLoadFromStackSlot(const MachineInstr &MI,
-                               int &FrameIndex) const override;
-
-  Register isLoadFromStackSlotPostFE(const MachineInstr &MI,
-                                     int &FrameIndex) const override;
-
-  Register isStoreToStackSlot(const MachineInstr &MI,
-                              int &FrameIndex) const override;
+  const EZHRegisterInfo &getRegisterInfo() const { return RegisterInfo; }
 
   void copyPhysReg(MachineBasicBlock &MBB, MachineBasicBlock::iterator Position,
                    const DebugLoc &DL, Register DestinationRegister,
@@ -70,107 +69,36 @@ public:
 
   bool expandPostRAPseudo(MachineInstr &MI) const override;
 
-  bool getMemOperandsWithOffsetWidth(
-      const MachineInstr &LdSt,
-      SmallVectorImpl<const MachineOperand *> &BaseOps, int64_t &Offset,
-      bool &OffsetIsScalable, LocationSize &Width,
-      const TargetRegisterInfo *TRI) const override;
-
-  bool getMemOperandWithOffsetWidth(const MachineInstr &LdSt,
-                                    const MachineOperand *&BaseOp,
-                                    int64_t &Offset, LocationSize &Width,
-                                    const TargetRegisterInfo *TRI) const;
-
-  std::pair<unsigned, unsigned>
-  decomposeMachineOperandsTargetFlags(unsigned TF) const override;
-
-  ArrayRef<std::pair<unsigned, const char *>>
-  getSerializableDirectMachineOperandTargetFlags() const override;
-
   bool analyzeBranch(MachineBasicBlock &MBB, MachineBasicBlock *&TrueBlock,
                      MachineBasicBlock *&FalseBlock,
                      SmallVectorImpl<MachineOperand> &Condition,
-                     bool AllowModify) const override;
+                     bool AllowModify = false) const override;
 
   unsigned removeBranch(MachineBasicBlock &MBB,
                         int *BytesRemoved = nullptr) const override;
-
-  // For a comparison instruction, return the source registers in SrcReg and
-  // SrcReg2 if having two register operands, and the value it compares against
-  // in CmpValue. Return true if the comparison instruction can be analyzed.
-  bool analyzeCompare(const MachineInstr &MI, Register &SrcReg,
-                      Register &SrcReg2, int64_t &CmpMask,
-                      int64_t &CmpValue) const override;
-
-  // See if the comparison instruction can be converted into something more
-  // efficient. E.g., on EZH register-register instructions can set the flag
-  // register, obviating the need for a separate compare.
-  bool optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
-                            Register SrcReg2, int64_t CmpMask, int64_t CmpValue,
-                            const MachineRegisterInfo *MRI) const override;
-
-  // Given a select instruction that was understood by analyzeSelect and
-  // returned Optimizable = true, attempt to optimize MI by merging it with one
-  // of its operands. Returns NULL on failure.
-  //
-  // When successful, returns the new select instruction. The client is
-  // responsible for deleting MI.
-  //
-  // If both sides of the select can be optimized, the TrueOp is modifed.
-  // PreferFalse is not used.
-  MachineInstr *optimizeSelect(MachineInstr &MI,
-                               SmallPtrSetImpl<MachineInstr *> &SeenMIs,
-                               bool PreferFalse) const override;
-
-  bool reverseBranchCondition(
-      SmallVectorImpl<MachineOperand> &Condition) const override;
 
   unsigned insertBranch(MachineBasicBlock &MBB, MachineBasicBlock *TrueBlock,
                         MachineBasicBlock *FalseBlock,
                         ArrayRef<MachineOperand> Condition, const DebugLoc &DL,
                         int *BytesAdded = nullptr) const override;
+
+  bool
+  reverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const override;
+  bool isPredicated(const MachineInstr &MI) const override;
+  bool isPredicable(const MachineInstr &MI) const override;
+  bool canPredicatePredicatedInstr(const MachineInstr &MI) const override;
+  bool PredicateInstruction(MachineInstr &MI,
+                            ArrayRef<MachineOperand> Pred) const override;
+  bool isProfitableToIfCvt(MachineBasicBlock &MBB, unsigned NumCycles,
+                           unsigned ExtraPredCycles,
+                           BranchProbability Probability) const override;
+  bool isProfitableToIfCvt(MachineBasicBlock &TMBB, unsigned NumTCycles,
+                           unsigned ExtraTCycles, MachineBasicBlock &FMBB,
+                           unsigned NumFCycles, unsigned ExtraFCycles,
+                           BranchProbability Probability) const override;
+  unsigned getInstSizeInBytes(const MachineInstr &MI) const override;
+  int getJumpTableIndex(const MachineInstr &MI) const override;
 };
-
-static inline bool isSPLSOpcode(unsigned Opcode) {
-  switch (Opcode) {
-  case EZH::LDBs_RI:
-  case EZH::LDBz_RI:
-  case EZH::LDHs_RI:
-  case EZH::LDHz_RI:
-  case EZH::STB_RI:
-  case EZH::STH_RI:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static inline bool isRMOpcode(unsigned Opcode) {
-  switch (Opcode) {
-  case EZH::LDW_RI:
-  case EZH::SW_RI:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static inline bool isRRMOpcode(unsigned Opcode) {
-  switch (Opcode) {
-  case EZH::LDBs_RR:
-  case EZH::LDBz_RR:
-  case EZH::LDHs_RR:
-  case EZH::LDHz_RR:
-  case EZH::LDWz_RR:
-  case EZH::LDW_RR:
-  case EZH::STB_RR:
-  case EZH::STH_RR:
-  case EZH::SW_RR:
-    return true;
-  default:
-    return false;
-  }
-}
 
 } // namespace llvm
 

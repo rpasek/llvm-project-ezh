@@ -8,6 +8,18 @@
 //
 // This file declares the EZH specific subclass of TargetMachine.
 //
+// Description:
+//   Declares EZHTargetMachine, the primary target machine implementation for
+//   the EZH (SmartDMA) architecture.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiTargetMachine.h).
+//
+// Changes:
+//   Renamed LanaiTargetMachine to EZHTargetMachine; updated target layout
+//   string (e-m:e-p:32:32-i8:8:32-i16:16:32-i64:64-n32), custom pass pipeline
+//   creation, and subtarget ownership.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZHTARGETMACHINE_H
@@ -17,11 +29,22 @@
 #include "EZHInstrInfo.h"
 #include "EZHSelectionDAGInfo.h"
 #include "EZHSubtarget.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
+#include "llvm/Support/Allocator.h"
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Target/TargetLoweringObjectFile.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/TargetParser/Triple.h"
+#include <memory>
 #include <optional>
 
 namespace llvm {
 
+class PassManagerBase;
+
+/// TargetMachine implementation for the NXP EZH architecture.
 class EZHTargetMachine : public CodeGenTargetMachineImpl {
   EZHSubtarget Subtarget;
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
@@ -33,8 +56,7 @@ public:
                    std::optional<CodeModel::Model> CodeModel,
                    CodeGenOptLevel OptLevel, bool JIT);
 
-  const EZHSubtarget *
-  getSubtargetImpl(const llvm::Function & /*Fn*/) const override {
+  const EZHSubtarget *getSubtargetImpl(const Function & /*Fn*/) const override {
     return &Subtarget;
   }
 

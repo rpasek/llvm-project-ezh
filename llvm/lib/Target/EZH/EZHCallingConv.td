@@ -1,4 +1,4 @@
-//===- EZHCallingConv.td - Calling Conventions EZH -------*- tablegen -*-===//
+//===-- EZHCallingConv.td - Calling Conventions for EZH --*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,44 +6,44 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This describes the calling conventions for the EZH architectures.
+// Description:
+//   TableGen calling convention definitions (CCIfType, CCAssignToReg,
+//   CCAssignToStack) specifying argument passing and return value locations.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiCallingConv.td).
+//
+// Changes:
+//   Configured 32-bit argument passing in general purpose registers (r0-r3)
+//   and standard stack overflow conventions matching the EZH ABI.
 //
 //===----------------------------------------------------------------------===//
 
-//===----------------------------------------------------------------------===//
-// Return Value Calling Conventions
-//===----------------------------------------------------------------------===//
+/// CCIfAlign - Match of the original alignment of the arg
+class CCIfAlign<string Align, CCAction A>:
+  CCIf<!strconcat("ArgFlags.getNonZeroOrigAlign() >= ", Align), A>;
 
-// EZH 32-bit C Calling convention.
-def CC_EZH32 : CallingConv<[
-  // Promote i8/i16 args to i32
-  CCIfType<[i8, i16], CCPromoteToType<i32>>,
+def CC_EZH : CallingConv<[
+  CCIfByVal<CCPassByVal<4, 4>>,
 
-  // Put argument in registers if marked 'inreg' and not a vararg call.
-  CCIfNotVarArg<CCIfInReg<CCIfType<[i32],
-                                   CCAssignToReg<[R6, R7, R18, R19]>>>>,
+  CCIfType<[i1, i8, i16], CCPromoteToType<i32>>,
 
-  // Otherwise they are assigned to the stack in 4-byte aligned units.
-  CCAssignToStack<4, 4>
+  // i64/f64 (or >= 8-byte aligned types) are passed in even pairs of GPRs (R0/R1 or R2/R3)
+  // We match >= 8-alignment i32 parts, shadowing R1 as a pad register!
+  CCIfType<[i32], CCIfAlign<"8", CCAssignToRegWithShadow<[R0, R2], [R0, R1]>>>,
+  CCIfType<[i32], CCIf<"ArgFlags.getNonZeroOrigAlign() < Align(8)",
+                       CCAssignToReg<[R0, R1, R2, R3]>>>,
+
+  // Stack allocations with strict 8-byte alignment support for spilled types!
+  CCIfType<[i32], CCIfAlign<"8", CCAssignToStackWithShadow<4, 8, [R0, R1, R2, R3]>>>,
+  CCIfType<[i32], CCAssignToStackWithShadow<4, 4, [R0, R1, R2, R3]>>
 ]>;
 
-// EZH 32-bit Fast Calling convention.
-def CC_EZH32_Fast : CallingConv<[
-  // Promote i8/i16 args to i32
-  CCIfType<[ i8, i16 ], CCPromoteToType<i32>>,
+def RetCC_EZH : CallingConv<[
+  CCIfType<[i1, i8, i16], CCPromoteToType<i32>>,
 
-  // Put arguments in registers.
-  CCIfNotVarArg<CCIfType<[i32], CCAssignToReg<[ R6, R7, R18, R19 ]>>>,
-
-  // Otherwise they are assigned to the stack in 4-byte aligned units.
-  CCAssignToStack<4, 4>
+  // Return in R0, R1, R2, R3
+  CCIfType<[i32, f32], CCAssignToReg<[R0, R1, R2, R3]>>
 ]>;
 
-// EZH 32-bit C return-value convention.
-def RetCC_EZH32 : CallingConv<[
-  // Specify two registers to allow returning 64-bit results that have already
-  // been lowered to 2 32-bit values.
-  CCIfType<[i32], CCAssignToReg<[RV, R9]>>
-]>;
-
-def CSR: CalleeSavedRegs<(add)>;
+def CSR_EZH : CalleeSavedRegs<(add RA, R7, R6, R5, R4)>;

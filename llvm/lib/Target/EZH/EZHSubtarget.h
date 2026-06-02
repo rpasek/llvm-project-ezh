@@ -8,6 +8,20 @@
 //
 // This file declares the EZH specific subclass of TargetSubtarget.
 //
+// Description:
+//   Declares EZHSubtarget, encapsulating architecture feature flags, CPU
+//   properties, and pointers to core target lowering and instruction info
+//   objects.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiSubtarget.h).
+//
+// Changes:
+//   Renamed LanaiSubtarget to EZHSubtarget; initialized EZH InstrInfo,
+//   FrameLowering, TargetLowering, and RegisterInfo members; configured EZH
+//   AHB register behavior and hardware limitations (no cache, specific ALU
+//   flags).
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZHSUBTARGET_H
@@ -17,9 +31,13 @@
 #include "EZHISelLowering.h"
 #include "EZHInstrInfo.h"
 #include "EZHSelectionDAGInfo.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/TargetParser/Triple.h"
 
 #define GET_SUBTARGETINFO_HEADER
 #include "EZHGenSubtargetInfo.inc"
@@ -63,7 +81,10 @@ public:
     return &TSInfo;
   }
 
+  bool hasBitSliceInterrupts() const { return HasBitSliceInterrupts; }
+
 private:
+  bool HasBitSliceInterrupts = false;
   EZHInstrInfo InstrInfo;
   EZHFrameLowering FrameLowering;
   EZHTargetLowering TLInfo;

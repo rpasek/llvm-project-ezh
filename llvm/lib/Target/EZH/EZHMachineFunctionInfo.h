@@ -1,4 +1,4 @@
-//===- EZHMachineFuctionInfo.h - EZH machine func info -------*- C++ -*-==//
+//===- EZHMachineFunctionInfo.h - EZH machine func info -------*- C++ -*-==//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -8,14 +8,27 @@
 //
 // This file declares EZH-specific per-machine-function information.
 //
+// Description:
+//   Declares EZHMachineFunctionInfo, tracking per-function state such as
+//   constant pool entries, jump tables, and vararg save area offsets.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiMachineFunctionInfo.h).
+//
+// Changes:
+//   Renamed LanaiMachineFunctionInfo to EZHMachineFunctionInfo; customized
+//   members to track EZH Constant Island state and vararg frame indices.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZHMACHINEFUNCTIONINFO_H
 #define LLVM_LIB_TARGET_EZH_EZHMACHINEFUNCTIONINFO_H
 
 #include "EZHRegisterInfo.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Support/Allocator.h"
 
 namespace llvm {
 
@@ -29,17 +42,18 @@ class EZHMachineFunctionInfo : public MachineFunctionInfo {
   // holds the virtual register into which the sret argument is passed.
   Register SRetReturnReg;
 
-  // GlobalBaseReg - keeps track of the virtual register initialized for
-  // use as the global base register. This is used for PIC in some PIC
-  // relocation models.
-  Register GlobalBaseReg;
-
   // VarArgsFrameIndex - FrameIndex for start of varargs area.
   int VarArgsFrameIndex;
 
+  // VarArgsSaveSize - Size of the varargs register save area.
+  unsigned VarArgsSaveSize;
+
+  // VarArgsRegIdx - The first register index that is spilled for varargs.
+  unsigned VarArgsRegIdx;
+
 public:
   EZHMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI)
-      : VarArgsFrameIndex(0) {}
+      : VarArgsFrameIndex(0), VarArgsSaveSize(0), VarArgsRegIdx(0) {}
   MachineFunctionInfo *
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,
         const DenseMap<MachineBasicBlock *, MachineBasicBlock *> &Src2DstMBB)
@@ -50,6 +64,12 @@ public:
 
   int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
   void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
+
+  unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
+  void setVarArgsSaveSize(unsigned Size) { VarArgsSaveSize = Size; }
+
+  unsigned getVarArgsRegIdx() const { return VarArgsRegIdx; }
+  void setVarArgsRegIdx(unsigned Idx) { VarArgsRegIdx = Idx; }
 };
 
 } // namespace llvm

@@ -8,9 +8,22 @@
 //
 // This file implements the EZH specific subclass of TargetSubtarget.
 //
+// Description:
+//   Implements subtarget feature parsing and component initialization for the
+//   EZH architecture.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiSubtarget.cpp).
+//
+// Changes:
+//   Hooked into TableGen-generated subtarget feature initialization
+//   (ParseSubtargetFeatures); instantiated EZH-specific lowering and register
+//   information classes.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZHSubtarget.h"
+#include "MCTargetDesc/EZHMCTargetDesc.h"
 
 #define DEBUG_TYPE "ezh-subtarget"
 

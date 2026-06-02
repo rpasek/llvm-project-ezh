@@ -6,10 +6,21 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file a TargetTransformInfoImplBase conforming object specific to the
-// EZH target machine. It uses the target's detailed information to
+// This file defines a TargetTransformInfoImplBase conforming object specific
+// to the EZH target machine. It uses the target's detailed information to
 // provide more precise answers to certain TTI queries, while letting the
 // target independent and default TTI implementations handle the rest.
+//
+// Description:
+//   Implements EZHTIImpl, providing target-specific cost model queries for
+//   vectorization, unrolling, and IR transformations.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiTargetTransformInfo.h).
+//
+// Changes:
+//   Renamed LanaiTTIImpl to EZHTIImpl; configured instruction cost estimates
+//   reflecting EZH's lack of cache and specific 8/32-bit memory access costs.
 //
 //===----------------------------------------------------------------------===//
 
@@ -41,41 +52,29 @@ public:
       : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
         TLI(ST->getTargetLowering()) {}
 
-  bool shouldBuildLookupTables() const override { return false; }
-
-  TargetTransformInfo::PopcntSupportKind
-  getPopcntSupport(unsigned TyWidth) const override {
-    if (TyWidth == 32)
-      return TTI::PSK_FastHardware;
-    return TTI::PSK_Software;
-  }
-
   InstructionCost getIntImmCost(const APInt &Imm, Type *Ty,
                                 TTI::TargetCostKind CostKind) const override {
-    assert(Ty->isIntegerTy());
+    assert(Ty->isIntegerTy() && "Expected integer type!");
     unsigned BitSize = Ty->getPrimitiveSizeInBits();
-    // There is no cost model for constants with a bit size of 0. Return
-    // TCC_Free here, so that constant hoisting will ignore this constant.
-    if (BitSize == 0)
-      return TTI::TCC_Free;
-    // No cost model for operations on integers larger than 64 bit implemented
-    // yet.
-    if (BitSize > 64)
+    if (BitSize == 0 || Imm.getActiveBits() >= 64)
+      return TTI::TCC_Expensive;
+
+    int64_t Val = Imm.getSExtValue();
+    if (Val == 0)
       return TTI::TCC_Free;
 
-    if (Imm == 0)
-      return TTI::TCC_Free;
-    if (isInt<16>(Imm.getSExtValue()))
+    // Fits natively in EZH's 11-bit signed immediate (e_load_simm)
+    if (isInt<11>(Val))
       return TTI::TCC_Basic;
-    if (isInt<21>(Imm.getZExtValue()))
-      return TTI::TCC_Basic;
-    if (isInt<32>(Imm.getSExtValue())) {
-      if ((Imm.getSExtValue() & 0xFFFF) == 0)
-        return TTI::TCC_Basic;
-      return 2 * TTI::TCC_Basic;
-    }
 
-    return 4 * TTI::TCC_Basic;
+    // Fits in EZH's shifted 11-bit immediate (e_load_simm with shift)
+    uint64_t UVal = Imm.getZExtValue();
+    unsigned TZ = llvm::countr_zero(UVal);
+    if (isInt<11>(static_cast<int32_t>(UVal >> TZ)))
+      return TTI::TCC_Basic;
+
+    // Fallback: Requires a constant pool load (expensive memory access)
+    return 2 * TTI::TCC_Basic;
   }
 
   InstructionCost
@@ -97,6 +96,11 @@ public:
       TTI::OperandValueInfo Op2Info = {TTI::OK_AnyValue, TTI::OP_None},
       ArrayRef<const Value *> Args = {},
       const Instruction *CxtI = nullptr) const override {
+    // EZH has no hardware floating-point unit; FP operations expand to runtime
+    // soft-float library calls (__addsf3, __mulsf3, etc.).
+    if (Ty && Ty->isFloatingPointTy())
+      return 64;
+
     int ISD = TLI->InstructionOpcodeToISD(Opcode);
 
     switch (ISD) {
@@ -106,15 +110,32 @@ public:
     case ISD::MUL:
     case ISD::SDIV:
     case ISD::UDIV:
+    case ISD::SREM:
     case ISD::UREM:
-      // This increases the cost associated with multiplication and division
-      // to 64 times what the baseline arithmetic cost is. The arithmetic
-      // instruction cost was arbitrarily chosen to reduce the desirability
-      // of emitting arithmetic instructions that are emulated in software.
-      // TODO: Investigate the performance impact given specialized lowerings.
+      // Penalize software-emulated multiplication and division.
       return 64 * BaseT::getArithmeticInstrCost(Opcode, Ty, CostKind, Op1Info,
                                                 Op2Info);
     }
+  }
+
+  InstructionCost
+  getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy,
+                     CmpInst::Predicate Pred, TTI::TargetCostKind CostKind,
+                     const Instruction *I = nullptr) const override {
+    if (Opcode == Instruction::Select) {
+      // EZH supports conditional moves / predicated instruction execution.
+      return TTI::TCC_Basic;
+    }
+    if (Opcode == Instruction::ICmp && CmpInst::isSigned(Pred) && ValTy) {
+      unsigned BitWidth = ValTy->getScalarSizeInBits();
+      if (BitWidth > 16) {
+        // EZH lacks an ALU overflow flag; 32-bit and 64-bit signed comparisons
+        // expand into multi-instruction sequences checking borrow/sign flags.
+        return 2 * TTI::TCC_Basic;
+      }
+    }
+    return BaseT::getCmpSelInstrCost(Opcode, ValTy, CondTy, Pred, CostKind,
+                                     I);
   }
 };
 

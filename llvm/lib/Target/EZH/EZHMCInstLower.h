@@ -5,6 +5,19 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// Description:
+//   Declares EZHMCInstLower, responsible for lowering MachineInstr and
+//   MachineOperand objects into MCInst representations.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiMCInstLower.h).
+//
+// Changes:
+//   Renamed LanaiMCInstLower to EZHMCInstLower; declared lowering helper
+//   methods for EZH symbol operands and physical register operands.
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZHMCINSTLOWER_H
 #define LLVM_LIB_TARGET_EZH_EZHMCINSTLOWER_H

@@ -5,6 +5,19 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// Description:
+//   Implements basic block size and offset calculation utilities used by the
+//   EZH Constant Islands pass.
+//
+// Copied From:
+//   ARM target backend (llvm/lib/Target/ARM/ARMBasicBlockInfo.cpp).
+//
+// Changes:
+//   Updated instruction byte size calculations to account for EZH 32-bit
+//   instruction encodings and preceding condition codes.
+//
+//===----------------------------------------------------------------------===//
 
 #include "EZHBasicBlockInfo.h"
 #include "EZH.h"
@@ -19,77 +32,36 @@
 
 using namespace llvm;
 
-namespace llvm {
-
-// mayOptimizeThumb2Instruction - Returns true if optimizeThumb2Instructions
-// below may shrink MI.
-static bool mayOptimizeThumb2Instruction(const MachineInstr *MI) {
-  switch (MI->getOpcode()) {
-  // optimizeThumb2Instructions.
-  case EZH::t2LEApcrel:
-  case EZH::t2LDRpci:
-  // optimizeThumb2Branches.
-  case EZH::t2B:
-  case EZH::t2Bcc:
-  case EZH::tBcc:
-  // optimizeThumb2JumpTables.
-  case EZH::t2BR_JT:
-  case EZH::tBR_JTr:
-    return true;
-  }
-  return false;
-}
-
-void EZHBasicBlockUtils::computeBlockSize(MachineBasicBlock *MBB) {
-  LLVM_DEBUG(dbgs() << "computeBlockSize: " << MBB->getName() << "\n");
-  BasicBlockInfo &BBI = BBInfo[MBB->getNumber()];
+void llvm::EZHBasicBlockUtils::computeBlockSize(MachineBasicBlock *MBB) {
+  EZHBasicBlockInfo &BBI = BBInfo[MBB->getNumber()];
   BBI.Size = 0;
-  BBI.Unalign = 0;
   BBI.PostAlign = Align(1);
 
   for (MachineInstr &I : *MBB) {
     BBI.Size += TII->getInstSizeInBytes(I);
-    // For inline asm, getInstSizeInBytes returns a conservative estimate.
-    // The actual size may be smaller, but still a multiple of the instr size.
-    if (I.isInlineAsm())
-      BBI.Unalign = isThumb ? 1 : 2;
-    // Also consider instructions that may be shrunk later.
-    else if (isThumb && mayOptimizeThumb2Instruction(&I))
-      BBI.Unalign = 1;
-  }
-
-  // tBR_JTr contains a .align 2 directive.
-  if (!MBB->empty() && MBB->back().getOpcode() == EZH::tBR_JTr) {
-    BBI.PostAlign = Align(4);
-    MBB->getParent()->ensureAlignment(Align(4));
   }
 }
 
-/// getOffsetOf - Return the current offset of the specified machine instruction
-/// from the start of the function.  This offset changes as stuff is moved
-/// around inside the function.
-unsigned EZHBasicBlockUtils::getOffsetOf(MachineInstr *MI) const {
+unsigned llvm::EZHBasicBlockUtils::getOffsetOf(MachineInstr *MI) const {
   const MachineBasicBlock *MBB = MI->getParent();
-
-  // The offset is composed of two things: the sum of the sizes of all MBB's
-  // before this instruction's block, and the offset from the start of the block
-  // it is in.
   unsigned Offset = BBInfo[MBB->getNumber()].Offset;
 
-  // Sum instructions before MI in MBB.
-  for (MachineBasicBlock::const_iterator I = MBB->begin(); &*I != MI; ++I) {
-    assert(I != MBB->end() && "Didn't find MI in its own basic block?");
-    Offset += TII->getInstSizeInBytes(*I);
+  bool Found = false;
+  for (const MachineInstr &I : *MBB) {
+    if (&I == MI) {
+      Found = true;
+      break;
+    }
+    Offset += TII->getInstSizeInBytes(I);
   }
+  assert(Found && "Didn't find MI in its own basic block?");
   return Offset;
 }
 
-/// isBBInRange - Returns true if the distance between specific MI and
-/// specific BB can fit in MI's displacement field.
-bool EZHBasicBlockUtils::isBBInRange(MachineInstr *MI,
-                                     MachineBasicBlock *DestBB,
-                                     unsigned MaxDisp) const {
-  unsigned PCAdj = isThumb ? 4 : 8;
+bool llvm::EZHBasicBlockUtils::isBBInRange(MachineInstr *MI,
+                                           MachineBasicBlock *DestBB,
+                                           unsigned MaxDisp) const {
+  unsigned PCAdj = 4;
   unsigned BrOffset = getOffsetOf(MI) + PCAdj;
   unsigned DestOffset = BBInfo[DestBB->getNumber()].Offset;
 
@@ -99,18 +71,12 @@ bool EZHBasicBlockUtils::isBBInRange(MachineInstr *MI,
                     << " to " << DestOffset << " offset "
                     << int(DestOffset - BrOffset) << "\t" << *MI);
 
-  if (BrOffset <= DestOffset) {
-    // Branch before the Dest.
-    if (DestOffset - BrOffset <= MaxDisp)
-      return true;
-  } else {
-    if (BrOffset - DestOffset <= MaxDisp)
-      return true;
-  }
-  return false;
+  if (BrOffset <= DestOffset)
+    return (DestOffset - BrOffset) <= MaxDisp;
+  return (BrOffset - DestOffset) <= MaxDisp;
 }
 
-void EZHBasicBlockUtils::adjustBBOffsetsAfter(MachineBasicBlock *BB) {
+void llvm::EZHBasicBlockUtils::adjustBBOffsetsAfter(MachineBasicBlock *BB) {
   assert(BB->getParent() == &MF &&
          "Basic block is not a child of the current function.\n");
 
@@ -122,22 +88,12 @@ void EZHBasicBlockUtils::adjustBBOffsetsAfter(MachineBasicBlock *BB) {
                     << "   - blocks: " << MF.getNumBlockIDs() << "\n");
 
   for (unsigned i = BBNum + 1, e = MF.getNumBlockIDs(); i < e; ++i) {
-    // Get the offset and known bits at the end of the layout predecessor.
-    // Include the alignment of the current block.
     const Align Align = MF.getBlockNumbered(i)->getAlignment();
     const unsigned Offset = BBInfo[i - 1].postOffset(Align);
-    const unsigned KnownBits = BBInfo[i - 1].postKnownBits(Align);
 
-    // This is where block i begins.  Stop if the offset is already correct,
-    // and we have updated 2 blocks.  This is the maximum number of blocks
-    // changed before calling this function.
-    if (i > BBNum + 2 && BBInfo[i].Offset == Offset &&
-        BBInfo[i].KnownBits == KnownBits)
+    if (i > BBNum + 2 && BBInfo[i].Offset == Offset)
       break;
 
     BBInfo[i].Offset = Offset;
-    BBInfo[i].KnownBits = KnownBits;
   }
 }
-
-} // end namespace llvm

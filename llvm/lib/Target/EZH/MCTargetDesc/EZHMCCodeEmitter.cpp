@@ -8,297 +8,238 @@
 //
 // This file implements the EZHMCCodeEmitter class.
 //
+// Description:
+//   Implements EZHMCCodeEmitter, lowering MCInst structures into raw binary
+//   machine code stream bytes using TableGen encoding tables.
+//
+// Copied From:
+//   Lanai target backend
+//   (llvm/lib/Target/Lanai/MCTargetDesc/LanaiMCCodeEmitter.cpp).
+//
+// Changes:
+//   Integrated TableGen instruction encoding logic (getBinaryCodeForInstr);
+//   handled custom operand bit-packing for EZH registers and immediates.
+//
 //===----------------------------------------------------------------------===//
 
-#include "EZHAluCode.h"
 #include "MCTargetDesc/EZHBaseInfo.h"
 #include "MCTargetDesc/EZHFixupKinds.h"
-#include "MCTargetDesc/EZHMCAsmInfo.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/Statistic.h"
+#include "MCTargetDesc/EZHMCTargetDesc.h"
 #include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/Casting.h"
 #include "llvm/Support/EndianStream.h"
-#include <cassert>
-#include <cstdint>
+#include "llvm/Support/raw_ostream.h"
+
+using namespace llvm;
 
 #define DEBUG_TYPE "mccodeemitter"
 
-STATISTIC(MCNumEmitted, "Number of MC instructions emitted");
-
-namespace llvm {
-
 namespace {
-
 class EZHMCCodeEmitter : public MCCodeEmitter {
+  const MCInstrInfo &MCII;
+  MCContext &Ctx;
+
 public:
-  EZHMCCodeEmitter(const MCInstrInfo &MCII, MCContext &C) {}
-  EZHMCCodeEmitter(const EZHMCCodeEmitter &) = delete;
-  void operator=(const EZHMCCodeEmitter &) = delete;
+  EZHMCCodeEmitter(const MCInstrInfo &mcii, MCContext &ctx)
+      : MCII(mcii), Ctx(ctx) {}
+
   ~EZHMCCodeEmitter() override = default;
 
-  // The functions below are called by TableGen generated functions for getting
-  // the binary encoding of instructions/opereands.
-
-  // getBinaryCodeForInstr - TableGen'erated function for getting the
-  // binary encoding for an instruction.
-  uint64_t getBinaryCodeForInstr(const MCInst &Inst,
-                                 SmallVectorImpl<MCFixup> &Fixups,
-                                 const MCSubtargetInfo &SubtargetInfo) const;
-
-  // getMachineOpValue - Return binary encoding of operand. If the machine
-  // operand requires relocation, record the relocation and return zero.
-  unsigned getMachineOpValue(const MCInst &Inst, const MCOperand &MCOp,
-                             SmallVectorImpl<MCFixup> &Fixups,
-                             const MCSubtargetInfo &SubtargetInfo) const;
-
-  unsigned getRiMemoryOpValue(const MCInst &Inst, unsigned OpNo,
-                              SmallVectorImpl<MCFixup> &Fixups,
-                              const MCSubtargetInfo &SubtargetInfo) const;
-
-  unsigned getRrMemoryOpValue(const MCInst &Inst, unsigned OpNo,
-                              SmallVectorImpl<MCFixup> &Fixups,
-                              const MCSubtargetInfo &SubtargetInfo) const;
-
-  unsigned getSplsOpValue(const MCInst &Inst, unsigned OpNo,
-                          SmallVectorImpl<MCFixup> &Fixups,
-                          const MCSubtargetInfo &SubtargetInfo) const;
-
-  unsigned getBranchTargetOpValue(const MCInst &Inst, unsigned OpNo,
-                                  SmallVectorImpl<MCFixup> &Fixups,
-                                  const MCSubtargetInfo &SubtargetInfo) const;
-
-  void encodeInstruction(const MCInst &Inst, SmallVectorImpl<char> &CB,
+  void encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB,
                          SmallVectorImpl<MCFixup> &Fixups,
-                         const MCSubtargetInfo &SubtargetInfo) const override;
+                         const MCSubtargetInfo &STI) const override;
 
-  unsigned adjustPqBitsRmAndRrm(const MCInst &Inst, unsigned Value,
+  // getBinaryCodeForInstr - TableGen'erated function.
+  uint64_t getBinaryCodeForInstr(const MCInst &MI,
+                                 SmallVectorImpl<MCFixup> &Fixups,
+                                 const MCSubtargetInfo &STI) const;
+
+  // getMachineOpValue - Return binary encoding of operand.
+  unsigned getWordOffsetOpValue(const MCInst &MI, unsigned OpNo,
+                                SmallVectorImpl<MCFixup> &Fixups,
                                 const MCSubtargetInfo &STI) const;
 
-  unsigned adjustPqBitsSpls(const MCInst &Inst, unsigned Value,
-                            const MCSubtargetInfo &STI) const;
-};
+  unsigned getMachineOpValue(const MCInst &MI, const MCOperand &MO,
+                             SmallVectorImpl<MCFixup> &Fixups,
+                             const MCSubtargetInfo &STI) const;
 
+  unsigned getBranchTargetOpValue(const MCInst &MI, unsigned OpNo,
+                                  SmallVectorImpl<MCFixup> &Fixups,
+                                  const MCSubtargetInfo &STI) const;
+
+  unsigned getCallTargetOpValue(const MCInst &MI, unsigned OpNo,
+                                SmallVectorImpl<MCFixup> &Fixups,
+                                const MCSubtargetInfo &STI) const;
+
+  unsigned getPerAddrOpValue(const MCInst &MI, unsigned OpNo,
+                             SmallVectorImpl<MCFixup> &Fixups,
+                             const MCSubtargetInfo &STI) const;
+};
 } // end anonymous namespace
 
-static EZH::Fixups FixupKind(const MCExpr *Expr) {
-  if (isa<MCSymbolRefExpr>(Expr))
-    return EZH::FIXUP_EZH_21;
-  if (const MCSpecifierExpr *McExpr = dyn_cast<MCSpecifierExpr>(Expr)) {
-    EZH::Specifier ExprKind = McExpr->getSpecifier();
-    switch (ExprKind) {
-    case EZH::S_None:
-      return EZH::FIXUP_EZH_21;
-    case EZH::S_ABS_HI:
-      return EZH::FIXUP_EZH_HI16;
-    case EZH::S_ABS_LO:
-      return EZH::FIXUP_EZH_LO16;
-    }
-  }
-  return EZH::Fixups(0);
+void EZHMCCodeEmitter::encodeInstruction(const MCInst &MI,
+                                         SmallVectorImpl<char> &CB,
+                                         SmallVectorImpl<MCFixup> &Fixups,
+                                         const MCSubtargetInfo &STI) const {
+  uint64_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
+  support::endian::write<uint32_t>(CB, Bits, llvm::endianness::little);
 }
 
-// getMachineOpValue - Return binary encoding of operand. If the machine
-// operand requires relocation, record the relocation and return zero.
-unsigned EZHMCCodeEmitter::getMachineOpValue(
-    const MCInst &Inst, const MCOperand &MCOp, SmallVectorImpl<MCFixup> &Fixups,
-    const MCSubtargetInfo &SubtargetInfo) const {
-  if (MCOp.isReg())
-    return getEZHRegisterNumbering(MCOp.getReg());
-  if (MCOp.isImm())
-    return static_cast<unsigned>(MCOp.getImm());
-
-  // MCOp must be an expression
-  assert(MCOp.isExpr());
-  const MCExpr *Expr = MCOp.getExpr();
-
-  // Extract the symbolic reference side of a binary expression.
-  if (Expr->getKind() == MCExpr::Binary) {
-    const MCBinaryExpr *BinaryExpr = static_cast<const MCBinaryExpr *>(Expr);
-    Expr = BinaryExpr->getLHS();
+unsigned
+EZHMCCodeEmitter::getBranchTargetOpValue(const MCInst &MI, unsigned OpNo,
+                                         SmallVectorImpl<MCFixup> &Fixups,
+                                         const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isReg())
+    return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
+  if (MO.isImm()) {
+    uint32_t val = static_cast<uint32_t>(MO.getImm());
+    assert((val & 3) == 0 && "Branch target not 4-byte aligned!");
+    return val >> 2;
   }
 
-  assert(isa<MCSpecifierExpr>(Expr) || Expr->getKind() == MCExpr::SymbolRef);
-  // Push fixup (all info is contained within)
   Fixups.push_back(
-      MCFixup::create(0, MCOp.getExpr(), MCFixupKind(FixupKind(Expr))));
+      MCFixup::create(0, MO.getExpr(), MCFixupKind(EZH::FIXUP_EZH_21), false));
   return 0;
 }
 
-// Helper function to adjust P and Q bits on load and store instructions.
-static unsigned adjustPqBits(const MCInst &Inst, unsigned Value,
-                             unsigned PBitShift, unsigned QBitShift) {
-  const MCOperand AluOp = Inst.getOperand(3);
-  unsigned AluCode = AluOp.getImm();
-
-  // Set the P bit to one iff the immediate is nonzero and not a post-op
-  // instruction.
-  const MCOperand Op2 = Inst.getOperand(2);
-  Value &= ~(1 << PBitShift);
-  if (!LPAC::isPostOp(AluCode) &&
-      ((Op2.isImm() && Op2.getImm() != 0) ||
-       (Op2.isReg() && Op2.getReg() != EZH::R0) || (Op2.isExpr())))
-    Value |= (1 << PBitShift);
-
-  // Set the Q bit to one iff it is a post- or pre-op instruction.
-  assert(Inst.getOperand(0).isReg() && Inst.getOperand(1).isReg() &&
-         "Expected register operand.");
-  Value &= ~(1 << QBitShift);
-  if (LPAC::modifiesOp(AluCode) && ((Op2.isImm() && Op2.getImm() != 0) ||
-                                    (Op2.isReg() && Op2.getReg() != EZH::R0)))
-    Value |= (1 << QBitShift);
-
-  return Value;
-}
-
 unsigned
-EZHMCCodeEmitter::adjustPqBitsRmAndRrm(const MCInst &Inst, unsigned Value,
+EZHMCCodeEmitter::getCallTargetOpValue(const MCInst &MI, unsigned OpNo,
+                                       SmallVectorImpl<MCFixup> &Fixups,
                                        const MCSubtargetInfo &STI) const {
-  return adjustPqBits(Inst, Value, 17, 16);
-}
-
-unsigned EZHMCCodeEmitter::adjustPqBitsSpls(const MCInst &Inst, unsigned Value,
-                                            const MCSubtargetInfo &STI) const {
-  return adjustPqBits(Inst, Value, 11, 10);
-}
-
-void EZHMCCodeEmitter::encodeInstruction(
-    const MCInst &Inst, SmallVectorImpl<char> &CB,
-    SmallVectorImpl<MCFixup> &Fixups,
-    const MCSubtargetInfo &SubtargetInfo) const {
-  // Get instruction encoding and emit it
-  unsigned Value = getBinaryCodeForInstr(Inst, Fixups, SubtargetInfo);
-  ++MCNumEmitted; // Keep track of the number of emitted insns.
-
-  support::endian::write<uint32_t>(CB, Value, llvm::endianness::big);
-}
-
-// Encode EZH Memory Operand
-unsigned EZHMCCodeEmitter::getRiMemoryOpValue(
-    const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
-    const MCSubtargetInfo &SubtargetInfo) const {
-  unsigned Encoding;
-  const MCOperand Op1 = Inst.getOperand(OpNo + 0);
-  const MCOperand Op2 = Inst.getOperand(OpNo + 1);
-  const MCOperand AluOp = Inst.getOperand(OpNo + 2);
-
-  assert(Op1.isReg() && "First operand is not register.");
-  assert((Op2.isImm() || Op2.isExpr()) &&
-         "Second operand is neither an immediate nor an expression.");
-  assert((LPAC::getAluOp(AluOp.getImm()) == LPAC::ADD) &&
-         "Register immediate only supports addition operator");
-
-  Encoding = (getEZHRegisterNumbering(Op1.getReg()) << 18);
-  if (Op2.isImm()) {
-    assert(isInt<16>(Op2.getImm()) &&
-           "Constant value truncated (limited to 16-bit)");
-
-    Encoding |= (Op2.getImm() & 0xffff);
-    if (Op2.getImm() != 0) {
-      if (LPAC::isPreOp(AluOp.getImm()))
-        Encoding |= (0x3 << 16);
-      if (LPAC::isPostOp(AluOp.getImm()))
-        Encoding |= (0x1 << 16);
-    }
-  } else
-    getMachineOpValue(Inst, Op2, Fixups, SubtargetInfo);
-
-  return Encoding;
-}
-
-unsigned EZHMCCodeEmitter::getRrMemoryOpValue(
-    const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
-    const MCSubtargetInfo &SubtargetInfo) const {
-  unsigned Encoding;
-  const MCOperand Op1 = Inst.getOperand(OpNo + 0);
-  const MCOperand Op2 = Inst.getOperand(OpNo + 1);
-  const MCOperand AluMCOp = Inst.getOperand(OpNo + 2);
-
-  assert(Op1.isReg() && "First operand is not register.");
-  Encoding = (getEZHRegisterNumbering(Op1.getReg()) << 15);
-  assert(Op2.isReg() && "Second operand is not register.");
-  Encoding |= (getEZHRegisterNumbering(Op2.getReg()) << 10);
-
-  assert(AluMCOp.isImm() && "Third operator is not immediate.");
-  // Set BBB
-  unsigned AluOp = AluMCOp.getImm();
-  Encoding |= LPAC::encodeEZHAluCode(AluOp) << 5;
-  // Set P and Q
-  if (LPAC::isPreOp(AluOp))
-    Encoding |= (0x3 << 8);
-  if (LPAC::isPostOp(AluOp))
-    Encoding |= (0x1 << 8);
-  // Set JJJJ
-  switch (LPAC::getAluOp(AluOp)) {
-  case LPAC::SHL:
-  case LPAC::SRL:
-    Encoding |= 0x10;
-    break;
-  case LPAC::SRA:
-    Encoding |= 0x18;
-    break;
-  default:
-    break;
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isReg())
+    return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
+  if (MO.isImm()) {
+    uint32_t val = static_cast<uint32_t>(MO.getImm());
+    assert((val & 3) == 0 && "Call offset not 4-byte aligned!");
+    return val >> 2;
   }
 
-  return Encoding;
+  Fixups.push_back(
+      MCFixup::create(0, MO.getExpr(), MCFixupKind(EZH::FIXUP_EZH_30)));
+  return 0;
+}
+
+unsigned EZHMCCodeEmitter::getPerAddrOpValue(const MCInst &MI, unsigned OpNo,
+                                             SmallVectorImpl<MCFixup> &Fixups,
+                                             const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isImm()) {
+    uint64_t Imm = MO.getImm();
+
+    // If it is a full physical address (from assembler), convert to offset
+    if (Imm >= 0x40000000 && Imm <= 0x400FFFFF) {
+      Imm -= 0x40000000;
+    }
+
+    // Now Imm MUST be a valid 20-bit offset
+    // Must be 4-byte aligned
+    if ((Imm & 3) != 0) {
+      std::string Msg;
+      raw_string_ostream OS(Msg);
+      OS << "peripheral offset " << format_hex(Imm, 10)
+         << " is not 4-byte aligned!";
+      Ctx.reportError(MI.getLoc(), Msg);
+      return 0;
+    }
+    // Must be in safe offset range: [0, 0xFFFFF]
+    if (Imm > 0xFFFFF) {
+      std::string Msg;
+      raw_string_ostream OS(Msg);
+      OS << "peripheral offset " << format_hex(Imm, 10)
+         << " is out of range! EZH peripheral instructions "
+         << "can only target a 1 MB range!";
+      Ctx.reportError(MI.getLoc(), Msg);
+      return 0;
+    }
+    return static_cast<unsigned>(Imm);
+  }
+  return getMachineOpValue(MI, MO, Fixups, STI);
 }
 
 unsigned
-EZHMCCodeEmitter::getSplsOpValue(const MCInst &Inst, unsigned OpNo,
-                                 SmallVectorImpl<MCFixup> &Fixups,
-                                 const MCSubtargetInfo &SubtargetInfo) const {
-  unsigned Encoding;
-  const MCOperand Op1 = Inst.getOperand(OpNo + 0);
-  const MCOperand Op2 = Inst.getOperand(OpNo + 1);
-  const MCOperand AluOp = Inst.getOperand(OpNo + 2);
+EZHMCCodeEmitter::getWordOffsetOpValue(const MCInst &MI, unsigned OpNo,
+                                       SmallVectorImpl<MCFixup> &Fixups,
+                                       const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isImm()) {
+    uint32_t val = static_cast<uint32_t>(MO.getImm());
+    assert((val & 3) == 0 && "Word offset not 4-byte aligned!");
+    return val >> 2;
+  }
 
-  assert(Op1.isReg() && "First operand is not register.");
-  assert((Op2.isImm() || Op2.isExpr()) &&
-         "Second operand is neither an immediate nor an expression.");
-  assert((LPAC::getAluOp(AluOp.getImm()) == LPAC::ADD) &&
-         "Register immediate only supports addition operator");
+  if (MO.isExpr()) {
+    Fixups.push_back(MCFixup::create(
+        0, MO.getExpr(), MCFixupKind(EZH::FIXUP_EZH_8_PCREL), true));
+    return 0;
+  }
 
-  Encoding = (getEZHRegisterNumbering(Op1.getReg()) << 12);
-  if (Op2.isImm()) {
-    assert(isInt<10>(Op2.getImm()) &&
-           "Constant value truncated (limited to 10-bit)");
-
-    Encoding |= (Op2.getImm() & 0x3ff);
-    if (Op2.getImm() != 0) {
-      if (LPAC::isPreOp(AluOp.getImm()))
-        Encoding |= (0x3 << 10);
-      if (LPAC::isPostOp(AluOp.getImm()))
-        Encoding |= (0x1 << 10);
-    }
-  } else
-    getMachineOpValue(Inst, Op2, Fixups, SubtargetInfo);
-
-  return Encoding;
+  return getMachineOpValue(MI, MO, Fixups, STI);
 }
 
-unsigned EZHMCCodeEmitter::getBranchTargetOpValue(
-    const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
-    const MCSubtargetInfo &SubtargetInfo) const {
-  const MCOperand &MCOp = Inst.getOperand(OpNo);
-  if (MCOp.isReg() || MCOp.isImm())
-    return getMachineOpValue(Inst, MCOp, Fixups, SubtargetInfo);
+unsigned EZHMCCodeEmitter::getMachineOpValue(const MCInst &MI,
+                                             const MCOperand &MO,
+                                             SmallVectorImpl<MCFixup> &Fixups,
+                                             const MCSubtargetInfo &STI) const {
+  if (MO.isReg())
+    return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
+  if (MO.isImm()) {
+    int64_t Imm = MO.getImm();
+    unsigned Opc = MI.getOpcode();
 
-  Fixups.push_back(MCFixup::create(0, MCOp.getExpr(), EZH::FIXUP_EZH_25));
+    if (Opc == EZH::LOAD_IMM) {
+      if (!isInt<11>(Imm)) {
+        Ctx.reportError(MI.getLoc(),
+                        "immediate operand " + Twine(Imm) +
+                            " is out of range for e_load_imm (requires 11-bit "
+                            "signed immediate, -1024 to 1023)!");
+        return 0;
+      }
+    } else if (Opc == EZH::ADD_IMM || Opc == EZH::SUB_IMM) {
+      if (!isInt<12>(Imm)) {
+        Ctx.reportError(MI.getLoc(),
+                        "immediate operand " + Twine(Imm) +
+                            " is out of range for e_add/sub_imm (requires "
+                            "12-bit signed immediate, -2048 to 2047)!");
+        return 0;
+      }
+    } else if (Opc == EZH::LSL || Opc == EZH::LSR || Opc == EZH::ASR ||
+               Opc == EZH::ROR) {
+      if (!isUInt<5>(Imm)) {
+        Ctx.reportError(MI.getLoc(), "shift count immediate " + Twine(Imm) +
+                                         " is out of range (requires 5-bit "
+                                         "unsigned immediate, 0 to 31)!");
+        return 0;
+      }
+    }
+
+    return static_cast<unsigned>(Imm);
+  }
+
+  if (MO.isExpr()) {
+    unsigned Opc = MI.getOpcode();
+    unsigned FixupKind = EZH::FIXUP_EZH_32;
+    if (Opc == EZH::LOAD_SIMM)
+      FixupKind = EZH::FIXUP_EZH_11;
+    else if (Opc == EZH::OR_IMM)
+      FixupKind = EZH::FIXUP_EZH_12;
+
+    Fixups.push_back(MCFixup::create(0, MO.getExpr(), MCFixupKind(FixupKind)));
+    return 0;
+  }
 
   return 0;
+}
+
+MCCodeEmitter *llvm::createEZHMCCodeEmitter(const MCInstrInfo &MCII,
+                                            MCContext &Ctx) {
+  return new EZHMCCodeEmitter(MCII, Ctx);
 }
 
 #include "EZHGenMCCodeEmitter.inc"
-
-} // end namespace llvm
-
-llvm::MCCodeEmitter *llvm::createEZHMCCodeEmitter(const MCInstrInfo &InstrInfo,
-                                                  MCContext &context) {
-  return new EZHMCCodeEmitter(InstrInfo, context);
-}

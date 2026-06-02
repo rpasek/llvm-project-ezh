@@ -9,6 +9,13 @@
 // This file contains the entry points for global functions defined in the LLVM
 // EZH back-end.
 //
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/Lanai.h).
+//
+// Changes:
+//   Renamed Lanai target declarations to EZH; added declarations for custom
+//   EZH passes (ConstantIslands, BitSliceInjection).
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZH_H
@@ -25,21 +32,11 @@ class PassRegistry;
 // EZH-specific DAG, ready for instruction scheduling.
 FunctionPass *createEZHISelDag(EZHTargetMachine &TM);
 
-// createEZHDelaySlotFillerPass - This pass fills delay slots
-// with useful instructions or nop's
-FunctionPass *createEZHDelaySlotFillerPass(const EZHTargetMachine &TM);
-
-// createEZHMemAluCombinerPass - This pass combines loads/stores and
-// arithmetic operations.
-FunctionPass *createEZHMemAluCombinerPass();
-
-// createEZHSetflagAluCombinerPass - This pass combines SET_FLAG and ALU
-// operations.
-FunctionPass *createEZHSetflagAluCombinerPass();
+FunctionPass *createEZHConstantIslandPass();
+FunctionPass *createEZHBitSliceInjectionPass();
 
 void initializeEZHAsmPrinterPass(PassRegistry &);
 void initializeEZHDAGToDAGISelLegacyPass(PassRegistry &);
-void initializeEZHMemAluCombinerPass(PassRegistry &);
 
 } // namespace llvm
 

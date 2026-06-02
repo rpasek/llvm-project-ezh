@@ -5,6 +5,21 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// Description:
+//   Top-level TableGen target definition file defining processor models,
+//   subtarget features, and importing core register, instruction, and calling
+//   convention definitions.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/Lanai.td).
+//
+// Changes:
+//   Updated includes to EZHRegisterInfo.td, EZHInstrInfo.td, and
+//   EZHCallingConv.td; defined EZH target machine properties and
+//   subtarget features.
+//
+//===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
 // Target-independent interfaces which we are implementing
@@ -16,7 +31,6 @@ include "llvm/Target/Target.td"
 // Register File, Calling Conv, Instruction Descriptions
 //===----------------------------------------------------------------------===//
 
-include "EZHSchedule.td"
 include "EZHRegisterInfo.td"
 include "EZHCallingConv.td"
 include "EZHInstrInfo.td"
@@ -26,11 +40,18 @@ defm : RemapAllTargetPseudoPointerOperands<GPR>;
 def EZHInstrInfo : InstrInfo;
 
 //===----------------------------------------------------------------------===//
+// EZH Subtarget features.
+//===----------------------------------------------------------------------===//
+
+def FeatureBitSliceInterrupts : SubtargetFeature<"bitslice-interrupts", "HasBitSliceInterrupts", "true",
+                                                 "Enable EZH bitslice interrupt workaround (injection of gotol_bs before branches/calls)">;
+
+//===----------------------------------------------------------------------===//
 // EZH processors supported.
 //===----------------------------------------------------------------------===//
 
-def : ProcessorModel<"generic", EZHSchedModel, []>;
-def : ProcessorModel<"v11", EZHSchedModel, []>;
+def : ProcessorModel<"generic", NoSchedModel, [FeatureBitSliceInterrupts]>;
+def : ProcessorModel<"v11", NoSchedModel, [FeatureBitSliceInterrupts]>;
 
 def EZHInstPrinter : AsmWriter {
   string AsmWriterClassName  = "InstPrinter";

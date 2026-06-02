@@ -5,6 +5,20 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// Description:
+//   Enumerates EZH-specific relocation fixup kinds (e.g., PC-relative branch
+//   offsets, constant pool relocations).
+//
+// Copied From:
+//   Lanai target backend
+//   (llvm/lib/Target/Lanai/MCTargetDesc/LanaiFixupKinds.h).
+//
+// Changes:
+//   Defined fixup enumerations matching EZH immediate branch and load offset
+//   bit-widths.
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_MCTARGETDESC_EZHFIXUPKINDS_H
 #define LLVM_LIB_TARGET_EZH_MCTARGETDESC_EZHFIXUPKINDS_H
@@ -25,12 +39,12 @@ enum Fixups {
   // Results in R_EZH_NONE
   FIXUP_EZH_NONE = FirstTargetFixupKind,
 
-  FIXUP_EZH_21,   // 21-bit symbol relocation
-  FIXUP_EZH_21_F, // 21-bit symbol relocation, last two bits masked to 0
-  FIXUP_EZH_25,   // 25-bit branch targets
-  FIXUP_EZH_32,   // general 32-bit relocation
-  FIXUP_EZH_HI16, // upper 16-bits of a symbolic relocation
-  FIXUP_EZH_LO16, // lower 16-bits of a symbolic relocation
+  FIXUP_EZH_11,      // 11-bit immediate relocation for load_simm instructions
+  FIXUP_EZH_12,      // 12-bit immediate relocation for immediate ALU instructions
+  FIXUP_EZH_21,      // 21-bit symbol relocation for goto and call instructions
+  FIXUP_EZH_30,      // 30-bit word relocation for gosub instructions
+  FIXUP_EZH_32,      // general 32-bit relocation for data references and pointer literals
+  FIXUP_EZH_8_PCREL, // 8-bit PC-relative word offset
 
   // Marker
   LastTargetFixupKind,
