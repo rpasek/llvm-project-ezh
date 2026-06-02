@@ -1,0 +1,22 @@
+
+#ifndef ELF_RELOC
+#error "ELF_RELOC must be defined"
+#endif
+
+// No relocation adjustment; used as a placeholder or alignment marker.
+ELF_RELOC(R_EZH_NONE,        0)
+// 11-bit immediate relocation; patches symbol addresses into load_simm
+// instructions.
+ELF_RELOC(R_EZH_11,          1)
+// 12-bit immediate relocation; patches symbol addresses into immediate ALU
+// instructions.
+ELF_RELOC(R_EZH_12,          2)
+// 21-bit symbol relocation; patches word-aligned branch targets into goto
+// instructions.
+ELF_RELOC(R_EZH_21,          3)
+// 30-bit word relocation; patches absolute word branch targets into gosub
+// instructions.
+ELF_RELOC(R_EZH_30,          4)
+// General 32-bit absolute relocation; patches absolute addresses for data
+// references and pointer literals.
+ELF_RELOC(R_EZH_32,          5)

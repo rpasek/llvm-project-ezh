@@ -8,29 +8,26 @@
 //
 // This file implements the EZHSelectionDAGInfo class.
 //
+// Description:
+//   Implements target hooks for SelectionDAG memory routines.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiSelectionDAGInfo.cpp).
+//
+// Changes:
+//   Minimal implementation stub adapted for EZH memory characteristics.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZHSelectionDAGInfo.h"
-
-#define GET_SDNODE_DESC
-#include "EZHGenSDNodeInfo.inc"
+#include "EZHISelLowering.h"
 
 #define DEBUG_TYPE "ezh-selectiondag-info"
 
 using namespace llvm;
 
-EZHSelectionDAGInfo::EZHSelectionDAGInfo()
-    : SelectionDAGGenTargetInfo(EZHGenSDNodeInfo) {}
+EZHSelectionDAGInfo::EZHSelectionDAGInfo() : SelectionDAGTargetInfo() {}
 
-SDValue EZHSelectionDAGInfo::EmitTargetCodeForMemcpy(
-    SelectionDAG & /*DAG*/, const SDLoc & /*dl*/, SDValue /*Chain*/,
-    SDValue /*Dst*/, SDValue /*Src*/, SDValue Size, Align /*DstAlign*/,
-    Align /*SrcAlign*/, bool /*isVolatile*/, bool /*AlwaysInline*/,
-    MachinePointerInfo /*DstPtrInfo*/,
-    MachinePointerInfo /*SrcPtrInfo*/) const {
-  ConstantSDNode *ConstantSize = dyn_cast<ConstantSDNode>(Size);
-  if (!ConstantSize)
-    return SDValue();
-
-  return SDValue();
+bool EZHSelectionDAGInfo::isTargetMemoryOpcode(unsigned Opcode) const {
+  return Opcode == EZHISD::PER_READ || Opcode == EZHISD::PER_WRITE;
 }

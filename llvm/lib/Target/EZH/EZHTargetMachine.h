@@ -8,6 +8,16 @@
 //
 // This file declares the EZH specific subclass of TargetMachine.
 //
+// Description:
+//   Declares EZHTargetMachine, the primary target machine implementation for
+//   the EZH (SmartDMA) architecture.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiTargetMachine.h).
+//
+// Changes:
+//   Renamed LanaiTargetMachine to EZHTargetMachine
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZHTARGETMACHINE_H

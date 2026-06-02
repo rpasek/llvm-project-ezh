@@ -6,38 +6,61 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Implements the info about EZH target spec.
+// Description:
+//   Implements target machine setup, subtarget creation, and the EZH CodeGen
+//   pass pipeline.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiTargetMachine.cpp).
+//
+// Changes:
+//   Configured custom pass pipeline adding EZHBitSliceInjection
+//   and EZHConstantIslandPass; set default relocation model
+//   and optimization levels for EZH.
 //
 //===----------------------------------------------------------------------===//
 
 #include "EZHTargetMachine.h"
-
 #include "EZH.h"
 #include "EZHMachineFunctionInfo.h"
-#include "EZHTargetObjectFile.h"
-#include "EZHTargetTransformInfo.h"
 #include "TargetInfo/EZHTargetInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/Compiler.h"
-#include "llvm/Target/TargetOptions.h"
 #include <optional>
 
 using namespace llvm;
 
+namespace {
+class EZHTTIImpl : public BasicTTIImplBase<EZHTTIImpl> {
+  using BaseT = BasicTTIImplBase<EZHTTIImpl>;
+  using TTI = TargetTransformInfo;
+  friend BaseT;
+  friend TargetTransformInfoImplBase;
+
+  const EZHSubtarget *ST;
+  const EZHTargetLowering *TLI;
+
+  const EZHSubtarget *getST() const { return ST; }
+  const EZHTargetLowering *getTLI() const { return TLI; }
+
+public:
+  explicit EZHTTIImpl(const EZHTargetMachine *TM, const Function &F)
+      : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
+        TLI(ST->getTargetLowering()) {}
+};
+} // namespace
+
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeEZHTarget() {
   // Register the target.
   RegisterTargetMachine<EZHTargetMachine> registered_target(getTheEZHTarget());
-  PassRegistry &PR = *PassRegistry::getPassRegistry();
-  initializeEZHAsmPrinterPass(PR);
-  initializeEZHDAGToDAGISelLegacyPass(PR);
-  initializeEZHMemAluCombinerPass(PR);
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
-  return RM.value_or(Reloc::PIC_);
+  return Reloc::Static;
 }
 
 EZHTargetMachine::EZHTargetMachine(const Target &T, const Triple &TT,
@@ -52,7 +75,7 @@ EZHTargetMachine::EZHTargetMachine(const Target &T, const Triple &TT,
           getEffectiveCodeModel(CodeModel, CodeModel::Medium), OptLevel),
       Subtarget(TT, Cpu, FeatureString, *this, Options, getCodeModel(),
                 OptLevel),
-      TLOF(new EZHTargetObjectFile()) {
+      TLOF(std::make_unique<TargetLoweringObjectFileELF>()) {
   initAsmInfo();
 }
 
@@ -79,10 +102,9 @@ public:
     return getTM<EZHTargetMachine>();
   }
 
-  void addIRPasses() override;
   bool addInstSelector() override;
   void addPreSched2() override;
-  void addPreEmitPass() override;
+  void addPreEmitPass2() override;
 };
 } // namespace
 
@@ -91,24 +113,18 @@ EZHTargetMachine::createPassConfig(PassManagerBase &PassManager) {
   return new EZHPassConfig(*this, &PassManager);
 }
 
-void EZHPassConfig::addIRPasses() {
-  addPass(createAtomicExpandLegacyPass());
-
-  TargetPassConfig::addIRPasses();
-}
-
 // Install an instruction selector pass.
 bool EZHPassConfig::addInstSelector() {
   addPass(createEZHISelDag(getEZHTargetMachine()));
   return false;
 }
 
-// Implemented by targets that want to run passes immediately before
-// machine code is emitted.
-void EZHPassConfig::addPreEmitPass() {
-  addPass(createEZHDelaySlotFillerPass(getEZHTargetMachine()));
+void EZHPassConfig::addPreSched2() {
+  if (getOptLevel() != CodeGenOptLevel::None)
+    addPass(&IfConverterID);
 }
 
-// Run passes after prolog-epilog insertion and before the second instruction
-// scheduling pass.
-void EZHPassConfig::addPreSched2() { addPass(createEZHMemAluCombinerPass()); }
+void EZHPassConfig::addPreEmitPass2() {
+  addPass(createEZHBitSliceInjectionPass());
+  addPass(createEZHConstantIslandPass());
+}

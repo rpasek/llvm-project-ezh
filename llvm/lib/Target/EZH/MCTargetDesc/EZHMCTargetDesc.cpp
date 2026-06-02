@@ -8,6 +8,18 @@
 //
 // This file provides EZH specific target descriptions.
 //
+// Description:
+//   Implements MC target initialization and registers MC layer components
+//   (MCAsmInfo, MCInstrInfo, MCRegisterInfo, MCSubtargetInfo) for EZH.
+//
+// Copied From:
+//   Lanai target backend
+//   (llvm/lib/Target/Lanai/MCTargetDesc/LanaiMCTargetDesc.cpp).
+//
+// Changes:
+//   Registered EZH 32-bit target architecture; bound EZH assembly parser,
+//   disassembler, code emitter, and asm backend factories.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZHMCTargetDesc.h"
@@ -15,6 +27,7 @@
 #include "EZHMCAsmInfo.h"
 #include "TargetInfo/EZHTargetInfo.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -48,16 +61,13 @@ static MCInstrInfo *createEZHMCInstrInfo() {
 
 static MCRegisterInfo *createEZHMCRegisterInfo(const Triple & /*TT*/) {
   MCRegisterInfo *X = new MCRegisterInfo();
-  InitEZHMCRegisterInfo(X, EZH::RCA, 0, 0, EZH::PC);
+  InitEZHMCRegisterInfo(X, EZH::RA, 0, 0, EZH::PC);
   return X;
 }
 
 static MCSubtargetInfo *createEZHMCSubtargetInfo(const Triple &TT,
                                                  StringRef CPU, StringRef FS) {
-  std::string CPUName = std::string(CPU);
-  if (CPUName.empty())
-    CPUName = "generic";
-
+  StringRef CPUName = CPU.empty() ? "generic" : CPU;
   return createEZHMCSubtargetInfoImpl(TT, CPUName, /*TuneCPU*/ CPUName, FS);
 }
 
@@ -67,6 +77,8 @@ static MCStreamer *createMCStreamer(const Triple &T, MCContext &Context,
                                     std::unique_ptr<MCCodeEmitter> &&Emitter) {
   if (!T.isOSBinFormatELF())
     llvm_unreachable("OS not supported");
+
+  Context.setUseNamesOnTempLabels(true);
 
   return createELFStreamer(Context, std::move(MAB), std::move(OW),
                            std::move(Emitter));
@@ -104,10 +116,14 @@ public:
 
     if (Info->get(Inst.getOpcode()).operands()[0].OperandType ==
         MCOI::OPERAND_PCREL) {
+      if (!Inst.getOperand(0).isImm())
+        return false;
       int64_t Imm = Inst.getOperand(0).getImm();
       Target = Addr + Size + Imm;
       return true;
     } else {
+      if (!Inst.getOperand(0).isImm())
+        return false;
       int64_t Imm = Inst.getOperand(0).getImm();
 
       // Skip case where immediate is 0 as that occurs in file that isn't linked

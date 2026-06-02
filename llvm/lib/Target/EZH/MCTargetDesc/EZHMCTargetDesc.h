@@ -8,6 +8,17 @@
 //
 // This file provides EZH specific target descriptions.
 //
+// Description:
+//   Declares MC layer registration factory functions (createEZHMCAsmInfo,
+//   createEZHMCInstrInfo, etc.) and target descriptors.
+//
+// Copied From:
+//   Lanai target backend
+//   (llvm/lib/Target/Lanai/MCTargetDesc/LanaiMCTargetDesc.h).
+//
+// Changes:
+//   Renamed Lanai MC factory functions to EZH.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_MCTARGETDESC_EZHMCTARGETDESC_H

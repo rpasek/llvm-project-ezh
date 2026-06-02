@@ -8,11 +8,21 @@
 //
 // This file contains the declarations of the EZHMCAsmInfo properties.
 //
+// Description:
+//   Implements EZHMCAsmInfo, configuring assembly comment strings (// or #),
+//   code alignment, and directive names.
+//
+// Copied From:
+//   Lanai target backend
+//   (llvm/lib/Target/Lanai/MCTargetDesc/LanaiMCAsmInfo.cpp).
+//
+// Changes:
+//   Configured assembly syntax options for EZH assembler output.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZHMCAsmInfo.h"
-#include "llvm/MC/MCExpr.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/MC/MCDwarf.h"
 #include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
@@ -22,44 +32,23 @@ void EZHMCAsmInfo::anchor() {}
 EZHMCAsmInfo::EZHMCAsmInfo(const Triple & /*TheTriple*/,
                            const MCTargetOptions &Options)
     : MCAsmInfoELF(Options) {
-  IsLittleEndian = false;
+  IsLittleEndian = true;
   InternalSymbolPrefix = ".L";
   WeakRefDirective = "\t.weak\t";
-  ExceptionsType = ExceptionHandling::DwarfCFI;
+  ExceptionsType = ExceptionHandling::SjLj;
 
   // EZH assembly requires ".section" before ".bss"
   UsesELFSectionDirectiveForBSS = true;
 
-  // Use '!' as comment string to correspond with old toolchain.
-  CommentString = "!";
+  // Use ';' as comment string.
+  CommentString = ";";
 
   // Target supports emission of debugging information.
   SupportsDebugInformation = true;
 
-  // Set the instruction alignment. Currently used only for address adjustment
-  // in dwarf generation.
+  // Set the instruction alignment.
   MinInstAlignment = 4;
-}
 
-void EZHMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
-                                      const MCSpecifierExpr &Expr) const {
-  if (Expr.getSpecifier() == 0) {
-    printExpr(OS, *Expr.getSubExpr());
-    return;
-  }
-
-  switch (Expr.getSpecifier()) {
-  default:
-    llvm_unreachable("Invalid kind!");
-  case EZH::S_ABS_HI:
-    OS << "hi";
-    break;
-  case EZH::S_ABS_LO:
-    OS << "lo";
-    break;
-  }
-
-  OS << '(';
-  printExpr(OS, *Expr.getSubExpr());
-  OS << ')';
+  // DWARF initial frame state: CFA = SP (reg 12) + 0
+  addInitialFrameState(MCCFIInstruction::cfiDefCfa(nullptr, 12, 0));
 }

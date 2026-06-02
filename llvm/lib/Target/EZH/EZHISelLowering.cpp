@@ -8,65 +8,49 @@
 //
 // This file implements the EZHTargetLowering class.
 //
+// Description:
+//   Implements SelectionDAG operation legalization, calling convention
+//   lowering (LowerFormalArguments, LowerCall, LowerReturn), and custom DAG
+//   node lowering.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiISelLowering.cpp).
+//
+// Changes:
+//   Implemented custom lowering for 32/64-bit signed comparisons handling
+//   EZH's lack of an ALU overflow flag; enforced 8-bit and 32-bit load/store
+//   restrictions; implemented calling conventions passing arguments in GPRs.
+//
 //===----------------------------------------------------------------------===//
 
 #include "EZHISelLowering.h"
 #include "EZHCondCode.h"
+#include "EZHConstantPoolValue.h"
 #include "EZHMachineFunctionInfo.h"
 #include "EZHSubtarget.h"
-#include "EZHTargetObjectFile.h"
 #include "MCTargetDesc/EZHBaseInfo.h"
-#include "llvm/ADT/APInt.h"
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
-#include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/TargetCallingConv.h"
-#include "llvm/CodeGen/ValueTypes.h"
-#include "llvm/CodeGenTypes/MachineValueType.h"
-#include "llvm/IR/CallingConv.h"
-#include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/GlobalValue.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetMachine.h"
-#include <cassert>
-#include <cmath>
-#include <cstdint>
-#include <cstdlib>
-#include <utility>
 
-#define DEBUG_TYPE "ezh-lower"
+#define GET_SDNODE_DESC
+#include "EZHGenSDNodeInfo.inc"
+#undef GET_SDNODE_DESC
 
 using namespace llvm;
 
-// Limit on number of instructions the lowered multiplication may have before a
-// call to the library function should be generated instead. The threshold is
-// currently set to 14 as this was the smallest threshold that resulted in all
-// constant multiplications being lowered. A threshold of 5 covered all cases
-// except for one multiplication which required 14. mulsi3 requires 16
-// instructions (including the prologue and epilogue but excluding instructions
-// at call site). Until we can inline mulsi3, generating at most 14 instructions
-// will be faster than invoking mulsi3.
-static cl::opt<int> EZHLowerConstantMulThreshold(
-    "ezh-constant-mul-threshold", cl::Hidden,
-    cl::desc("Maximum number of instruction to generate when lowering constant "
-             "multiplication instead of calling library function [default=14]"),
-    cl::init(14));
+#define DEBUG_TYPE "ezh-lower"
 
 EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
                                      const EZHSubtarget &STI)
@@ -75,19 +59,24 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   addRegisterClass(MVT::i32, &EZH::GPRRegClass);
 
   // Compute derived properties from the register classes
-  TRI = STI.getRegisterInfo();
-  computeRegisterProperties(TRI);
-
+  computeRegisterProperties(STI.getRegisterInfo());
   setStackPointerRegisterToSaveRestore(EZH::SP);
 
+  setOperationAction(ISD::LOAD, MVT::i64, Expand);
+  setOperationAction(ISD::STORE, MVT::i64, Expand);
+
   setOperationAction(ISD::BR_CC, MVT::i32, Custom);
-  setOperationAction(ISD::BR_JT, MVT::Other, Expand);
+  setOperationAction(ISD::BR_CC, MVT::Other, Custom);
+  setOperationAction(ISD::BR_JT, MVT::Other, Custom);
   setOperationAction(ISD::BRCOND, MVT::Other, Expand);
-  setOperationAction(ISD::SETCC, MVT::i32, Custom);
+  setOperationAction(ISD::SETCC, MVT::i32, Expand);
   setOperationAction(ISD::SELECT, MVT::i32, Expand);
   setOperationAction(ISD::SELECT_CC, MVT::i32, Custom);
 
+  setOperationAction(ISD::Constant, MVT::i32, Custom);
   setOperationAction(ISD::GlobalAddress, MVT::i32, Custom);
+  setOperationAction(ISD::GlobalTLSAddress, MVT::i32, Custom);
+  setOperationAction(ISD::ExternalSymbol, MVT::i32, Custom);
   setOperationAction(ISD::BlockAddress, MVT::i32, Custom);
   setOperationAction(ISD::JumpTable, MVT::i32, Custom);
   setOperationAction(ISD::ConstantPool, MVT::i32, Custom);
@@ -95,83 +84,283 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Custom);
   setOperationAction(ISD::STACKSAVE, MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE, MVT::Other, Expand);
+  setOperationAction(ISD::FRAMEADDR, MVT::i32, Custom);
+  setOperationAction(ISD::EH_SJLJ_SETJMP, MVT::i32, Custom);
+  setOperationAction(ISD::EH_SJLJ_LONGJMP, MVT::Other, Custom);
+  setOperationAction(ISD::EH_SJLJ_SETUP_DISPATCH, MVT::Other, Custom);
 
   setOperationAction(ISD::VASTART, MVT::Other, Custom);
-  setOperationAction(ISD::VAARG, MVT::Other, Expand);
+  setOperationAction(ISD::VAARG, MVT::Other, Custom);
   setOperationAction(ISD::VACOPY, MVT::Other, Expand);
   setOperationAction(ISD::VAEND, MVT::Other, Expand);
 
-  setOperationAction(ISD::SDIV, MVT::i32, Expand);
-  setOperationAction(ISD::UDIV, MVT::i32, Expand);
+  setOperationAction(ISD::SDIV, MVT::i32, LibCall);
+  setOperationAction(ISD::UDIV, MVT::i32, LibCall);
   setOperationAction(ISD::SDIVREM, MVT::i32, Expand);
   setOperationAction(ISD::UDIVREM, MVT::i32, Expand);
-  setOperationAction(ISD::SREM, MVT::i32, Expand);
-  setOperationAction(ISD::UREM, MVT::i32, Expand);
+  setOperationAction(ISD::SREM, MVT::i32, LibCall);
+  setOperationAction(ISD::UREM, MVT::i32, LibCall);
 
-  setOperationAction(ISD::MUL, MVT::i32, Custom);
+  setOperationAction(ISD::MUL, MVT::i32, LibCall);
   setOperationAction(ISD::MULHU, MVT::i32, Expand);
   setOperationAction(ISD::MULHS, MVT::i32, Expand);
   setOperationAction(ISD::UMUL_LOHI, MVT::i32, Expand);
   setOperationAction(ISD::SMUL_LOHI, MVT::i32, Expand);
 
-  setOperationAction(ISD::ROTR, MVT::i32, Expand);
+  setOperationAction(ISD::ROTR, MVT::i32, Legal);
   setOperationAction(ISD::ROTL, MVT::i32, Expand);
-  setOperationAction(ISD::SHL_PARTS, MVT::i32, Custom);
-  setOperationAction(ISD::SRL_PARTS, MVT::i32, Custom);
+  setOperationAction(ISD::SHL, MVT::i32, Custom);
+  setOperationAction(ISD::SRL, MVT::i32, Custom);
+  setOperationAction(ISD::SRA, MVT::i32, Custom);
+  setOperationAction(ISD::SHL_PARTS, MVT::i32, Expand);
+  setOperationAction(ISD::SRL_PARTS, MVT::i32, Expand);
   setOperationAction(ISD::SRA_PARTS, MVT::i32, Expand);
 
-  setOperationAction(ISD::BSWAP, MVT::i32, Expand);
-  setOperationAction(ISD::CTPOP, MVT::i32, Legal);
-  setOperationAction(ISD::CTLZ, MVT::i32, Legal);
-  setOperationAction(ISD::CTTZ, MVT::i32, Legal);
+  setOperationAction(ISD::BSWAP, MVT::i32, Legal);
+  setOperationAction(ISD::BITREVERSE, MVT::i32, Legal);
+  setOperationAction(ISD::CTPOP, MVT::i32, LibCall);
+
+  setOperationAction(ISD::CTLZ, MVT::i32, Custom);
+  setOperationAction(ISD::CTLZ, MVT::i16, Custom);
+  setOperationAction(ISD::CTLZ, MVT::i8, Custom);
+  setOperationAction(ISD::CTLZ_ZERO_POISON, MVT::i32, Custom);
+  setOperationAction(ISD::CTLZ_ZERO_POISON, MVT::i16, Custom);
+  setOperationAction(ISD::CTLZ_ZERO_POISON, MVT::i8, Custom);
+  setOperationAction(ISD::CTLZ, MVT::i64, Expand);
+  setOperationAction(ISD::CTLZ_ZERO_POISON, MVT::i64, Expand);
+
+  setOperationAction(ISD::CTTZ, MVT::i32, Expand);
+  setOperationAction(ISD::CTTZ_ZERO_POISON, MVT::i32, Expand);
 
   setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i1, Expand);
   setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i8, Expand);
   setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i16, Expand);
 
-  // Extended load operations for i1 types must be promoted
-  for (MVT VT : MVT::integer_valuetypes()) {
-    setLoadExtAction(ISD::EXTLOAD, VT, MVT::i1, Promote);
-    setLoadExtAction(ISD::ZEXTLOAD, VT, MVT::i1, Promote);
-    setLoadExtAction(ISD::SEXTLOAD, VT, MVT::i1, Promote);
+  setOperationAction(ISD::INTRINSIC_WO_CHAIN, MVT::Other, Custom);
+
+  setOperationAction(ISD::LOAD, MVT::i16, Custom);
+  setOperationAction(ISD::STORE, MVT::i16, Custom);
+  setOperationAction(ISD::LOAD, MVT::i8, Legal);
+  setOperationAction(ISD::STORE, MVT::i8, Legal);
+  setOperationAction(ISD::LOAD, MVT::i32, Custom);
+  setOperationAction(ISD::STORE, MVT::i32, Custom);
+
+  setLoadExtAction(ISD::EXTLOAD, MVT::i32, MVT::i16, Custom);
+  setLoadExtAction(ISD::ZEXTLOAD, MVT::i32, MVT::i16, Custom);
+  setLoadExtAction(ISD::SEXTLOAD, MVT::i32, MVT::i16, Custom);
+  setLoadExtAction(ISD::EXTLOAD, MVT::i32, MVT::i8, Legal);
+  setLoadExtAction(ISD::ZEXTLOAD, MVT::i32, MVT::i8, Legal);
+  setLoadExtAction(ISD::SEXTLOAD, MVT::i32, MVT::i8, Legal);
+  setTruncStoreAction(MVT::i32, MVT::i16, Custom);
+  setTruncStoreAction(MVT::i32, MVT::i8, Legal);
+
+  for (MVT VT : {MVT::i32, MVT::i8}) {
+    setIndexedLoadAction(ISD::POST_INC, VT, Legal);
+    setIndexedLoadAction(ISD::PRE_INC, VT, Legal);
+    setIndexedLoadAction(ISD::POST_DEC, VT, Legal);
+    setIndexedLoadAction(ISD::PRE_DEC, VT, Legal);
+    setIndexedStoreAction(ISD::POST_INC, VT, Legal);
+    setIndexedStoreAction(ISD::PRE_INC, VT, Legal);
+    setIndexedStoreAction(ISD::POST_DEC, VT, Legal);
+    setIndexedStoreAction(ISD::PRE_DEC, VT, Legal);
   }
 
-  setTargetDAGCombine({ISD::ADD, ISD::SUB, ISD::AND, ISD::OR, ISD::XOR});
+  setLibcallImpl(RTLIB::SDIV_I32, RTLIB::impl___divsi3);
+  setLibcallImpl(RTLIB::UDIV_I32, RTLIB::impl___udivsi3);
+  setLibcallImpl(RTLIB::SREM_I32, RTLIB::impl___modsi3);
+  setLibcallImpl(RTLIB::UREM_I32, RTLIB::impl___umodsi3);
+  setLibcallImpl(RTLIB::SDIVREM_I32, RTLIB::impl___divmodsi4);
+  setLibcallImpl(RTLIB::UDIVREM_I32, RTLIB::impl___udivmodsi4);
+  setLibcallImpl(RTLIB::MUL_I32, RTLIB::impl___mulsi3);
+  setLibcallImpl(RTLIB::SHL_I32, RTLIB::impl___ashlsi3);
+  setLibcallImpl(RTLIB::SRL_I32, RTLIB::impl___lshrsi3);
+  setLibcallImpl(RTLIB::SRA_I32, RTLIB::impl___ashrsi3);
 
-  // Function alignments
-  setMinFunctionAlignment(Align(4));
-  setPrefFunctionAlignment(Align(4));
+  setLibcallImpl(RTLIB::SDIV_I64, RTLIB::impl___divdi3);
+  setLibcallImpl(RTLIB::UDIV_I64, RTLIB::impl___udivdi3);
+  setLibcallImpl(RTLIB::SREM_I64, RTLIB::impl___moddi3);
+  setLibcallImpl(RTLIB::UREM_I64, RTLIB::impl___umoddi3);
+  setLibcallImpl(RTLIB::MUL_I64, RTLIB::impl___muldi3);
+  setLibcallImpl(RTLIB::SHL_I64, RTLIB::impl___ashldi3);
+  setLibcallImpl(RTLIB::SRL_I64, RTLIB::impl___lshrdi3);
+  setLibcallImpl(RTLIB::SRA_I64, RTLIB::impl___ashrdi3);
 
-  setJumpIsExpensive(true);
+  for (auto VT : {MVT::i8, MVT::i16}) {
+    setOperationAction(ISD::MUL, VT, Promote);
+    setOperationAction(ISD::SDIV, VT, Promote);
+    setOperationAction(ISD::UDIV, VT, Promote);
+    setOperationAction(ISD::SREM, VT, Promote);
+    setOperationAction(ISD::UREM, VT, Promote);
+    setOperationAction(ISD::SHL, VT, Promote);
+    setOperationAction(ISD::SRL, VT, Promote);
+    setOperationAction(ISD::SRA, VT, Promote);
+    setOperationAction(ISD::ROTL, VT, Promote);
+    setOperationAction(ISD::ROTR, VT, Promote);
+    setOperationAction(ISD::SETCC, VT, Promote);
+    setOperationAction(ISD::SELECT_CC, VT, Promote);
+    setOperationAction(ISD::ADD, VT, Promote);
+    setOperationAction(ISD::SUB, VT, Promote);
+    setOperationAction(ISD::AND, VT, Promote);
+    setOperationAction(ISD::OR, VT, Promote);
+    setOperationAction(ISD::XOR, VT, Promote);
+  }
 
-  // TODO: Setting the minimum jump table entries needed before a
-  // switch is transformed to a jump table to 100 to avoid creating jump tables
-  // as this was causing bad performance compared to a large group of if
-  // statements. Re-evaluate this on new benchmarks.
-  setMinimumJumpTableEntries(100);
+  setOperationAction(ISD::BUILD_PAIR, MVT::i64, Expand);
+  setOperationAction(ISD::EXTRACT_ELEMENT, MVT::i32, Expand);
 
-  MaxStoresPerMemset = 16; // For @llvm.memset -> sequence of stores
-  MaxStoresPerMemsetOptSize = 8;
-  MaxStoresPerMemcpy = 16; // For @llvm.memcpy -> sequence of stores
-  MaxStoresPerMemcpyOptSize = 8;
-  MaxStoresPerMemmove = 16; // For @llvm.memmove -> sequence of stores
-  MaxStoresPerMemmoveOptSize = 8;
+  // Mirror ARM soft-float architecture
+  // We recursively register all basic float and double mathematical and casting
+  // operations as strictly 'Expand' for both MVT::f32 and MVT::f64 to ensure
+  // 100% EABI soft-float parity.
+  for (auto VT : {MVT::f32, MVT::f64}) {
+    setOperationAction(ISD::SINT_TO_FP, VT, Expand);
+    setOperationAction(ISD::UINT_TO_FP, VT, Expand);
+    setOperationAction(ISD::FP_TO_SINT, VT, Expand);
+    setOperationAction(ISD::FP_TO_UINT, VT, Expand);
 
-  // Booleans always contain 0 or 1.
-  setBooleanContents(ZeroOrOneBooleanContent);
+    setOperationAction(ISD::FADD, VT, Expand);
+    setOperationAction(ISD::FSUB, VT, Expand);
+    setOperationAction(ISD::FMUL, VT, Expand);
+    setOperationAction(ISD::FDIV, VT, Expand);
+    setOperationAction(ISD::FREM, VT, Expand);
+    setOperationAction(ISD::FCOPYSIGN, VT, Expand);
+    setOperationAction(ISD::FNEG, VT, Expand);
+    setOperationAction(ISD::FMA, VT, Expand);
+    setOperationAction(ISD::FSQRT, VT, Expand);
+    setOperationAction(ISD::FPOW, VT, Expand);
+    setOperationAction(ISD::FPOWI, VT, Expand);
+    setOperationAction(ISD::FSIN, VT, Expand);
+    setOperationAction(ISD::FCOS, VT, Expand);
+    setOperationAction(ISD::FLOG, VT, Expand);
+    setOperationAction(ISD::FLOG2, VT, Expand);
+    setOperationAction(ISD::FLOG10, VT, Expand);
+    setOperationAction(ISD::FEXP, VT, Expand);
+    setOperationAction(ISD::FEXP2, VT, Expand);
+  }
 
-  setMaxAtomicSizeInBitsSupported(0);
+  // Atomics
+  setOperationAction(ISD::ATOMIC_LOAD, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_STORE, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_STORE, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_STORE, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_CMP_SWAP, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_CMP_SWAP, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_CMP_SWAP, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_SWAP, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_SWAP, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_SWAP, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_ADD, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_ADD, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_ADD, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_SUB, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_SUB, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_SUB, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_AND, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_AND, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_AND, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_OR, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_OR, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_OR, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_XOR, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_XOR, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_XOR, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_NAND, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_NAND, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_NAND, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_MIN, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_MIN, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_MIN, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_MAX, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_MAX, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_MAX, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_UMIN, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_UMIN, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_UMIN, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_UMAX, MVT::i8, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_UMAX, MVT::i16, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_UMAX, MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Expand);
+}
+
+bool EZHTargetLowering::getIndexedAddressParts(SDNode *N, SDValue Ptr,
+                                               SDValue &Base, SDValue &Offset,
+                                               ISD::MemIndexedMode &AM,
+                                               bool IsPre,
+                                               SelectionDAG &DAG) const {
+  if (Ptr.getOpcode() != ISD::ADD && Ptr.getOpcode() != ISD::SUB)
+    return false;
+
+  auto *C = dyn_cast<ConstantSDNode>(Ptr.getOperand(1));
+  if (!C)
+    return false;
+
+  int64_t Val = C->getSExtValue();
+  if (Ptr.getOpcode() == ISD::SUB)
+    Val = -Val;
+
+  EVT VT = cast<MemSDNode>(N)->getMemoryVT();
+
+  // For 32-bit loads/stores, hardware uses scaled offset (Value * 4)
+  if (VT == MVT::i32) {
+    if (Val >= -512 && Val <= 508 && (Val & 3) == 0) {
+      Base = Ptr.getOperand(0);
+      Offset = DAG.getConstant(std::abs(Val), SDLoc(Ptr), MVT::i32);
+      AM = IsPre ? ((Val < 0) ? ISD::PRE_DEC : ISD::PRE_INC)
+                 : ((Val < 0) ? ISD::POST_DEC : ISD::POST_INC);
+      return true;
+    }
+  } else if (VT == MVT::i8) {
+    // For 8-bit loads/stores, hardware uses byte offset
+    if (Val >= -128 && Val <= 127) {
+      Base = Ptr.getOperand(0);
+      Offset = DAG.getConstant(std::abs(Val), SDLoc(Ptr), MVT::i32);
+      AM = IsPre ? ((Val < 0) ? ISD::PRE_DEC : ISD::PRE_INC)
+                 : ((Val < 0) ? ISD::POST_DEC : ISD::POST_INC);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool EZHTargetLowering::getPostIndexedAddressParts(SDNode *N, SDNode *Op,
+                                                   SDValue &Base,
+                                                   SDValue &Offset,
+                                                   ISD::MemIndexedMode &AM,
+                                                   SelectionDAG &DAG) const {
+  return getIndexedAddressParts(N, SDValue(Op, 0), Base, Offset, AM,
+                                /*IsPre=*/false, DAG);
+}
+
+bool EZHTargetLowering::getPreIndexedAddressParts(SDNode *N, SDValue &Base,
+                                                  SDValue &Offset,
+                                                  ISD::MemIndexedMode &AM,
+                                                  SelectionDAG &DAG) const {
+  SDValue Ptr = cast<MemSDNode>(N)->getBasePtr();
+  return getIndexedAddressParts(N, Ptr, Base, Offset, AM,
+                                /*IsPre=*/true, DAG);
+}
+
+bool EZHTargetLowering::shouldReduceLoadWidth(
+    SDNode *Load, ISD::LoadExtType ExtTy, EVT NewVT,
+    std::optional<unsigned> ByteOffset) const {
+  // EZH has no 16-bit load in hardware (it is emulated using two 8-bit loads).
+  // Reducing load width to 16-bit is therefore never profitable.
+  if (NewVT == MVT::i16)
+    return false;
+  return TargetLowering::shouldReduceLoadWidth(Load, ExtTy, NewVT, ByteOffset);
 }
 
 SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
-  case ISD::MUL:
-    return LowerMUL(Op, DAG);
   case ISD::BR_CC:
     return LowerBR_CC(Op, DAG);
   case ISD::ConstantPool:
     return LowerConstantPool(Op, DAG);
   case ISD::GlobalAddress:
+  case ISD::GlobalTLSAddress:
+  case ISD::ExternalSymbol:
     return LowerGlobalAddress(Op, DAG);
   case ISD::BlockAddress:
     return LowerBlockAddress(Op, DAG);
@@ -179,172 +368,550 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     return LowerJumpTable(Op, DAG);
   case ISD::SELECT_CC:
     return LowerSELECT_CC(Op, DAG);
-  case ISD::SETCC:
-    return LowerSETCC(Op, DAG);
-  case ISD::SHL_PARTS:
-    return LowerSHL_PARTS(Op, DAG);
-  case ISD::SRL_PARTS:
-    return LowerSRL_PARTS(Op, DAG);
   case ISD::VASTART:
     return LowerVASTART(Op, DAG);
   case ISD::DYNAMIC_STACKALLOC:
     return LowerDYNAMIC_STACKALLOC(Op, DAG);
-  case ISD::RETURNADDR:
-    return LowerRETURNADDR(Op, DAG);
   case ISD::FRAMEADDR:
     return LowerFRAMEADDR(Op, DAG);
+  case ISD::CTLZ:
+  case ISD::CTLZ_ZERO_POISON: {
+    SDLoc dl(Op);
+    SDValue Src = Op.getOperand(0);
+    EVT VT = Src.getValueType();
+
+    if (VT == MVT::i64)
+      return SDValue();
+
+    TargetLowering::ArgListTy Args;
+    Type *ArgTy = Type::getInt32Ty(*DAG.getContext());
+    Args.push_back(TargetLowering::ArgListEntry(Src, ArgTy));
+
+    const char *LibcallName = "__clzsi2";
+
+    TargetLowering::CallLoweringInfo CLI(DAG);
+    CLI.setDebugLoc(dl)
+        .setChain(DAG.getEntryNode())
+        .setCallee(CallingConv::C, Type::getInt32Ty(*DAG.getContext()),
+                   DAG.getExternalSymbol(LibcallName,
+                                         getPointerTy(DAG.getDataLayout())),
+                   std::move(Args));
+
+    std::pair<SDValue, SDValue> CallResult = LowerCallTo(CLI);
+    return CallResult.first;
+  }
+  case ISD::STORE: {
+    StoreSDNode *ST = cast<StoreSDNode>(Op);
+    EVT MemVT = ST->getMemoryVT();
+    SDLoc DL(Op);
+    SDValue Chain = ST->getChain();
+    SDValue Ptr = ST->getBasePtr();
+    SDValue Val = ST->getValue();
+
+    // Check if this is a 32-bit store to a constant peripheral address
+    if (MemVT == MVT::i32) {
+      if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Ptr)) {
+        uint32_t Addr = C->getZExtValue();
+        if (Addr >= 0x40000000 && Addr <= 0x400FFFFF && (Addr & 3) == 0) {
+          uint32_t Offset = Addr - 0x40000000;
+          SDValue OffsetVal = DAG.getTargetConstant(Offset, DL, MVT::i32);
+          SDVTList VTs = DAG.getVTList(MVT::Other);
+          SDValue Ops[] = {Chain, Val, OffsetVal};
+          return DAG.getMemIntrinsicNode(EZHISD::PER_WRITE, DL, VTs, Ops, MemVT,
+                                         ST->getMemOperand());
+        }
+      }
+      if (ST->getAlign() >= Align(4))
+        return SDValue(); // Treat normal aligned i32 store as Legal!
+      return expandUnalignedStore(ST, DAG);
+    }
+
+    if (MemVT == MVT::i16) {
+      SDLoc DL(Op);
+      SDValue Chain = ST->getChain();
+      SDValue Ptr = ST->getBasePtr();
+      SDValue Val = ST->getValue();
+      // Store Low Byte
+      SDValue Lo = DAG.getTruncStore(
+          Chain, DL, Val, Ptr, ST->getPointerInfo(), MVT::i8, ST->getAlign(),
+          ST->getMemOperand()->getFlags(), ST->getAAInfo());
+
+      // Store High Byte (at Ptr + 1)
+      SDValue PtrHi = DAG.getNode(ISD::ADD, DL, Ptr.getValueType(), Ptr,
+                                  DAG.getConstant(1, DL, Ptr.getValueType()));
+
+      // Ensure Val is 32-bit for shift
+      SDValue Val32 = DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i32, Val);
+      SDValue HiVal = DAG.getNode(ISD::SRL, DL, MVT::i32, Val32,
+                                  DAG.getConstant(8, DL, MVT::i32));
+
+      SDValue Hi = DAG.getTruncStore(
+          Chain, DL, HiVal, PtrHi, ST->getPointerInfo().getWithOffset(1),
+          MVT::i8, ST->getAlign(), ST->getMemOperand()->getFlags(),
+          ST->getAAInfo());
+
+      return DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Lo, Hi);
+    }
+    return SDValue();
+  }
+  case ISD::LOAD: {
+    LoadSDNode *LD = cast<LoadSDNode>(Op);
+    EVT MemVT = LD->getMemoryVT();
+    SDLoc DL(Op);
+    SDValue Chain = LD->getChain();
+    SDValue Ptr = LD->getBasePtr();
+
+    // Check if this is a 32-bit load from a constant peripheral address
+    if (MemVT == MVT::i32) {
+      if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Ptr)) {
+        uint32_t Addr = C->getZExtValue();
+        if (Addr >= 0x40000000 && Addr <= 0x400FFFFF && (Addr & 3) == 0) {
+          uint32_t Offset = Addr - 0x40000000;
+          SDValue OffsetVal = DAG.getTargetConstant(Offset, DL, MVT::i32);
+          SDVTList VTs = DAG.getVTList(MVT::i32, MVT::Other);
+          SDValue Ops[] = {Chain, OffsetVal};
+          return DAG.getMemIntrinsicNode(EZHISD::PER_READ, DL, VTs, Ops, MemVT,
+                                         LD->getMemOperand());
+        }
+      }
+      if (LD->getAlign() >= Align(4))
+        return SDValue(); // Treat normal aligned i32 load as Legal!
+      auto Expanded = expandUnalignedLoad(LD, DAG);
+      return DAG.getMergeValues({Expanded.first, Expanded.second}, DL);
+    }
+
+    if (MemVT == MVT::i16) {
+      SDLoc DL(Op);
+      SDValue Chain = LD->getChain();
+      SDValue Ptr = LD->getBasePtr();
+      // Load Low Byte (ZExt to 32-bit)
+      SDValue Lo =
+          DAG.getExtLoad(ISD::ZEXTLOAD, DL, MVT::i32, Chain, Ptr,
+                         LD->getPointerInfo(), MVT::i8, LD->getAlign(),
+                         LD->getMemOperand()->getFlags(), LD->getAAInfo());
+
+      // Load High Byte (ZExt to 32-bit, at Ptr + 1)
+      SDValue PtrHi = DAG.getNode(ISD::ADD, DL, Ptr.getValueType(), Ptr,
+                                  DAG.getConstant(1, DL, Ptr.getValueType()));
+      SDValue Hi = DAG.getExtLoad(
+          ISD::ZEXTLOAD, DL, MVT::i32, Chain, PtrHi,
+          LD->getPointerInfo().getWithOffset(1), MVT::i8, LD->getAlign(),
+          LD->getMemOperand()->getFlags(), LD->getAAInfo());
+
+      // Combine: (Hi << 8) | Lo
+      SDValue HiShifted = DAG.getNode(ISD::SHL, DL, MVT::i32, Hi,
+                                      DAG.getConstant(8, DL, MVT::i32));
+      SDValue Res = DAG.getNode(ISD::OR, DL, MVT::i32, HiShifted, Lo);
+
+      if (LD->getExtensionType() == ISD::SEXTLOAD) {
+        SDValue ResShifted = DAG.getNode(ISD::SHL, DL, MVT::i32, Res,
+                                         DAG.getConstant(16, DL, MVT::i32));
+        Res = DAG.getNode(ISD::SRA, DL, MVT::i32, ResShifted,
+                          DAG.getConstant(16, DL, MVT::i32));
+      }
+
+      // Return merged value AND merged chain
+      SDValue NewChain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other,
+                                     Lo.getValue(1), Hi.getValue(1));
+      return DAG.getMergeValues({Res, NewChain}, DL);
+    }
+    return SDValue();
+  }
+  case ISD::BR_JT:
+    return LowerBR_JT(Op, DAG);
+  case ISD::Constant:
+    return LowerConstant(Op, DAG);
+  case ISD::VAARG:
+    return LowerVAARG(Op, DAG);
+  case ISD::SHL:
+  case ISD::SRL:
+  case ISD::SRA:
+    return Op;
+  case ISD::EH_SJLJ_SETJMP: {
+    SDLoc dl(Op);
+    return DAG.getNode(EZHISD::EH_SJLJ_SETJMP, dl,
+                       DAG.getVTList(MVT::i32, MVT::Other), Op.getOperand(0),
+                       Op.getOperand(1));
+  }
+  case ISD::EH_SJLJ_LONGJMP: {
+    SDLoc dl(Op);
+    return DAG.getNode(EZHISD::EH_SJLJ_LONGJMP, dl, MVT::Other,
+                       Op.getOperand(0), Op.getOperand(1));
+  }
+  case ISD::EH_SJLJ_SETUP_DISPATCH: {
+    SDLoc dl(Op);
+    return DAG.getNode(EZHISD::EH_SJLJ_SETUP_DISPATCH, dl, MVT::Other,
+                       Op.getOperand(0));
+  }
+  case ISD::INTRINSIC_WO_CHAIN:
+    return LowerINTRINSIC_WO_CHAIN(Op, DAG);
   default:
-    llvm_unreachable("unimplemented operand");
+    return SDValue();
   }
 }
 
+void EZHTargetLowering::ReplaceNodeResults(SDNode *N,
+                                           SmallVectorImpl<SDValue> &Results,
+                                           SelectionDAG &DAG) const {}
+
 //===----------------------------------------------------------------------===//
-//                       EZH Inline Assembly Support
+//                      Custom Lowerings
 //===----------------------------------------------------------------------===//
 
-Register
-EZHTargetLowering::getRegisterByName(const char *RegName, LLT /*VT*/,
-                                     const MachineFunction & /*MF*/) const {
-  // Only unallocatable registers should be matched here.
-  Register Reg = StringSwitch<Register>(RegName)
-                     .Case("pc", EZH::PC)
-                     .Case("sp", EZH::SP)
-                     .Case("fp", EZH::FP)
-                     .Case("rr1", EZH::RR1)
-                     .Case("r10", EZH::R10)
-                     .Case("rr2", EZH::RR2)
-                     .Case("r11", EZH::R11)
-                     .Case("rca", EZH::RCA)
-                     .Default(Register());
-  return Reg;
+static EZHCC::CondCode IntCCToEZHCC(ISD::CondCode CC);
+
+// Master helper function to preprocess a 32-bit comparison.
+//
+// EZH has no overflow flag in the ALU. To perform a 32-bit signed comparison
+// (SETGT, SETGE, SETLT, SETLE), the compiler must toggle the sign bit (bit 31)
+// of both operands using EZHISD::BTOG. Toggling the sign bit shifts the signed
+// range [-2^31, 2^31-1] monotonically into the unsigned range [0, 2^32-1],
+// allowing us to perform a native unsigned comparison instead.
+//
+// This helper performs the following normalization:
+// Checks if it is a signed comparison. If so, it determines if both operands
+// are guaranteed to fit within the signed 16-bit range [-32768, 32767]
+// (either because they are sign/zero-extended from i8/i16, or are constants
+// within that range). If they do, their subtraction cannot overflow 32 bits,
+// allowing us to safely bypass the BTOG sign-toggling instructions.
+// If unsafe, it emits the EZHISD::BTOG nodes and rewrites the predicate.
+//
+// Next, it normalizes unsigned comparisons (including converted ones)
+// by swapping operands for UGT/ULE to match EZH's natively supported
+// unsigned conditions (ULT/UGE).
+static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
+                                 SelectionDAG &DAG, const SDLoc &dl) {
+  // Preprocess signed comparisons (convert to unsigned if unsafe)
+  if (CC == ISD::SETGT || CC == ISD::SETGE || CC == ISD::SETLT ||
+      CC == ISD::SETLE) {
+
+    // Determine if both operands are guaranteed to fit in the signed 16-bit
+    // range
+    bool LHSExt = (LHS.getOpcode() == ISD::SIGN_EXTEND_INREG ||
+                   LHS.getOpcode() == ISD::SIGN_EXTEND ||
+                   LHS.getOpcode() == ISD::ZERO_EXTEND ||
+                   LHS.getOpcode() == ISD::ANY_EXTEND);
+    bool RHSExt = (RHS.getOpcode() == ISD::SIGN_EXTEND_INREG ||
+                   RHS.getOpcode() == ISD::SIGN_EXTEND ||
+                   RHS.getOpcode() == ISD::ZERO_EXTEND ||
+                   RHS.getOpcode() == ISD::ANY_EXTEND);
+
+    // Check if LHS is a 16-bit signed constant
+    bool LHSConst = false;
+    if (auto *C = dyn_cast<ConstantSDNode>(LHS)) {
+      int64_t Val = C->getSExtValue();
+      if (Val >= -32768 && Val <= 32767)
+        LHSConst = true;
+    }
+
+    // Check if RHS is a 16-bit signed constant
+    bool RHSConst = false;
+    if (auto *C = dyn_cast<ConstantSDNode>(RHS)) {
+      int64_t Val = C->getSExtValue();
+      if (Val >= -32768 && Val <= 32767)
+        RHSConst = true;
+    }
+
+    // If both sides fit in 16 bits, the subtraction cannot overflow 32 bits
+    bool IsSafe16Bit = (LHSExt && RHSExt) || (LHSExt && RHSConst) ||
+                       (RHSExt && LHSConst) || (LHSConst && RHSConst);
+
+    if (!IsSafe16Bit) {
+      // Toggle the sign bit (bit 31) of both operands to shift the signed range
+      // monotonically into the unsigned range, enabling unsigned comparison.
+      LHS = DAG.getNode(EZHISD::BTOG, dl, MVT::i32, LHS,
+                        DAG.getConstant(31, dl, MVT::i32));
+      RHS = DAG.getNode(EZHISD::BTOG, dl, MVT::i32, RHS,
+                        DAG.getConstant(31, dl, MVT::i32));
+
+      // Map the signed condition codes to their unsigned counterparts
+      switch (CC) {
+      case ISD::SETGT:
+        CC = ISD::SETUGT;
+        break;
+      case ISD::SETGE:
+        CC = ISD::SETUGE;
+        break;
+      case ISD::SETLT:
+        CC = ISD::SETULT;
+        break;
+      case ISD::SETLE:
+        CC = ISD::SETULE;
+        break;
+      default:
+        llvm_unreachable("Invalid signed condition code");
+      }
+    }
+  }
+
+  // Normalize unsigned comparisons (including newly converted ones)
+  // Swap operands for UGT -> ULT and ULE -> UGE to match EZH hardware.
+  if (CC == ISD::SETUGT) {
+    CC = ISD::SETULT;
+    std::swap(LHS, RHS);
+  } else if (CC == ISD::SETULE) {
+    CC = ISD::SETUGE;
+    std::swap(LHS, RHS);
+  }
+}
+
+SDValue EZHTargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const {
+  SDValue LHS = Op.getOperand(0);
+  SDValue RHS = Op.getOperand(1);
+  SDValue TrueV = Op.getOperand(2);
+  SDValue FalseV = Op.getOperand(3);
+  ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(4))->get();
+  SDLoc DL(Op);
+
+  if (LHS.getValueType() != MVT::i32)
+    return SDValue();
+
+  preprocessComparison(LHS, RHS, CC, DAG, DL);
+
+  SDValue TargetCC = DAG.getTargetConstant(CC, DL, MVT::i32);
+  SDValue Cmp = DAG.getNode(EZHISD::CMP, DL, MVT::Glue, LHS, RHS);
+  SDValue Ops[] = {TrueV, FalseV, TargetCC, Cmp};
+  return DAG.getNode(EZHISD::SELECT_CC, DL, Op.getValueType(), Ops);
+}
+
+SDValue EZHTargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
+  MachineFunction &MF = DAG.getMachineFunction();
+  EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
+
+  SDValue Ptr = Op.getOperand(1);
+  EVT PtrVT = Ptr.getValueType();
+
+  SDLoc dl(Op);
+  SDValue FrameIndex =
+      DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
+
+  const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
+
+  return DAG.getStore(Op.getOperand(0), dl, FrameIndex, Ptr,
+                      MachinePointerInfo(SV));
+}
+
+SDValue EZHTargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
+  SDNode *Node = Op.getNode();
+  EVT VT = Node->getValueType(0);
+  SDValue InChain = Node->getOperand(0);
+  SDValue VAListPtr = Node->getOperand(1);
+  EVT PtrVT = VAListPtr.getValueType();
+  const Value *SV = cast<SrcValueSDNode>(Node->getOperand(2))->getValue();
+  SDLoc dl(Node);
+
+  // Load the current VAList pointer (which points to the next arg on the stack)
+  SDValue VAList =
+      DAG.getLoad(PtrVT, dl, InChain, VAListPtr, MachinePointerInfo(SV));
+  SDValue VAListInChain = VAList.getValue(1);
+
+  // Align VAList pointer if the argument type alignment requires it (> 4-byte
+  // alignment).
+  Type *Ty = VT.getTypeForEVT(*DAG.getContext());
+  auto &TD = DAG.getDataLayout();
+  Align ArgAlignment = TD.getABITypeAlign(Ty);
+  unsigned ArgAlignInBytes = ArgAlignment.value();
+
+  SDValue ArgPtr = VAList;
+  if (ArgAlignInBytes > 4) {
+    unsigned AlignMask = ArgAlignInBytes - 1;
+    SDValue AddOffset = DAG.getNode(ISD::ADD, dl, PtrVT, VAList,
+                                    DAG.getConstant(AlignMask, dl, PtrVT));
+    ArgPtr = DAG.getNode(ISD::AND, dl, PtrVT, AddOffset,
+                         DAG.getConstant(~AlignMask, dl, PtrVT));
+  }
+
+  // Increment the VAList pointer past the current argument.
+  // Round up the argument size to the nearest multiple of 4 bytes (32 bits)
+  // as all varargs arguments on EZH stack are aligned to at least 4 bytes.
+  unsigned ArgSize = (VT.getSizeInBits() + 31) / 32 * 4;
+  SDValue NextVAList = DAG.getNode(ISD::ADD, dl, PtrVT, ArgPtr,
+                                   DAG.getConstant(ArgSize, dl, PtrVT));
+
+  // Store the incremented VAList pointer back.
+  SDValue StoreChain = DAG.getStore(VAListInChain, dl, NextVAList, VAListPtr,
+                                    MachinePointerInfo(SV));
+
+  // Load the actual argument from ArgPtr.
+  SDValue ArgVal =
+      DAG.getLoad(VT, dl, StoreChain, ArgPtr, MachinePointerInfo());
+
+  // Return the loaded value and the new chain.
+  return DAG.getMergeValues({ArgVal, ArgVal.getValue(1)}, dl);
+}
+
+SDValue EZHTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  auto *JT = cast<JumpTableSDNode>(Op);
+
+  // Mark target blocks as address-taken to prevent deletion!
+  MachineFunction &MF = DAG.getMachineFunction();
+  if (MachineJumpTableInfo *MJTI = MF.getJumpTableInfo()) {
+    const std::vector<MachineJumpTableEntry> &JTEntries = MJTI->getJumpTables();
+    int Index = JT->getIndex();
+    if (Index >= 0 && static_cast<size_t>(Index) < JTEntries.size())
+      for (MachineBasicBlock *MBB : JTEntries[Index].MBBs)
+        MBB->setMachineBlockAddressTaken();
+  }
+
+  EVT PTy = getPointerTy(DAG.getDataLayout());
+  SDValue JTIVal = DAG.getTargetJumpTable(JT->getIndex(), PTy);
+  return DAG.getNode(EZHISD::WrapperJT, DL, PTy, JTIVal);
+}
+
+SDValue EZHTargetLowering::LowerBR_JT(SDValue Op, SelectionDAG &DAG) const {
+  SDValue Chain = Op.getOperand(0);
+  SDValue Table = Op.getOperand(1);
+  SDValue Index = Op.getOperand(2);
+  SDLoc dl(Op);
+
+  EVT PTy = getPointerTy(DAG.getDataLayout());
+  JumpTableSDNode *JT = cast<JumpTableSDNode>(Table);
+
+  MachineFunction &MF = DAG.getMachineFunction();
+  if (MachineJumpTableInfo *MJTI = MF.getJumpTableInfo()) {
+    const std::vector<MachineJumpTableEntry> &JTEntries = MJTI->getJumpTables();
+    int JTIdx = JT->getIndex();
+    if (JTIdx >= 0 && static_cast<size_t>(JTIdx) < JTEntries.size())
+      for (MachineBasicBlock *MBB : JTEntries[JTIdx].MBBs)
+        MBB->setMachineBlockAddressTaken();
+  }
+
+  SDValue JTI = DAG.getTargetJumpTable(JT->getIndex(), PTy);
+  Table = DAG.getNode(EZHISD::WrapperJT, dl, MVT::i32, JTI);
+  Index = DAG.getNode(ISD::SHL, dl, PTy, Index, DAG.getConstant(2, dl, PTy));
+  SDValue Addr = DAG.getNode(ISD::ADD, dl, PTy, Table, Index);
+  Addr =
+      DAG.getLoad(PTy, dl, Chain, Addr,
+                  MachinePointerInfo::getJumpTable(DAG.getMachineFunction()));
+  Chain = Addr.getValue(1);
+  return DAG.getNode(EZHISD::BR_JT, dl, MVT::Other, Chain, Addr, JTI);
+}
+
+SDValue EZHTargetLowering::LowerBlockAddress(SDValue Op,
+                                             SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  auto *BA = cast<BlockAddressSDNode>(Op);
+
+  auto *CPV = EZHConstantPoolConstant::Create(BA->getBlockAddress());
+  SDValue CPIdx =
+      DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
+  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
+  return SDValue(
+      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+}
+
+#define GET_REGISTER_MATCHER
+#include "EZHGenAsmMatcher.inc"
+
+Register EZHTargetLowering::getRegisterByName(const char *RegName, LLT Ty,
+                                              const MachineFunction &MF) const {
+  Register Reg = MatchRegisterName(RegName);
+  if (Reg)
+    return Reg;
+  report_fatal_error("invalid register name");
 }
 
 std::pair<unsigned, const TargetRegisterClass *>
 EZHTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
                                                 StringRef Constraint,
                                                 MVT VT) const {
-  if (Constraint.size() == 1)
-    // GCC Constraint Letters
+  if (Constraint.size() == 1) {
     switch (Constraint[0]) {
-    case 'r': // GENERAL_REGS
+    case 'r':
       return std::make_pair(0U, &EZH::GPRRegClass);
-    default:
-      break;
     }
-
+  }
   return TargetLowering::getRegForInlineAsmConstraint(TRI, Constraint, VT);
 }
 
-// Examine constraint type and operand type and determine a weight value.
-// This object must already have been set up with the operand type
-// and the current alternative constraint selected.
-TargetLowering::ConstraintWeight
-EZHTargetLowering::getSingleConstraintMatchWeight(
-    AsmOperandInfo &Info, const char *Constraint) const {
-  ConstraintWeight Weight = CW_Invalid;
-  Value *CallOperandVal = Info.CallOperandVal;
-  // If we don't have a value, we can't do a match,
-  // but allow it at the lowest weight.
-  if (CallOperandVal == nullptr)
-    return CW_Default;
-  // Look at the constraint type.
-  switch (*Constraint) {
-  case 'I': // signed 16 bit immediate
-  case 'J': // integer zero
-  case 'K': // unsigned 16 bit immediate
-  case 'L': // immediate in the range 0 to 31
-  case 'M': // signed 32 bit immediate where lower 16 bits are 0
-  case 'N': // signed 26 bit immediate
-  case 'O': // integer zero
-    if (isa<ConstantInt>(CallOperandVal))
-      Weight = CW_Constant;
-    break;
-  default:
-    Weight = TargetLowering::getSingleConstraintMatchWeight(Info, Constraint);
-    break;
-  }
-  return Weight;
+SDValue EZHTargetLowering::LowerConstantPool(SDValue Op,
+                                             SelectionDAG &DAG) const {
+  EVT PtrVT = Op.getValueType();
+  SDLoc DL(Op);
+  auto *CP = cast<ConstantPoolSDNode>(Op);
+
+  Align CPAlign = CP->getAlign();
+  CPAlign = std::max(CPAlign, Align(4));
+
+  SDValue Res;
+  if (CP->isMachineConstantPoolEntry())
+    Res = DAG.getTargetConstantPool(CP->getMachineCPVal(), PtrVT, CPAlign,
+                                    CP->getOffset(), CP->getTargetFlags());
+  else
+    Res = DAG.getTargetConstantPool(CP->getConstVal(), PtrVT, CPAlign,
+                                    CP->getOffset(), CP->getTargetFlags());
+
+  return DAG.getNode(EZHISD::Wrapper, DL, MVT::i32, Res);
 }
 
-// LowerAsmOperandForConstraint - Lower the specified operand into the Ops
-// vector.  If it is invalid, don't add anything to Ops.
-void EZHTargetLowering::LowerAsmOperandForConstraint(SDValue Op,
-                                                     StringRef Constraint,
-                                                     std::vector<SDValue> &Ops,
-                                                     SelectionDAG &DAG) const {
-  SDValue Result;
+SDValue EZHTargetLowering::LowerConstant(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  auto *CN = cast<ConstantSDNode>(Op);
+  int64_t Val = CN->getSExtValue();
 
-  // Only support length 1 constraints for now.
-  if (Constraint.size() > 1)
-    return;
-
-  char ConstraintLetter = Constraint[0];
-  switch (ConstraintLetter) {
-  case 'I': // Signed 16 bit constant
-    // If this fails, the parent routine will give an error
-    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-      if (isInt<16>(C->getSExtValue())) {
-        Result = DAG.getTargetConstant(C->getSExtValue(), SDLoc(C),
-                                       Op.getValueType());
-        break;
-      }
-    }
-    return;
-  case 'J': // integer zero
-  case 'O':
-    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-      if (C->getZExtValue() == 0) {
-        Result = DAG.getTargetConstant(0, SDLoc(C), Op.getValueType());
-        break;
-      }
-    }
-    return;
-  case 'K': // unsigned 16 bit immediate
-    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-      if (isUInt<16>(C->getZExtValue())) {
-        Result = DAG.getTargetConstant(C->getSExtValue(), SDLoc(C),
-                                       Op.getValueType());
-        break;
-      }
-    }
-    return;
-  case 'L': // immediate in the range 0 to 31
-    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-      if (C->getZExtValue() <= 31) {
-        Result = DAG.getTargetConstant(C->getZExtValue(), SDLoc(C),
-                                       Op.getValueType());
-        break;
-      }
-    }
-    return;
-  case 'M': // signed 32 bit immediate where lower 16 bits are 0
-    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-      int64_t Val = C->getSExtValue();
-      if ((isInt<32>(Val)) && ((Val & 0xffff) == 0)) {
-        Result = DAG.getTargetConstant(Val, SDLoc(C), Op.getValueType());
-        break;
-      }
-    }
-    return;
-  case 'N': // signed 26 bit immediate
-    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-      int64_t Val = C->getSExtValue();
-      if ((Val >= -33554432) && (Val <= 33554431)) {
-        Result = DAG.getTargetConstant(Val, SDLoc(C), Op.getValueType());
-        break;
-      }
-    }
-    return;
-  default:
-    break; // This will fall through to the generic implementation
+  if (isInt<11>(Val)) {
+    return Op; // Natively matched
   }
 
-  if (Result.getNode()) {
-    Ops.push_back(Result);
-    return;
+  uint32_t UVal = static_cast<uint32_t>(CN->getZExtValue());
+  int32_t SVal = static_cast<int32_t>(UVal);
+  unsigned TZ = llvm::countr_zero(UVal);
+  int32_t MovedVal = SVal >> TZ; // Arithmetic right shift (sign-preserving)
+  if (isInt<11>(MovedVal)) {
+    SDValue Hi =
+        DAG.getTargetConstant(static_cast<uint32_t>(MovedVal), DL, MVT::i32);
+    SDValue Shift = DAG.getTargetConstant(TZ, DL, MVT::i32);
+
+    SDValue Pred = DAG.getTargetConstant(EZHCC::ICC_EU, DL, MVT::i32);
+    SDValue HiNode = SDValue(
+        DAG.getMachineNode(EZH::LOAD_SIMM, DL, MVT::i32, Hi, Shift, Pred), 0);
+    return HiNode;
   }
 
-  TargetLowering::LowerAsmOperandForConstraint(Op, Constraint, Ops, DAG);
+  // For large constants, use an inline literal pool (LOAD_CONSTANT)
+  SDValue CPIdx = DAG.getTargetConstantPool(
+      ConstantInt::get(Type::getInt32Ty(*DAG.getContext()), UVal),
+      getPointerTy(DAG.getDataLayout()));
+
+  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
+  return SDValue(
+      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+}
+
+SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
+                                              SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+
+  if (auto *GV = dyn_cast<GlobalAddressSDNode>(Op)) {
+    SDValue CPIdx;
+    if (GV->getOffset() != 0) {
+      auto *CPV =
+          EZHConstantPoolConstant::Create(GV->getGlobal(), GV->getOffset(),
+                                          Type::getInt32Ty(*DAG.getContext()));
+      CPIdx = DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
+    } else {
+      CPIdx = DAG.getTargetConstantPool(GV->getGlobal(),
+                                        getPointerTy(DAG.getDataLayout()));
+    }
+    SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
+    return SDValue(
+        DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops),
+        0);
+  }
+
+  if (auto *S = dyn_cast<ExternalSymbolSDNode>(Op)) {
+    auto *CPV = EZHConstantPoolSymbol::Create(
+        Type::getInt32Ty(*DAG.getContext()), S->getSymbol());
+    SDValue CPIdx =
+        DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
+    SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
+    return SDValue(
+        DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops),
+        0);
+  }
+
+  llvm_unreachable("Unhandled global address type");
 }
 
 //===----------------------------------------------------------------------===//
@@ -353,44 +920,126 @@ void EZHTargetLowering::LowerAsmOperandForConstraint(SDValue Op,
 
 #include "EZHGenCallingConv.inc"
 
-static bool CC_EZH32_VarArg(unsigned ValNo, MVT ValVT, MVT LocVT,
-                            CCValAssign::LocInfo LocInfo,
-                            ISD::ArgFlagsTy ArgFlags, Type *OrigTy,
-                            CCState &State) {
-  // Handle fixed arguments with default CC.
-  // Note: Both the default and fast CC handle VarArg the same and hence the
-  // calling convention of the function is not considered here.
-  if (!ArgFlags.isVarArg())
-    return CC_EZH32(ValNo, ValVT, LocVT, LocInfo, ArgFlags, OrigTy, State);
-
-  // Promote i8/i16 args to i32
-  if (LocVT == MVT::i8 || LocVT == MVT::i16) {
-    LocVT = MVT::i32;
-    if (ArgFlags.isSExt())
-      LocInfo = CCValAssign::SExt;
-    else if (ArgFlags.isZExt())
-      LocInfo = CCValAssign::ZExt;
-    else
-      LocInfo = CCValAssign::AExt;
-  }
-
-  // VarArgs get passed on stack
-  unsigned Offset = State.AllocateStack(4, Align(4));
-  State.addLoc(CCValAssign::getMem(ValNo, ValVT, Offset, LocVT, LocInfo));
-  return false;
-}
-
+// LowerFormalArguments - transform physical registers into virtual registers
+// and generate load operations for arguments places on the stack.
 SDValue EZHTargetLowering::LowerFormalArguments(
     SDValue Chain, CallingConv::ID CallConv, bool IsVarArg,
     const SmallVectorImpl<ISD::InputArg> &Ins, const SDLoc &DL,
     SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals) const {
-  switch (CallConv) {
-  case CallingConv::C:
-  case CallingConv::Fast:
-    return LowerCCCArguments(Chain, CallConv, IsVarArg, Ins, DL, DAG, InVals);
-  default:
-    report_fatal_error("Unsupported calling convention");
+  MachineFunction &MF = DAG.getMachineFunction();
+  MachineRegisterInfo &RegInfo = MF.getRegInfo();
+
+  // Assign locations to all of the incoming arguments.
+  SmallVector<CCValAssign, 16> ArgLocs;
+  CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
+  CCInfo.AnalyzeFormalArguments(Ins, CC_EZH);
+
+  DenseMap<unsigned, int> SplitArgFIs;
+
+  assert(ArgLocs.size() == Ins.size() && "ArgLocs and Ins size mismatch!");
+  for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
+    CCValAssign &VA = ArgLocs[i];
+    ISD::ArgFlagsTy Flags = Ins[i].Flags;
+    if (Flags.isByVal()) {
+      unsigned Size = Flags.getByValSize();
+      if (Size == 0) {
+        InVals.push_back(DAG.getUNDEF(getPointerTy(DAG.getDataLayout())));
+        continue;
+      }
+      int FI =
+          MF.getFrameInfo().CreateFixedObject(Size, VA.getLocMemOffset(), true);
+      SDValue FIN = DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
+      InVals.push_back(FIN);
+    } else if (VA.isRegLoc()) {
+      // Arguments passed in registers
+      Register VReg = RegInfo.createVirtualRegister(&EZH::GPRRegClass);
+      RegInfo.addLiveIn(VA.getLocReg(), VReg);
+      InVals.push_back(DAG.getCopyFromReg(Chain, DL, VReg, VA.getLocVT()));
+    } else {
+      // Only arguments passed on the stack should make it here.
+      int FI;
+      bool IsSplit = false;
+      unsigned OrigArgIdx = 0;
+
+      if (Ins[i].isOrigArg() && (Ins[i].ArgVT.getSizeInBits() / 8 >
+                                 VA.getLocVT().getSizeInBits() / 8)) {
+        IsSplit = true;
+        OrigArgIdx = Ins[i].getOrigArgIndex();
+        unsigned ValVTSize = Ins[i].ArgVT.getSizeInBits() / 8;
+        auto It = SplitArgFIs.find(OrigArgIdx);
+        if (It == SplitArgFIs.end()) {
+          FI = MF.getFrameInfo().CreateFixedObject(ValVTSize,
+                                                   VA.getLocMemOffset(), true);
+          SplitArgFIs[OrigArgIdx] = FI;
+        } else {
+          FI = It->second;
+        }
+      }
+
+      if (!IsSplit)
+        FI = MF.getFrameInfo().CreateFixedObject(
+            VA.getLocVT().getSizeInBits() / 8, VA.getLocMemOffset(), true);
+
+      int FIOffset = MF.getFrameInfo().getObjectOffset(FI);
+      unsigned Offset = VA.getLocMemOffset() - FIOffset;
+
+      SDValue FIN = DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
+      if (Offset != 0)
+        FIN = DAG.getObjectPtrOffset(DL, FIN, TypeSize::getFixed(Offset));
+
+      InVals.push_back(
+          DAG.getLoad(VA.getValVT(), DL, Chain, FIN,
+                      MachinePointerInfo::getFixedStack(MF, FI, Offset)));
+    }
   }
+
+  if (IsVarArg) {
+    // Record the frame index of the first variable argument which is a value
+    // necessary to VASTART.
+    EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
+    static const MCPhysReg ArgRegs[] = {EZH::R0, EZH::R1, EZH::R2, EZH::R3};
+    unsigned NumArgRegs = std::size(ArgRegs);
+    unsigned Idx = CCInfo.getFirstUnallocated(ArgRegs);
+
+    unsigned NumSpillBytes = (NumArgRegs - Idx) * 4;
+    unsigned NumStackBytes = CCInfo.getStackSize();
+    FuncInfo->setVarArgsRegIdx(Idx);
+
+    int VarArgsFI;
+    SmallVector<SDValue, 4> MemOps;
+
+    if (NumSpillBytes > 0) {
+      FuncInfo->setVarArgsSaveSize(NumSpillBytes);
+      int VaArgOffset = -static_cast<int>(NumSpillBytes);
+      VarArgsFI =
+          MF.getFrameInfo().CreateFixedObject(NumSpillBytes, VaArgOffset, true);
+      FuncInfo->setVarArgsFrameIndex(VarArgsFI);
+
+      SDValue FIN =
+          DAG.getFrameIndex(VarArgsFI, getPointerTy(DAG.getDataLayout()));
+
+      for (unsigned i = Idx; i < NumArgRegs; ++i) {
+        Register VReg = RegInfo.createVirtualRegister(&EZH::GPRRegClass);
+        RegInfo.addLiveIn(ArgRegs[i], VReg);
+        SDValue Arg = DAG.getCopyFromReg(Chain, DL, VReg, MVT::i32);
+
+        unsigned StoreOffset = (i - Idx) * 4;
+        SDValue Addr = DAG.getNode(ISD::ADD, DL, MVT::i32, FIN,
+                                   DAG.getConstant(StoreOffset, DL, MVT::i32));
+        MemOps.push_back(DAG.getStore(
+            Chain, DL, Arg, Addr,
+            MachinePointerInfo::getFixedStack(MF, VarArgsFI, StoreOffset)));
+      }
+    } else {
+      VarArgsFI = MF.getFrameInfo().CreateFixedObject(4, NumStackBytes, true);
+      FuncInfo->setVarArgsFrameIndex(VarArgsFI);
+    }
+
+    if (!MemOps.empty())
+      Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, MemOps);
+  }
+
+  return Chain;
 }
 
 SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
@@ -402,345 +1051,102 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   SmallVectorImpl<ISD::InputArg> &Ins = CLI.Ins;
   SDValue Chain = CLI.Chain;
   SDValue Callee = CLI.Callee;
-  bool &IsTailCall = CLI.IsTailCall;
   CallingConv::ID CallConv = CLI.CallConv;
   bool IsVarArg = CLI.IsVarArg;
 
-  // EZH target does not yet support tail call optimization.
-  IsTailCall = false;
+  CLI.IsTailCall = false;
 
-  switch (CallConv) {
-  case CallingConv::Fast:
-  case CallingConv::C:
-    return LowerCCCCallTo(Chain, Callee, CallConv, IsVarArg, IsTailCall, Outs,
-                          OutVals, Ins, DL, DAG, InVals);
-  default:
-    report_fatal_error("Unsupported calling convention");
-  }
-}
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
+    Callee = DAG.getTargetGlobalAddress(G->getGlobal(), DL,
+                                        getPointerTy(DAG.getDataLayout()));
+  else if (ExternalSymbolSDNode *E = dyn_cast<ExternalSymbolSDNode>(Callee))
+    Callee = DAG.getTargetExternalSymbol(E->getSymbol(),
+                                         getPointerTy(DAG.getDataLayout()));
 
-// LowerCCCArguments - transform physical registers into virtual registers and
-// generate load operations for arguments places on the stack.
-SDValue EZHTargetLowering::LowerCCCArguments(
-    SDValue Chain, CallingConv::ID CallConv, bool IsVarArg,
-    const SmallVectorImpl<ISD::InputArg> &Ins, const SDLoc &DL,
-    SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals) const {
-  MachineFunction &MF = DAG.getMachineFunction();
-  MachineFrameInfo &MFI = MF.getFrameInfo();
-  MachineRegisterInfo &RegInfo = MF.getRegInfo();
-  EZHMachineFunctionInfo *EZHMFI = MF.getInfo<EZHMachineFunctionInfo>();
-
-  // Assign locations to all of the incoming arguments.
-  SmallVector<CCValAssign, 16> ArgLocs;
-  CCState CCInfo(CallConv, IsVarArg, DAG.getMachineFunction(), ArgLocs,
-                 *DAG.getContext());
-  if (CallConv == CallingConv::Fast) {
-    CCInfo.AnalyzeFormalArguments(Ins, CC_EZH32_Fast);
-  } else {
-    CCInfo.AnalyzeFormalArguments(Ins, CC_EZH32);
-  }
-
-  for (const CCValAssign &VA : ArgLocs) {
-    if (VA.isRegLoc()) {
-      // Arguments passed in registers
-      EVT RegVT = VA.getLocVT();
-      switch (RegVT.getSimpleVT().SimpleTy) {
-      case MVT::i32: {
-        Register VReg = RegInfo.createVirtualRegister(&EZH::GPRRegClass);
-        RegInfo.addLiveIn(VA.getLocReg(), VReg);
-        SDValue ArgValue = DAG.getCopyFromReg(Chain, DL, VReg, RegVT);
-
-        // If this is an 8/16-bit value, it is really passed promoted to 32
-        // bits. Insert an assert[sz]ext to capture this, then truncate to the
-        // right size.
-        if (VA.getLocInfo() == CCValAssign::SExt)
-          ArgValue = DAG.getNode(ISD::AssertSext, DL, RegVT, ArgValue,
-                                 DAG.getValueType(VA.getValVT()));
-        else if (VA.getLocInfo() == CCValAssign::ZExt)
-          ArgValue = DAG.getNode(ISD::AssertZext, DL, RegVT, ArgValue,
-                                 DAG.getValueType(VA.getValVT()));
-
-        if (VA.getLocInfo() != CCValAssign::Full)
-          ArgValue = DAG.getNode(ISD::TRUNCATE, DL, VA.getValVT(), ArgValue);
-
-        InVals.push_back(ArgValue);
-        break;
-      }
-      default:
-        LLVM_DEBUG(dbgs() << "LowerFormalArguments Unhandled argument type: "
-                          << RegVT << "\n");
-        llvm_unreachable("unhandled argument type");
-      }
-    } else {
-      // Only arguments passed on the stack should make it here.
-      assert(VA.isMemLoc());
-      // Load the argument to a virtual register
-      unsigned ObjSize = VA.getLocVT().getSizeInBits() / 8;
-      // Check that the argument fits in stack slot
-      if (ObjSize > 4) {
-        errs() << "LowerFormalArguments Unhandled argument type: "
-               << VA.getLocVT() << "\n";
-      }
-      // Create the frame index object for this incoming parameter...
-      int FI = MFI.CreateFixedObject(ObjSize, VA.getLocMemOffset(), true);
-
-      // Create the SelectionDAG nodes corresponding to a load
-      // from this parameter
-      SDValue FIN = DAG.getFrameIndex(FI, MVT::i32);
-      InVals.push_back(DAG.getLoad(
-          VA.getLocVT(), DL, Chain, FIN,
-          MachinePointerInfo::getFixedStack(DAG.getMachineFunction(), FI)));
-    }
-  }
-
-  // The EZH ABI for returning structs by value requires that we copy
-  // the sret argument into rv for the return. Save the argument into
-  // a virtual register so that we can access it from the return points.
-  if (MF.getFunction().hasStructRetAttr()) {
-    Register Reg = EZHMFI->getSRetReturnReg();
-    if (!Reg) {
-      Reg = MF.getRegInfo().createVirtualRegister(getRegClassFor(MVT::i32));
-      EZHMFI->setSRetReturnReg(Reg);
-    }
-    SDValue Copy = DAG.getCopyToReg(DAG.getEntryNode(), DL, Reg, InVals[0]);
-    Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Copy, Chain);
-  }
-
-  if (IsVarArg) {
-    // Record the frame index of the first variable argument
-    // which is a value necessary to VASTART.
-    int FI = MFI.CreateFixedObject(4, CCInfo.getStackSize(), true);
-    EZHMFI->setVarArgsFrameIndex(FI);
-  }
-
-  return Chain;
-}
-
-bool EZHTargetLowering::CanLowerReturn(
-    CallingConv::ID CallConv, MachineFunction &MF, bool IsVarArg,
-    const SmallVectorImpl<ISD::OutputArg> &Outs, LLVMContext &Context,
-    const Type *RetTy) const {
-  SmallVector<CCValAssign, 16> RVLocs;
-  CCState CCInfo(CallConv, IsVarArg, MF, RVLocs, Context);
-
-  return CCInfo.CheckReturn(Outs, RetCC_EZH32);
-}
-
-SDValue
-EZHTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
-                               bool IsVarArg,
-                               const SmallVectorImpl<ISD::OutputArg> &Outs,
-                               const SmallVectorImpl<SDValue> &OutVals,
-                               const SDLoc &DL, SelectionDAG &DAG) const {
-  // CCValAssign - represent the assignment of the return value to a location
-  SmallVector<CCValAssign, 16> RVLocs;
-
-  // CCState - Info about the registers and stack slot.
-  CCState CCInfo(CallConv, IsVarArg, DAG.getMachineFunction(), RVLocs,
-                 *DAG.getContext());
-
-  // Analize return values.
-  CCInfo.AnalyzeReturn(Outs, RetCC_EZH32);
-
-  SDValue Glue;
-  SmallVector<SDValue, 4> RetOps(1, Chain);
-
-  // Copy the result values into the output registers.
-  for (unsigned i = 0; i != RVLocs.size(); ++i) {
-    CCValAssign &VA = RVLocs[i];
-    assert(VA.isRegLoc() && "Can only return in registers!");
-
-    Chain = DAG.getCopyToReg(Chain, DL, VA.getLocReg(), OutVals[i], Glue);
-
-    // Guarantee that all emitted copies are stuck together with flags.
-    Glue = Chain.getValue(1);
-    RetOps.push_back(DAG.getRegister(VA.getLocReg(), VA.getLocVT()));
-  }
-
-  // The EZH ABI for returning structs by value requires that we copy
-  // the sret argument into rv for the return. We saved the argument into
-  // a virtual register in the entry block, so now we copy the value out
-  // and into rv.
-  if (DAG.getMachineFunction().getFunction().hasStructRetAttr()) {
-    MachineFunction &MF = DAG.getMachineFunction();
-    EZHMachineFunctionInfo *EZHMFI = MF.getInfo<EZHMachineFunctionInfo>();
-    Register Reg = EZHMFI->getSRetReturnReg();
-    assert(Reg &&
-           "SRetReturnReg should have been set in LowerFormalArguments().");
-    SDValue Val =
-        DAG.getCopyFromReg(Chain, DL, Reg, getPointerTy(DAG.getDataLayout()));
-
-    Chain = DAG.getCopyToReg(Chain, DL, EZH::RV, Val, Glue);
-    Glue = Chain.getValue(1);
-    RetOps.push_back(
-        DAG.getRegister(EZH::RV, getPointerTy(DAG.getDataLayout())));
-  }
-
-  RetOps[0] = Chain; // Update chain
-
-  unsigned Opc = EZHISD::RET_GLUE;
-  if (Glue.getNode())
-    RetOps.push_back(Glue);
-
-  // Return Void
-  return DAG.getNode(Opc, DL, MVT::Other,
-                     ArrayRef<SDValue>(&RetOps[0], RetOps.size()));
-}
-
-// LowerCCCCallTo - functions arguments are copied from virtual regs to
-// (physical regs)/(stack frame), CALLSEQ_START and CALLSEQ_END are emitted.
-SDValue EZHTargetLowering::LowerCCCCallTo(
-    SDValue Chain, SDValue Callee, CallingConv::ID CallConv, bool IsVarArg,
-    bool /*IsTailCall*/, const SmallVectorImpl<ISD::OutputArg> &Outs,
-    const SmallVectorImpl<SDValue> &OutVals,
-    const SmallVectorImpl<ISD::InputArg> &Ins, const SDLoc &DL,
-    SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals) const {
   // Analyze operands of the call, assigning locations to each operand.
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, DAG.getMachineFunction(), ArgLocs,
                  *DAG.getContext());
-  GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee);
-  MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
-
-  if (IsVarArg) {
-    CCInfo.AnalyzeCallOperands(Outs, CC_EZH32_VarArg);
-  } else {
-    if (CallConv == CallingConv::Fast)
-      CCInfo.AnalyzeCallOperands(Outs, CC_EZH32_Fast);
-    else
-      CCInfo.AnalyzeCallOperands(Outs, CC_EZH32);
-  }
+  CCInfo.AnalyzeCallOperands(Outs, CC_EZH);
 
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getStackSize();
-
-  // Create local copies for byval args.
-  SmallVector<SDValue, 8> ByValArgs;
-  for (unsigned I = 0, E = Outs.size(); I != E; ++I) {
-    ISD::ArgFlagsTy Flags = Outs[I].Flags;
-    if (!Flags.isByVal())
-      continue;
-
-    SDValue Arg = OutVals[I];
-    unsigned Size = Flags.getByValSize();
-    Align Alignment = Flags.getNonZeroByValAlign();
-
-    int FI = MFI.CreateStackObject(Size, Alignment, false);
-    SDValue FIPtr = DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
-    SDValue SizeNode = DAG.getConstant(Size, DL, MVT::i32);
-
-    Chain = DAG.getMemcpy(Chain, DL, FIPtr, Arg, SizeNode, Alignment, Alignment,
-                          /*IsVolatile=*/false,
-                          /*AlwaysInline=*/false,
-                          /*CI=*/nullptr, std::nullopt, MachinePointerInfo(),
-                          MachinePointerInfo());
-    ByValArgs.push_back(FIPtr);
-  }
-
   Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
 
   SmallVector<std::pair<unsigned, SDValue>, 4> RegsToPass;
-  SmallVector<SDValue, 12> MemOpChains;
-  SDValue StackPtr;
+  SmallVector<SDValue, 8> MemOpChains;
 
-  // Walk the register/memloc assignments, inserting copies/loads.
-  for (unsigned I = 0, J = 0, E = ArgLocs.size(); I != E; ++I) {
-    CCValAssign &VA = ArgLocs[I];
-    SDValue Arg = OutVals[I];
-    ISD::ArgFlagsTy Flags = Outs[I].Flags;
+  SDValue StackPtr =
+      DAG.getCopyFromReg(Chain, DL, EZH::SP, getPointerTy(DAG.getDataLayout()));
 
-    // Promote the value if needed.
-    switch (VA.getLocInfo()) {
-    case CCValAssign::Full:
-      break;
-    case CCValAssign::SExt:
-      Arg = DAG.getNode(ISD::SIGN_EXTEND, DL, VA.getLocVT(), Arg);
-      break;
-    case CCValAssign::ZExt:
-      Arg = DAG.getNode(ISD::ZERO_EXTEND, DL, VA.getLocVT(), Arg);
-      break;
-    case CCValAssign::AExt:
-      Arg = DAG.getNode(ISD::ANY_EXTEND, DL, VA.getLocVT(), Arg);
-      break;
-    default:
-      llvm_unreachable("Unknown loc info!");
+  assert(ArgLocs.size() == Outs.size() && "ArgLocs and Outs size mismatch!");
+  for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
+    CCValAssign &VA = ArgLocs[i];
+    SDValue Arg = OutVals[i];
+    ISD::ArgFlagsTy Flags = Outs[i].Flags;
+
+    if (Flags.isByVal()) {
+      unsigned Size = Flags.getByValSize();
+      if (Size == 0)
+        continue;
+      Align Alignment = Flags.getNonZeroByValAlign();
+      SDValue DstAddr =
+          DAG.getNode(ISD::ADD, DL, getPointerTy(DAG.getDataLayout()), StackPtr,
+                      DAG.getIntPtrConstant(VA.getLocMemOffset(), DL));
+      SDValue MemCpy = DAG.getMemcpy(
+          Chain, DL, DstAddr, Arg,
+          DAG.getConstant(Size, DL, getPointerTy(DAG.getDataLayout())),
+          Alignment, Alignment, /*isVol=*/false, /*AlwaysInline=*/false,
+          /*CI=*/nullptr, /*OverrideTailCall=*/std::nullopt,
+          MachinePointerInfo(), MachinePointerInfo());
+      MemOpChains.push_back(MemCpy);
+      continue;
     }
-
-    // Use local copy if it is a byval arg.
-    if (Flags.isByVal())
-      Arg = ByValArgs[J++];
 
     // Arguments that can be passed on register must be kept at RegsToPass
     // vector
     if (VA.isRegLoc()) {
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), Arg));
     } else {
-      assert(VA.isMemLoc());
-
-      if (StackPtr.getNode() == nullptr)
-        StackPtr = DAG.getCopyFromReg(Chain, DL, EZH::SP,
-                                      getPointerTy(DAG.getDataLayout()));
-
-      SDValue PtrOff =
-          DAG.getNode(ISD::ADD, DL, getPointerTy(DAG.getDataLayout()), StackPtr,
-                      DAG.getIntPtrConstant(VA.getLocMemOffset(), DL));
-
+      // Store to stack
+      int32_t Offset = VA.getLocMemOffset();
+      SDValue PtrOff = DAG.getConstant(static_cast<uint32_t>(Offset), DL,
+                                       getPointerTy(DAG.getDataLayout()));
+      SDValue DstAddr = DAG.getNode(
+          ISD::ADD, DL, getPointerTy(DAG.getDataLayout()), StackPtr, PtrOff);
       MemOpChains.push_back(
-          DAG.getStore(Chain, DL, Arg, PtrOff, MachinePointerInfo()));
+          DAG.getStore(Chain, DL, Arg, DstAddr, MachinePointerInfo()));
     }
   }
 
   // Transform all store nodes into one single node because all store nodes are
   // independent of each other.
   if (!MemOpChains.empty())
-    Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other,
-                        ArrayRef<SDValue>(&MemOpChains[0], MemOpChains.size()));
+    Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, MemOpChains);
 
   SDValue InGlue;
-
   // Build a sequence of copy-to-reg nodes chained together with token chain and
   // flag operands which copy the outgoing args into registers.  The InGlue in
   // necessary since all emitted instructions must be stuck together.
-  for (const auto &[Reg, N] : RegsToPass) {
-    Chain = DAG.getCopyToReg(Chain, DL, Reg, N, InGlue);
+  for (auto &Reg : RegsToPass) {
+    Chain = DAG.getCopyToReg(Chain, DL, Reg.first, Reg.second, InGlue);
     InGlue = Chain.getValue(1);
   }
 
-  // If the callee is a GlobalAddress node (quite common, every direct call is)
-  // turn it into a TargetGlobalAddress node so that legalize doesn't hack it.
-  // Likewise ExternalSymbol -> TargetExternalSymbol.
-  uint8_t OpFlag = EZHII::MO_NO_FLAG;
-  if (G) {
-    Callee = DAG.getTargetGlobalAddress(
-        G->getGlobal(), DL, getPointerTy(DAG.getDataLayout()), 0, OpFlag);
-  } else if (ExternalSymbolSDNode *E = dyn_cast<ExternalSymbolSDNode>(Callee)) {
-    Callee = DAG.getTargetExternalSymbol(
-        E->getSymbol(), getPointerTy(DAG.getDataLayout()), OpFlag);
-  }
-
-  // Returns a chain & a flag for retval copy to use.
-  SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
   SmallVector<SDValue, 8> Ops;
   Ops.push_back(Chain);
   Ops.push_back(Callee);
 
-  // Add a register mask operand representing the call-preserved registers.
-  // TODO: Should return-twice functions be handled?
-  const uint32_t *Mask =
-      TRI->getCallPreservedMask(DAG.getMachineFunction(), CallConv);
-  assert(Mask && "Missing call preserved mask for calling convention");
-  Ops.push_back(DAG.getRegisterMask(Mask));
-
   // Add argument registers to the end of the list so that they are
   // known live into the call.
-  for (const auto &[Reg, N] : RegsToPass)
-    Ops.push_back(DAG.getRegister(Reg, N.getValueType()));
+  for (auto &Reg : RegsToPass)
+    Ops.push_back(DAG.getRegister(Reg.first, Reg.second.getValueType()));
 
   if (InGlue.getNode())
     Ops.push_back(InGlue);
 
-  Chain = DAG.getNode(EZHISD::CALL, DL, NodeTys,
-                      ArrayRef<SDValue>(&Ops[0], Ops.size()));
+  Chain =
+      DAG.getNode(EZHISD::CALL, DL, DAG.getVTList(MVT::Other, MVT::Glue), Ops);
   InGlue = Chain.getValue(1);
 
   // Create the CALLSEQ_END node.
@@ -763,686 +1169,728 @@ SDValue EZHTargetLowering::LowerCallResult(
   SmallVector<CCValAssign, 16> RVLocs;
   CCState CCInfo(CallConv, IsVarArg, DAG.getMachineFunction(), RVLocs,
                  *DAG.getContext());
-
-  CCInfo.AnalyzeCallResult(Ins, RetCC_EZH32);
+  CCInfo.AnalyzeCallResult(Ins, RetCC_EZH);
 
   // Copy all of the result registers out of their specified physreg.
-  for (unsigned I = 0; I != RVLocs.size(); ++I) {
-    Chain = DAG.getCopyFromReg(Chain, DL, RVLocs[I].getLocReg(),
-                               RVLocs[I].getValVT(), InGlue)
+  for (auto &VA : RVLocs) {
+    assert(VA.isRegLoc() && "Only register returns supported!");
+    Chain = DAG.getCopyFromReg(Chain, DL, VA.getLocReg(), VA.getValVT(), InGlue)
                 .getValue(1);
     InGlue = Chain.getValue(2);
     InVals.push_back(Chain.getValue(0));
   }
-
   return Chain;
 }
 
-//===----------------------------------------------------------------------===//
-//                      Custom Lowerings
-//===----------------------------------------------------------------------===//
+SDValue
+EZHTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
+                               bool IsVarArg,
+                               const SmallVectorImpl<ISD::OutputArg> &Outs,
+                               const SmallVectorImpl<SDValue> &OutVals,
+                               const SDLoc &DL, SelectionDAG &DAG) const {
+  // CCValAssign - represent the assignment of the return value to a location
+  SmallVector<CCValAssign, 16> RVLocs;
 
-static LPCC::CondCode IntCondCCodeToICC(SDValue CC, const SDLoc &DL,
-                                        SDValue &RHS, SelectionDAG &DAG) {
-  ISD::CondCode SetCCOpcode = cast<CondCodeSDNode>(CC)->get();
+  // CCState - Info about the registers and stack slot.
+  CCState CCInfo(CallConv, IsVarArg, DAG.getMachineFunction(), RVLocs,
+                 *DAG.getContext());
 
-  // For integer, only the SETEQ, SETNE, SETLT, SETLE, SETGT, SETGE, SETULT,
-  // SETULE, SETUGT, and SETUGE opcodes are used (see CodeGen/ISDOpcodes.h)
-  // and EZH only supports integer comparisons, so only provide definitions
-  // for them.
-  switch (SetCCOpcode) {
-  case ISD::SETEQ:
-    return LPCC::ICC_EQ;
-  case ISD::SETGT:
-    if (ConstantSDNode *RHSC = dyn_cast<ConstantSDNode>(RHS))
-      if (RHSC->getZExtValue() == 0xFFFFFFFF) {
-        // X > -1 -> X >= 0 -> is_plus(X)
-        RHS = DAG.getConstant(0, DL, RHS.getValueType());
-        return LPCC::ICC_PL;
-      }
-    return LPCC::ICC_GT;
-  case ISD::SETUGT:
-    return LPCC::ICC_UGT;
-  case ISD::SETLT:
-    if (ConstantSDNode *RHSC = dyn_cast<ConstantSDNode>(RHS))
-      if (RHSC->getZExtValue() == 0)
-        // X < 0 -> is_minus(X)
-        return LPCC::ICC_MI;
-    return LPCC::ICC_LT;
-  case ISD::SETULT:
-    return LPCC::ICC_ULT;
-  case ISD::SETLE:
-    if (ConstantSDNode *RHSC = dyn_cast<ConstantSDNode>(RHS))
-      if (RHSC->getZExtValue() == 0xFFFFFFFF) {
-        // X <= -1 -> X < 0 -> is_minus(X)
-        RHS = DAG.getConstant(0, DL, RHS.getValueType());
-        return LPCC::ICC_MI;
-      }
-    return LPCC::ICC_LE;
-  case ISD::SETULE:
-    return LPCC::ICC_ULE;
-  case ISD::SETGE:
-    if (ConstantSDNode *RHSC = dyn_cast<ConstantSDNode>(RHS))
-      if (RHSC->getZExtValue() == 0)
-        // X >= 0 -> is_plus(X)
-        return LPCC::ICC_PL;
-    return LPCC::ICC_GE;
-  case ISD::SETUGE:
-    return LPCC::ICC_UGE;
-  case ISD::SETNE:
-    return LPCC::ICC_NE;
-  case ISD::SETONE:
-  case ISD::SETUNE:
-  case ISD::SETOGE:
-  case ISD::SETOLE:
-  case ISD::SETOLT:
-  case ISD::SETOGT:
-  case ISD::SETOEQ:
-  case ISD::SETUEQ:
-  case ISD::SETO:
-  case ISD::SETUO:
-    llvm_unreachable("Unsupported comparison.");
+  // Analyze return values.
+  CCInfo.AnalyzeReturn(Outs, RetCC_EZH);
+
+  SDValue Glue;
+  SmallVector<SDValue, 4> RetOps(1, Chain);
+
+  // Copy the result values into the output registers.
+  for (unsigned i = 0, e = RVLocs.size(); i != e; ++i) {
+    CCValAssign &VA = RVLocs[i];
+    assert(VA.isRegLoc() && "Only register returns supported!");
+    Chain = DAG.getCopyToReg(Chain, DL, VA.getLocReg(), OutVals[i], Glue);
+    Glue = Chain.getValue(1);
+    RetOps.push_back(DAG.getRegister(VA.getLocReg(), VA.getLocVT()));
+  }
+
+  RetOps[0] = Chain;
+  if (Glue.getNode())
+    RetOps.push_back(Glue);
+
+  return DAG.getNode(EZHISD::RET_GLUE_INTERNAL, DL, MVT::Other, RetOps);
+}
+
+EVT EZHTargetLowering::getSetCCResultType(const DataLayout &DL,
+                                          LLVMContext &Context, EVT VT) const {
+  if (!VT.isVector())
+    return getPointerTy(DL);
+  return VT.changeVectorElementTypeToInteger();
+}
+
+bool EZHTargetLowering::CanLowerReturn(
+    CallingConv::ID CallConv, MachineFunction &MF, bool IsVarArg,
+    const SmallVectorImpl<ISD::OutputArg> &Outs, LLVMContext &Context,
+    const Type *RetTy) const {
+  SmallVector<CCValAssign, 16> RVLocs;
+  CCState CCInfo(CallConv, IsVarArg, MF, RVLocs, Context);
+  return CCInfo.CheckReturn(Outs, RetCC_EZH);
+}
+
+const char *EZHTargetLowering::getTargetNodeName(unsigned Opcode) const {
+  switch (static_cast<EZHISD::NodeType>(Opcode)) {
+  case EZHISD::FIRST_NUMBER:
+    break;
+  case EZHISD::PER_READ:
+    return "EZHISD::PER_READ";
+  case EZHISD::PER_WRITE:
+    return "EZHISD::PER_WRITE";
+  case EZHISD::RET_GLUE_INTERNAL:
+    return "EZHISD::RET_GLUE_INTERNAL";
+  case EZHISD::CALL:
+    return "EZHISD::CALL";
+  case EZHISD::CMP:
+    return "EZHISD::CMP";
+  case EZHISD::BR_CC:
+    return "EZHISD::BR_CC";
+  case EZHISD::SELECT_CC:
+    return "EZHISD::SELECT_CC";
+  case EZHISD::BTOG:
+    return "EZHISD::BTOG";
+  case EZHISD::BR_JT:
+    return "EZHISD::BR_JT";
+  case EZHISD::Wrapper:
+    return "EZHISD::Wrapper";
+  case EZHISD::WrapperJT:
+    return "EZHISD::WrapperJT";
+  case EZHISD::EH_SJLJ_SETJMP:
+    return "EZHISD::EH_SJLJ_SETJMP";
+  case EZHISD::EH_SJLJ_LONGJMP:
+    return "EZHISD::EH_SJLJ_LONGJMP";
+  case EZHISD::EH_SJLJ_SETUP_DISPATCH:
+    return "EZHISD::EH_SJLJ_SETUP_DISPATCH";
+  }
+  return nullptr;
+}
+
+static EZHCC::CondCode IntCCToEZHCC(ISD::CondCode CC) {
+  switch (CC) {
   default:
-    llvm_unreachable("Unknown integer condition code!");
+    llvm_unreachable("Unknown condition code!");
+  case ISD::SETEQ:
+    return EZHCC::ICC_ZE;
+  case ISD::SETNE:
+    return EZHCC::ICC_NZ;
+  case ISD::SETGE:
+    return EZHCC::ICC_PO;
+  case ISD::SETLT:
+    return EZHCC::ICC_NE;
+  case ISD::SETGT:
+    return EZHCC::ICC_AZ;
+  case ISD::SETLE:
+    return EZHCC::ICC_ZB;
+  case ISD::SETULT:
+    return EZHCC::ICC_CA;
+  case ISD::SETUGE:
+    return EZHCC::ICC_NC;
   }
 }
 
 SDValue EZHTargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
   SDValue Chain = Op.getOperand(0);
-  SDValue Cond = Op.getOperand(1);
+  ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(1))->get();
   SDValue LHS = Op.getOperand(2);
   SDValue RHS = Op.getOperand(3);
   SDValue Dest = Op.getOperand(4);
-  SDLoc DL(Op);
+  SDLoc dl(Op);
 
-  LPCC::CondCode CC = IntCondCCodeToICC(Cond, DL, RHS, DAG);
-  SDValue TargetCC = DAG.getConstant(CC, DL, MVT::i32);
-  SDValue Glue = DAG.getNode(EZHISD::SET_FLAG, DL, MVT::Glue, LHS, RHS);
+  preprocessComparison(LHS, RHS, CC, DAG, dl);
 
-  return DAG.getNode(EZHISD::BR_CC, DL, Op.getValueType(), Chain, Dest,
-                     TargetCC, Glue);
+  EZHCC::CondCode EzhCC = IntCCToEZHCC(CC);
+  SDValue TargetCC = DAG.getTargetConstant(EzhCC, dl, MVT::i32);
+  SDValue Cmp = DAG.getNode(EZHISD::CMP, dl, MVT::Glue, LHS, RHS);
+  return DAG.getNode(EZHISD::BR_CC, dl, MVT::Other, Chain, Dest, TargetCC, Cmp);
 }
 
-SDValue EZHTargetLowering::LowerMUL(SDValue Op, SelectionDAG &DAG) const {
-  EVT VT = Op->getValueType(0);
-  if (VT != MVT::i32)
-    return SDValue();
+#include "EZHInstrInfo.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 
-  ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op->getOperand(1));
-  if (!C)
-    return SDValue();
+MachineBasicBlock *
+EZHTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
+                                               MachineBasicBlock *BB) const {
+  const EZHSubtarget &STI =
+      MI.getParent()->getParent()->getSubtarget<EZHSubtarget>();
+  const TargetInstrInfo *TII = STI.getInstrInfo();
+  DebugLoc DL = MI.getDebugLoc();
+  MachineFunction *MF = BB->getParent();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
 
-  int64_t MulAmt = C->getSExtValue();
-  int32_t HighestOne = -1;
-  uint32_t NonzeroEntries = 0;
-  int SignedDigit[32] = {0};
-
-  // Convert to non-adjacent form (NAF) signed-digit representation.
-  // NAF is a signed-digit form where no adjacent digits are non-zero. It is the
-  // minimal Hamming weight representation of a number (on average 1/3 of the
-  // digits will be non-zero vs 1/2 for regular binary representation). And as
-  // the non-zero digits will be the only digits contributing to the instruction
-  // count, this is desirable. The next loop converts it to NAF (following the
-  // approach in 'Guide to Elliptic Curve Cryptography' [ISBN: 038795273X]) by
-  // choosing the non-zero coefficients such that the resulting quotient is
-  // divisible by 2 which will cause the next coefficient to be zero.
-  int64_t E = std::abs(MulAmt);
-  int S = (MulAmt < 0 ? -1 : 1);
-  int I = 0;
-  while (E > 0) {
-    int ZI = 0;
-    if (E % 2 == 1) {
-      ZI = 2 - (E % 4);
-      if (ZI != 0)
-        ++NonzeroEntries;
+  switch (MI.getOpcode()) {
+  case EZH::PseudoCMP: {
+    Register DestReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+    BuildMI(*BB, MI, DL, TII->get(EZH::SUB_s), DestReg)
+        .addReg(MI.getOperand(0).getReg())
+        .addReg(MI.getOperand(1).getReg())
+        .addImm(EZHCC::ICC_EU);
+    MI.eraseFromParent();
+    return BB;
+  }
+  case EZH::PseudoCMPi: {
+    Register DestReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+    BuildMI(*BB, MI, DL, TII->get(EZH::SUB_IMM_s), DestReg)
+        .addReg(MI.getOperand(0).getReg())
+        .addImm(MI.getOperand(1).getImm())
+        .addImm(EZHCC::ICC_EU);
+    MI.eraseFromParent();
+    return BB;
+  }
+  case EZH::PseudoBR_CC: {
+    unsigned CC = MI.getOperand(1).getImm();
+    MachineBasicBlock *TrueBB = MI.getOperand(0).getMBB();
+    MachineBasicBlock *FalseBB = nullptr;
+    for (auto *Succ : BB->successors()) {
+      if (Succ != TrueBB) {
+        FalseBB = Succ;
+        break;
+      }
     }
-    SignedDigit[I] = S * ZI;
-    if (SignedDigit[I] == 1)
-      HighestOne = I;
-    E = (E - ZI) / 2;
-    ++I;
+
+    // Emit predicated GOTO (TrueBB)
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(TrueBB).addImm(CC);
+
+    auto NextIT = next_nodbg(MachineBasicBlock::iterator(MI), BB->end());
+    if (FalseBB && (NextIT == BB->end() || !NextIT->isBranch())) {
+      // Emit unconditional GOTO (FalseBB) with ICC_EU (Always)
+      BuildMI(*BB, MI, DL, TII->get(EZH::GOTO))
+          .addMBB(FalseBB)
+          .addImm(EZHCC::ICC_EU);
+    }
+    MI.eraseFromParent();
+    return BB;
+  }
+  case EZH::PseudoSELECT_CC: {
+    unsigned DestReg = MI.getOperand(0).getReg();
+    unsigned TrueReg = MI.getOperand(1).getReg();
+    unsigned FalseReg = MI.getOperand(2).getReg();
+    ISD::CondCode CC = static_cast<ISD::CondCode>(MI.getOperand(3).getImm());
+
+    const BasicBlock *LLVM_BB = BB->getBasicBlock();
+    MachineFunction::iterator It = ++BB->getIterator();
+    MachineFunction *F = BB->getParent();
+
+    MachineBasicBlock *TrueBB = F->CreateMachineBasicBlock(LLVM_BB);
+    MachineBasicBlock *DoneBB = F->CreateMachineBasicBlock(LLVM_BB);
+    F->insert(It, TrueBB);
+    F->insert(It, DoneBB);
+
+    DoneBB->splice(DoneBB->end(), BB,
+                   std::next(MachineBasicBlock::iterator(MI)), BB->end());
+    DoneBB->transferSuccessorsAndUpdatePHIs(BB);
+
+    BB->addSuccessor(TrueBB);
+    BB->addSuccessor(DoneBB);
+    TrueBB->addSuccessor(DoneBB);
+
+    EZHCC::CondCode BranchCC = EZHCC::ICC_ZE;
+    switch (CC) {
+    case ISD::SETEQ:
+      BranchCC = EZHCC::ICC_ZE;
+      break;
+    case ISD::SETNE:
+      BranchCC = EZHCC::ICC_NZ;
+      break;
+    case ISD::SETLT:
+      BranchCC = EZHCC::ICC_NE;
+      break;
+    case ISD::SETLE:
+      BranchCC = EZHCC::ICC_ZB;
+      break;
+    case ISD::SETGT:
+      BranchCC = EZHCC::ICC_AZ;
+      break;
+    case ISD::SETGE:
+      BranchCC = EZHCC::ICC_PO;
+      break;
+    case ISD::SETULT:
+      BranchCC = EZHCC::ICC_CA;
+      break;
+    case ISD::SETUGE:
+      BranchCC = EZHCC::ICC_NC;
+      break;
+    case ISD::SETUGT:
+      std::swap(TrueReg, FalseReg);
+      BranchCC = EZHCC::ICC_CA;
+      break;
+    case ISD::SETULE:
+      std::swap(TrueReg, FalseReg);
+      BranchCC = EZHCC::ICC_NC;
+      break;
+    default:
+      BranchCC = EZHCC::ICC_ZE;
+      break;
+    }
+
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(TrueBB).addImm(BranchCC);
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO))
+        .addMBB(DoneBB)
+        .addImm(EZHCC::ICC_EU);
+
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(EZH::PHI), DestReg)
+        .addReg(TrueReg)
+        .addMBB(TrueBB)
+        .addReg(FalseReg)
+        .addMBB(BB);
+
+    MI.eraseFromParent();
+    return DoneBB;
+  }
+  case EZH::EH_SjLj_SetJmp:
+    return emitEHSjLjSetJmp(MI, BB);
+  case EZH::EH_SjLj_LongJmp:
+    return emitEHSjLjLongJmp(MI, BB);
+  case EZH::EH_SjLj_Setup_Dispatch:
+    return emitSjLjDispatchBlock(MI, BB);
   }
 
-  // Compute number of instructions required. Due to differences in lowering
-  // between the different processors this count is not exact.
-  // Start by assuming a shift and a add/sub for every non-zero entry (hence
-  // every non-zero entry requires 1 shift and 1 add/sub except for the first
-  // entry).
-  int32_t InstrRequired = 2 * NonzeroEntries - 1;
-  // Correct possible over-adding due to shift by 0 (which is not emitted).
-  if (std::abs(MulAmt) % 2 == 1)
-    --InstrRequired;
-  // Return if the form generated would exceed the instruction threshold.
-  if (InstrRequired > EZHLowerConstantMulThreshold)
-    return SDValue();
-
-  SDValue Res;
-  SDLoc DL(Op);
-  SDValue V = Op->getOperand(0);
-
-  // Initialize the running sum. Set the running sum to the maximal shifted
-  // positive value (i.e., largest i such that zi == 1 and MulAmt has V<<i as a
-  // term NAF).
-  if (HighestOne == -1)
-    Res = DAG.getConstant(0, DL, MVT::i32);
-  else {
-    Res = DAG.getNode(ISD::SHL, DL, VT, V,
-                      DAG.getConstant(HighestOne, DL, MVT::i32));
-    SignedDigit[HighestOne] = 0;
-  }
-
-  // Assemble multiplication from shift, add, sub using NAF form and running
-  // sum.
-  for (unsigned int I = 0; I < std::size(SignedDigit); ++I) {
-    if (SignedDigit[I] == 0)
-      continue;
-
-    // Shifted multiplicand (v<<i).
-    SDValue Op =
-        DAG.getNode(ISD::SHL, DL, VT, V, DAG.getConstant(I, DL, MVT::i32));
-    if (SignedDigit[I] == 1)
-      Res = DAG.getNode(ISD::ADD, DL, VT, Res, Op);
-    else if (SignedDigit[I] == -1)
-      Res = DAG.getNode(ISD::SUB, DL, VT, Res, Op);
-  }
-  return Res;
+  llvm_unreachable("Unexpected instr type to insert");
 }
 
-SDValue EZHTargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
-  SDValue LHS = Op.getOperand(0);
-  SDValue RHS = Op.getOperand(1);
-  SDValue Cond = Op.getOperand(2);
-  SDLoc DL(Op);
-
-  LPCC::CondCode CC = IntCondCCodeToICC(Cond, DL, RHS, DAG);
-  SDValue TargetCC = DAG.getConstant(CC, DL, MVT::i32);
-  SDValue Glue = DAG.getNode(EZHISD::SET_FLAG, DL, MVT::Glue, LHS, RHS);
-
-  return DAG.getNode(EZHISD::SETCC, DL, Op.getValueType(), TargetCC, Glue);
+Register EZHTargetLowering::getExceptionPointerRegister(
+    const Constant *PersonalityFn) const {
+  return Register();
 }
 
-SDValue EZHTargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const {
-  SDValue LHS = Op.getOperand(0);
-  SDValue RHS = Op.getOperand(1);
-  SDValue TrueV = Op.getOperand(2);
-  SDValue FalseV = Op.getOperand(3);
-  SDValue Cond = Op.getOperand(4);
-  SDLoc DL(Op);
-
-  LPCC::CondCode CC = IntCondCCodeToICC(Cond, DL, RHS, DAG);
-  SDValue TargetCC = DAG.getConstant(CC, DL, MVT::i32);
-  SDValue Glue = DAG.getNode(EZHISD::SET_FLAG, DL, MVT::Glue, LHS, RHS);
-
-  return DAG.getNode(EZHISD::SELECT_CC, DL, Op.getValueType(), TrueV, FalseV,
-                     TargetCC, Glue);
+Register EZHTargetLowering::getExceptionSelectorRegister(
+    const Constant *PersonalityFn) const {
+  return Register();
 }
 
-SDValue EZHTargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
+MachineBasicBlock *
+EZHTargetLowering::emitEHSjLjSetJmp(MachineInstr &MI,
+                                    MachineBasicBlock *MBB) const {
+  DebugLoc DL = MI.getDebugLoc();
+  MachineFunction *MF = MBB->getParent();
+  const EZHSubtarget &STI = MF->getSubtarget<EZHSubtarget>();
+  const TargetInstrInfo *TII = STI.getInstrInfo();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register BufReg = MI.getOperand(1).getReg();
+
+  // EZH SjLj Block Splitting Flow:
+  // Split the basic block to materialize SjLj return targets:
+  //         [ThisMBB (BB)]
+  //               |
+  //       -------- --------
+  //      |                 |
+  //  [MainMBB]        [RestoreMBB] (Target PC label address taken)
+  //    v = 0             v = 1
+  //      |                 |
+  //       -------- --------
+  //               |
+  //           [SinkMBB]
+  //       v = phi(v_main, v_restore)
+
+  const BasicBlock *LLVM_BB = MBB->getBasicBlock();
+  MachineFunction::iterator It = ++MBB->getIterator();
+
+  MachineBasicBlock *ThisMBB = MBB;
+  MachineBasicBlock *MainMBB = MF->CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *RestoreMBB = MF->CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *SinkMBB = MF->CreateMachineBasicBlock(LLVM_BB);
+
+  MF->insert(It, MainMBB);
+  MF->insert(It, RestoreMBB);
+  MF->insert(It, SinkMBB);
+
+  RestoreMBB->setMachineBlockAddressTaken();
+
+  // Split the block at MI
+  SinkMBB->splice(SinkMBB->begin(), MBB,
+                  std::next(MachineBasicBlock::iterator(MI)), MBB->end());
+  SinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
+
+  // Succ edges
+  ThisMBB->addSuccessor(MainMBB);
+  ThisMBB->addSuccessor(RestoreMBB);
+
+  // Save the PC target address (taking address of RestoreMBB) at Offset 4 in
+  // BufReg
+  Register TargetPCReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  // Programmatically allocate RestoreMBB as a custom EZHConstantPoolValue
+  Type *PtrTy = Type::getInt32Ty(MF->getFunction().getContext());
+  auto *CPV = EZHConstantPoolMBB::Create(PtrTy, RestoreMBB);
+  unsigned CPI = MF->getConstantPool()->getConstantPoolIndex(CPV, Align(4));
+
+  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::LOAD_CONSTANT), TargetPCReg)
+      .addConstantPoolIndex(CPI);
+
+  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::STR))
+      .addReg(TargetPCReg)
+      .addReg(BufReg)
+      .addImm(4)
+      .addImm(EZHCC::ICC_EU);
+
+  // Save Frame Pointer R7 at Offset 0 in BufReg
+  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::STR))
+      .addReg(EZH::R7)
+      .addReg(BufReg)
+      .addImm(0)
+      .addImm(EZHCC::ICC_EU);
+
+  // Save Stack Pointer SP at Offset 8 in BufReg
+  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::STR))
+      .addReg(EZH::SP)
+      .addReg(BufReg)
+      .addImm(8)
+      .addImm(EZHCC::ICC_EU);
+
+  // Save Callee-Saved Register R6 (Base Pointer) at Offset 12 in BufReg
+  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::STR))
+      .addReg(EZH::R6)
+      .addReg(BufReg)
+      .addImm(12)
+      .addImm(EZHCC::ICC_EU);
+
+  // Safety Goto from ThisMBB directly into MainMBB
+  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::GOTO))
+      .addMBB(MainMBB)
+      .addImm(EZHCC::ICC_EU);
+
+  // MainMBB returns 0 on initialization
+  Register MainValReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  BuildMI(MainMBB, DL, TII->get(EZH::LOAD_IMM), MainValReg)
+      .addImm(0)
+      .addImm(EZHCC::ICC_EU);
+  BuildMI(MainMBB, DL, TII->get(EZH::GOTO))
+      .addMBB(SinkMBB)
+      .addImm(EZHCC::ICC_EU);
+  MainMBB->addSuccessor(SinkMBB);
+
+  // RestoreMBB returns 1 on builtin longjmp return
+  Register RestoreValReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  BuildMI(RestoreMBB, DL, TII->get(EZH::LOAD_IMM), RestoreValReg)
+      .addImm(1)
+      .addImm(EZHCC::ICC_EU);
+  BuildMI(RestoreMBB, DL, TII->get(EZH::GOTO))
+      .addMBB(SinkMBB)
+      .addImm(EZHCC::ICC_EU);
+  RestoreMBB->addSuccessor(SinkMBB);
+
+  // SinkMBB merges return statuses via PHI node
+  BuildMI(*SinkMBB, SinkMBB->begin(), DL, TII->get(EZH::PHI), DstReg)
+      .addReg(MainValReg)
+      .addMBB(MainMBB)
+      .addReg(RestoreValReg)
+      .addMBB(RestoreMBB);
+
+  MI.eraseFromParent();
+  return SinkMBB;
+}
+
+MachineBasicBlock *
+EZHTargetLowering::emitEHSjLjLongJmp(MachineInstr &MI,
+                                     MachineBasicBlock *MBB) const {
+  DebugLoc DL = MI.getDebugLoc();
+  MachineFunction *MF = MBB->getParent();
+  const EZHSubtarget &STI = MF->getSubtarget<EZHSubtarget>();
+  const TargetInstrInfo *TII = STI.getInstrInfo();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+
+  Register BufReg = MI.getOperand(0).getReg();
+
+  Register TargetPCReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+
+  // EZH SjLj Restore:
+  // Load Target PC from Offset 4 (jbuf[1])
+  BuildMI(*MBB, MI, DL, TII->get(EZH::LDR), TargetPCReg)
+      .addReg(BufReg)
+      .addImm(4)
+      .addImm(EZHCC::ICC_EU);
+
+  // Load Frame Pointer R7 from Offset 0 (jbuf[0])
+  BuildMI(*MBB, MI, DL, TII->get(EZH::LDR), EZH::R7)
+      .addReg(BufReg)
+      .addImm(0)
+      .addImm(EZHCC::ICC_EU);
+
+  // Load Stack Pointer SP from Offset 8
+  BuildMI(*MBB, MI, DL, TII->get(EZH::LDR), EZH::SP)
+      .addReg(BufReg)
+      .addImm(8)
+      .addImm(EZHCC::ICC_EU);
+
+  // Load Callee-Saved Register R6 (Base Pointer) from Offset 12
+  BuildMI(*MBB, MI, DL, TII->get(EZH::LDR), EZH::R6)
+      .addReg(BufReg)
+      .addImm(12)
+      .addImm(EZHCC::ICC_EU);
+
+  // Jump to restored PC target natively!
+  BuildMI(*MBB, MI, DL, TII->get(EZH::GOTO_REG))
+      .addReg(TargetPCReg)
+      .addImm(EZHCC::ICC_EU);
+
+  MI.eraseFromParent();
+  return MBB;
+}
+
+SDValue EZHTargetLowering::LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const {
+  const EZHSubtarget &ASTI =
+      DAG.getMachineFunction().getSubtarget<EZHSubtarget>();
+  const EZHRegisterInfo &RI = *ASTI.getRegisterInfo();
   MachineFunction &MF = DAG.getMachineFunction();
-  EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  MFI.setFrameAddressIsTaken(true);
 
-  SDLoc DL(Op);
-  SDValue FI = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(),
-                                 getPointerTy(DAG.getDataLayout()));
-
-  // vastart just stores the address of the VarArgsFrameIndex slot into the
-  // memory location argument.
-  const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
-  return DAG.getStore(Op.getOperand(0), DL, FI, Op.getOperand(1),
-                      MachinePointerInfo(SV));
+  EVT VT = Op.getValueType();
+  SDLoc dl(Op);
+  unsigned Depth = Op.getConstantOperandVal(0);
+  Register FrameReg = RI.getFrameRegister(MF);
+  SDValue FrameAddr = DAG.getCopyFromReg(DAG.getEntryNode(), dl, FrameReg, VT);
+  while (Depth--)
+    FrameAddr = DAG.getLoad(VT, dl, DAG.getEntryNode(), FrameAddr,
+                            MachinePointerInfo());
+  return FrameAddr;
 }
 
 SDValue EZHTargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
                                                    SelectionDAG &DAG) const {
+  SDLoc dl(Op);
+
+  // Inputs: Chain (0), Size (1), Alignment (2)
   SDValue Chain = Op.getOperand(0);
   SDValue Size = Op.getOperand(1);
-  SDLoc DL(Op);
+  Align Alignment = cast<ConstantSDNode>(Op.getOperand(2))->getAlignValue();
 
-  Register SPReg = getStackPointerRegisterToSaveRestore();
+  // Get current stack pointer SP
+  SDValue SP = DAG.getCopyFromReg(Chain, dl, EZH::SP, MVT::i32);
+  Chain = SP.getValue(1);
 
-  // Get a reference to the stack pointer.
-  SDValue StackPointer = DAG.getCopyFromReg(Chain, DL, SPReg, MVT::i32);
+  // Subtract size from SP to allocate space down the stack
+  SDValue NewSP = DAG.getNode(ISD::SUB, dl, MVT::i32, SP, Size);
 
-  // Subtract the dynamic size from the actual stack size to
-  // obtain the new stack size.
-  SDValue Sub = DAG.getNode(ISD::SUB, DL, MVT::i32, StackPointer, Size);
+  // Enforce strict EZH stack alignment boundary
+  // Align dynamic stack allocations to at least 16 bytes to satisfy max
+  // structural alignments
+  uint64_t AlignVal = std::max<uint64_t>(16, Alignment.value());
+  NewSP = DAG.getNode(ISD::AND, dl, MVT::i32, NewSP,
+                      DAG.getSignedConstant(-AlignVal, dl, MVT::i32));
 
-  // For EZH, the outgoing memory arguments area should be on top of the
-  // alloca area on the stack i.e., the outgoing memory arguments should be
-  // at a lower address than the alloca area. Move the alloca area down the
-  // stack by adding back the space reserved for outgoing arguments to SP
-  // here.
-  //
-  // We do not know what the size of the outgoing args is at this point.
-  // So, we add a pseudo instruction ADJDYNALLOC that will adjust the
-  // stack pointer. We replace this instruction with on that has the correct,
-  // known offset in emitPrologue().
-  SDValue ArgAdjust = DAG.getNode(EZHISD::ADJDYNALLOC, DL, MVT::i32, Sub);
+  // Copy new aligned pointer back to EZH SP
+  Chain = DAG.getCopyToReg(Chain, dl, EZH::SP, NewSP);
 
-  // The Sub result contains the new stack start address, so it
-  // must be placed in the stack pointer register.
-  SDValue CopyChain = DAG.getCopyToReg(Chain, DL, SPReg, Sub);
-
-  SDValue Ops[2] = {ArgAdjust, CopyChain};
-  return DAG.getMergeValues(Ops, DL);
-}
-
-SDValue EZHTargetLowering::LowerRETURNADDR(SDValue Op,
-                                           SelectionDAG &DAG) const {
-  MachineFunction &MF = DAG.getMachineFunction();
-  MachineFrameInfo &MFI = MF.getFrameInfo();
-  MFI.setReturnAddressIsTaken(true);
-
-  EVT VT = Op.getValueType();
-  SDLoc DL(Op);
-  unsigned Depth = Op.getConstantOperandVal(0);
-  if (Depth) {
-    SDValue FrameAddr = LowerFRAMEADDR(Op, DAG);
-    const unsigned Offset = -4;
-    SDValue Ptr = DAG.getNode(ISD::ADD, DL, VT, FrameAddr,
-                              DAG.getIntPtrConstant(Offset, DL));
-    return DAG.getLoad(VT, DL, DAG.getEntryNode(), Ptr, MachinePointerInfo());
-  }
-
-  // Return the link register, which contains the return address.
-  // Mark it an implicit live-in.
-  Register Reg = MF.addLiveIn(TRI->getRARegister(), getRegClassFor(MVT::i32));
-  return DAG.getCopyFromReg(DAG.getEntryNode(), DL, Reg, VT);
-}
-
-SDValue EZHTargetLowering::LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const {
-  MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
-  MFI.setFrameAddressIsTaken(true);
-
-  EVT VT = Op.getValueType();
-  SDLoc DL(Op);
-  SDValue FrameAddr = DAG.getCopyFromReg(DAG.getEntryNode(), DL, EZH::FP, VT);
-  unsigned Depth = Op.getConstantOperandVal(0);
-  while (Depth--) {
-    const unsigned Offset = -8;
-    SDValue Ptr = DAG.getNode(ISD::ADD, DL, VT, FrameAddr,
-                              DAG.getIntPtrConstant(Offset, DL));
-    FrameAddr =
-        DAG.getLoad(VT, DL, DAG.getEntryNode(), Ptr, MachinePointerInfo());
-  }
-  return FrameAddr;
-}
-
-SDValue EZHTargetLowering::LowerConstantPool(SDValue Op,
-                                             SelectionDAG &DAG) const {
-  SDLoc DL(Op);
-  ConstantPoolSDNode *N = cast<ConstantPoolSDNode>(Op);
-  const Constant *C = N->getConstVal();
-  const EZHTargetObjectFile *TLOF = static_cast<const EZHTargetObjectFile *>(
-      getTargetMachine().getObjFileLowering());
-
-  // If the code model is small or constant will be placed in the small section,
-  // then assume address will fit in 21-bits.
-  if (getTargetMachine().getCodeModel() == CodeModel::Small ||
-      TLOF->isConstantInSmallSection(DAG.getDataLayout(), C)) {
-    SDValue Small = DAG.getTargetConstantPool(
-        C, MVT::i32, N->getAlign(), N->getOffset(), EZHII::MO_NO_FLAG);
-    return DAG.getNode(ISD::OR, DL, MVT::i32,
-                       DAG.getRegister(EZH::R0, MVT::i32),
-                       DAG.getNode(EZHISD::SMALL, DL, MVT::i32, Small));
-  } else {
-    uint8_t OpFlagHi = EZHII::MO_ABS_HI;
-    uint8_t OpFlagLo = EZHII::MO_ABS_LO;
-
-    SDValue Hi = DAG.getTargetConstantPool(C, MVT::i32, N->getAlign(),
-                                           N->getOffset(), OpFlagHi);
-    SDValue Lo = DAG.getTargetConstantPool(C, MVT::i32, N->getAlign(),
-                                           N->getOffset(), OpFlagLo);
-    Hi = DAG.getNode(EZHISD::HI, DL, MVT::i32, Hi);
-    Lo = DAG.getNode(EZHISD::LO, DL, MVT::i32, Lo);
-    SDValue Result = DAG.getNode(ISD::OR, DL, MVT::i32, Hi, Lo);
-    return Result;
-  }
-}
-
-SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
-                                              SelectionDAG &DAG) const {
-  SDLoc DL(Op);
-  const GlobalValue *GV = cast<GlobalAddressSDNode>(Op)->getGlobal();
-  int64_t Offset = cast<GlobalAddressSDNode>(Op)->getOffset();
-
-  const EZHTargetObjectFile *TLOF = static_cast<const EZHTargetObjectFile *>(
-      getTargetMachine().getObjFileLowering());
-
-  // If the code model is small or global variable will be placed in the small
-  // section, then assume address will fit in 21-bits.
-  const GlobalObject *GO = GV->getAliaseeObject();
-  if (TLOF->isGlobalInSmallSection(GO, getTargetMachine())) {
-    SDValue Small = DAG.getTargetGlobalAddress(
-        GV, DL, getPointerTy(DAG.getDataLayout()), Offset, EZHII::MO_NO_FLAG);
-    return DAG.getNode(ISD::OR, DL, MVT::i32,
-                       DAG.getRegister(EZH::R0, MVT::i32),
-                       DAG.getNode(EZHISD::SMALL, DL, MVT::i32, Small));
-  } else {
-    uint8_t OpFlagHi = EZHII::MO_ABS_HI;
-    uint8_t OpFlagLo = EZHII::MO_ABS_LO;
-
-    // Create the TargetGlobalAddress node, folding in the constant offset.
-    SDValue Hi = DAG.getTargetGlobalAddress(
-        GV, DL, getPointerTy(DAG.getDataLayout()), Offset, OpFlagHi);
-    SDValue Lo = DAG.getTargetGlobalAddress(
-        GV, DL, getPointerTy(DAG.getDataLayout()), Offset, OpFlagLo);
-    Hi = DAG.getNode(EZHISD::HI, DL, MVT::i32, Hi);
-    Lo = DAG.getNode(EZHISD::LO, DL, MVT::i32, Lo);
-    return DAG.getNode(ISD::OR, DL, MVT::i32, Hi, Lo);
-  }
-}
-
-SDValue EZHTargetLowering::LowerBlockAddress(SDValue Op,
-                                             SelectionDAG &DAG) const {
-  SDLoc DL(Op);
-  const BlockAddress *BA = cast<BlockAddressSDNode>(Op)->getBlockAddress();
-
-  uint8_t OpFlagHi = EZHII::MO_ABS_HI;
-  uint8_t OpFlagLo = EZHII::MO_ABS_LO;
-
-  SDValue Hi = DAG.getBlockAddress(BA, MVT::i32, true, OpFlagHi);
-  SDValue Lo = DAG.getBlockAddress(BA, MVT::i32, true, OpFlagLo);
-  Hi = DAG.getNode(EZHISD::HI, DL, MVT::i32, Hi);
-  Lo = DAG.getNode(EZHISD::LO, DL, MVT::i32, Lo);
-  SDValue Result = DAG.getNode(ISD::OR, DL, MVT::i32, Hi, Lo);
-  return Result;
-}
-
-SDValue EZHTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
-  SDLoc DL(Op);
-  JumpTableSDNode *JT = cast<JumpTableSDNode>(Op);
-
-  // If the code model is small assume address will fit in 21-bits.
-  if (getTargetMachine().getCodeModel() == CodeModel::Small) {
-    SDValue Small = DAG.getTargetJumpTable(
-        JT->getIndex(), getPointerTy(DAG.getDataLayout()), EZHII::MO_NO_FLAG);
-    return DAG.getNode(ISD::OR, DL, MVT::i32,
-                       DAG.getRegister(EZH::R0, MVT::i32),
-                       DAG.getNode(EZHISD::SMALL, DL, MVT::i32, Small));
-  } else {
-    uint8_t OpFlagHi = EZHII::MO_ABS_HI;
-    uint8_t OpFlagLo = EZHII::MO_ABS_LO;
-
-    SDValue Hi = DAG.getTargetJumpTable(
-        JT->getIndex(), getPointerTy(DAG.getDataLayout()), OpFlagHi);
-    SDValue Lo = DAG.getTargetJumpTable(
-        JT->getIndex(), getPointerTy(DAG.getDataLayout()), OpFlagLo);
-    Hi = DAG.getNode(EZHISD::HI, DL, MVT::i32, Hi);
-    Lo = DAG.getNode(EZHISD::LO, DL, MVT::i32, Lo);
-    SDValue Result = DAG.getNode(ISD::OR, DL, MVT::i32, Hi, Lo);
-    return Result;
-  }
-}
-
-SDValue EZHTargetLowering::LowerSHL_PARTS(SDValue Op, SelectionDAG &DAG) const {
-  EVT VT = Op.getValueType();
-  unsigned VTBits = VT.getSizeInBits();
-  SDLoc dl(Op);
-  assert(Op.getNumOperands() == 3 && "Unexpected SHL!");
-  SDValue ShOpLo = Op.getOperand(0);
-  SDValue ShOpHi = Op.getOperand(1);
-  SDValue ShAmt = Op.getOperand(2);
-
-  // Performs the following for (ShOpLo + (ShOpHi << 32)) << ShAmt:
-  //   LoBitsForHi = (ShAmt == 0) ? 0 : (ShOpLo >> (32-ShAmt))
-  //   HiBitsForHi = ShOpHi << ShAmt
-  //   Hi = (ShAmt >= 32) ? (ShOpLo << (ShAmt-32)) : (LoBitsForHi | HiBitsForHi)
-  //   Lo = (ShAmt >= 32) ? 0 : (ShOpLo << ShAmt)
-  //   return (Hi << 32) | Lo;
-
-  SDValue RevShAmt = DAG.getNode(ISD::SUB, dl, MVT::i32,
-                                 DAG.getConstant(VTBits, dl, MVT::i32), ShAmt);
-  SDValue LoBitsForHi = DAG.getNode(ISD::SRL, dl, VT, ShOpLo, RevShAmt);
-
-  // If ShAmt == 0, we just calculated "(SRL ShOpLo, 32)" which is "undef". We
-  // wanted 0, so CSEL it directly.
-  SDValue Zero = DAG.getConstant(0, dl, MVT::i32);
-  SDValue SetCC = DAG.getSetCC(dl, MVT::i32, ShAmt, Zero, ISD::SETEQ);
-  LoBitsForHi = DAG.getSelect(dl, MVT::i32, SetCC, Zero, LoBitsForHi);
-
-  SDValue ExtraShAmt = DAG.getNode(ISD::SUB, dl, MVT::i32, ShAmt,
-                                   DAG.getConstant(VTBits, dl, MVT::i32));
-  SDValue HiBitsForHi = DAG.getNode(ISD::SHL, dl, VT, ShOpHi, ShAmt);
-  SDValue HiForNormalShift =
-      DAG.getNode(ISD::OR, dl, VT, LoBitsForHi, HiBitsForHi);
-
-  SDValue HiForBigShift = DAG.getNode(ISD::SHL, dl, VT, ShOpLo, ExtraShAmt);
-
-  SetCC = DAG.getSetCC(dl, MVT::i32, ExtraShAmt, Zero, ISD::SETGE);
-  SDValue Hi =
-      DAG.getSelect(dl, MVT::i32, SetCC, HiForBigShift, HiForNormalShift);
-
-  // EZH shifts of larger than register sizes are wrapped rather than
-  // clamped, so we can't just emit "lo << b" if b is too big.
-  SDValue LoForNormalShift = DAG.getNode(ISD::SHL, dl, VT, ShOpLo, ShAmt);
-  SDValue Lo = DAG.getSelect(
-      dl, MVT::i32, SetCC, DAG.getConstant(0, dl, MVT::i32), LoForNormalShift);
-
-  SDValue Ops[2] = {Lo, Hi};
+  // Return the new SP and updated Chain
+  SDValue Ops[2] = {NewSP, Chain};
   return DAG.getMergeValues(Ops, dl);
 }
 
-SDValue EZHTargetLowering::LowerSRL_PARTS(SDValue Op, SelectionDAG &DAG) const {
-  MVT VT = Op.getSimpleValueType();
-  unsigned VTBits = VT.getSizeInBits();
+SDValue EZHTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
+                                                   SelectionDAG &DAG) const {
   SDLoc dl(Op);
-  SDValue ShOpLo = Op.getOperand(0);
-  SDValue ShOpHi = Op.getOperand(1);
-  SDValue ShAmt = Op.getOperand(2);
-
-  // Performs the following for a >> b:
-  //   unsigned r_high = a_high >> b;
-  //   r_high = (32 - b <= 0) ? 0 : r_high;
-  //
-  //   unsigned r_low = a_low >> b;
-  //   r_low = (32 - b <= 0) ? r_high : r_low;
-  //   r_low = (b == 0) ? r_low : r_low | (a_high << (32 - b));
-  //   return (unsigned long long)r_high << 32 | r_low;
-  // Note: This takes advantage of EZH's shift behavior to avoid needing to
-  // mask the shift amount.
-
-  SDValue Zero = DAG.getConstant(0, dl, MVT::i32);
-  SDValue NegatedPlus32 = DAG.getNode(
-      ISD::SUB, dl, MVT::i32, DAG.getConstant(VTBits, dl, MVT::i32), ShAmt);
-  SDValue SetCC = DAG.getSetCC(dl, MVT::i32, NegatedPlus32, Zero, ISD::SETLE);
-
-  SDValue Hi = DAG.getNode(ISD::SRL, dl, MVT::i32, ShOpHi, ShAmt);
-  Hi = DAG.getSelect(dl, MVT::i32, SetCC, Zero, Hi);
-
-  SDValue Lo = DAG.getNode(ISD::SRL, dl, MVT::i32, ShOpLo, ShAmt);
-  Lo = DAG.getSelect(dl, MVT::i32, SetCC, Hi, Lo);
-  SDValue CarryBits =
-      DAG.getNode(ISD::SHL, dl, MVT::i32, ShOpHi, NegatedPlus32);
-  SDValue ShiftIsZero = DAG.getSetCC(dl, MVT::i32, ShAmt, Zero, ISD::SETEQ);
-  Lo = DAG.getSelect(dl, MVT::i32, ShiftIsZero, Lo,
-                     DAG.getNode(ISD::OR, dl, MVT::i32, Lo, CarryBits));
-
-  SDValue Ops[2] = {Lo, Hi};
-  return DAG.getMergeValues(Ops, dl);
-}
-
-// Helper function that checks if N is a null or all ones constant.
-static inline bool isZeroOrAllOnes(SDValue N, bool AllOnes) {
-  return AllOnes ? isAllOnesConstant(N) : isNullConstant(N);
-}
-
-// Return true if N is conditionally 0 or all ones.
-// Detects these expressions where cc is an i1 value:
-//
-//   (select cc 0, y)   [AllOnes=0]
-//   (select cc y, 0)   [AllOnes=0]
-//   (zext cc)          [AllOnes=0]
-//   (sext cc)          [AllOnes=0/1]
-//   (select cc -1, y)  [AllOnes=1]
-//   (select cc y, -1)  [AllOnes=1]
-//
-// * AllOnes determines whether to check for an all zero (AllOnes false) or an
-//   all ones operand (AllOnes true).
-// * Invert is set when N is the all zero/ones constant when CC is false.
-// * OtherOp is set to the alternative value of N.
-//
-// For example, for (select cc X, Y) and AllOnes = 0 if:
-// * X = 0, Invert = False and OtherOp = Y
-// * Y = 0, Invert = True and OtherOp = X
-static bool isConditionalZeroOrAllOnes(SDNode *N, bool AllOnes, SDValue &CC,
-                                       bool &Invert, SDValue &OtherOp,
-                                       SelectionDAG &DAG) {
-  switch (N->getOpcode()) {
+  unsigned IntNo = Op.getConstantOperandVal(0);
+  switch (IntNo) {
   default:
-    return false;
-  case ISD::SELECT: {
-    CC = N->getOperand(0);
-    SDValue N1 = N->getOperand(1);
-    SDValue N2 = N->getOperand(2);
-    if (isZeroOrAllOnes(N1, AllOnes)) {
-      Invert = false;
-      OtherOp = N2;
-      return true;
-    }
-    if (isZeroOrAllOnes(N2, AllOnes)) {
-      Invert = true;
-      OtherOp = N1;
-      return true;
-    }
-    return false;
+    return SDValue(); // Don't custom lower most intrinsics.
+  case Intrinsic::eh_sjlj_lsda: {
+    MachineFunction &MF = DAG.getMachineFunction();
+    MVT VT = Op.getSimpleValueType();
+
+    // Generate symbol name "GCC_except_tableXX" and persist it in the
+    // MCContext string pool
+    MCSymbol *LSDASym = MF.getContext().getOrCreateSymbol(
+        Twine("GCC_except_table") + Twine(MF.getFunctionNumber()));
+    const char *Name = LSDASym->getName().data();
+
+    // Wrap the symbol name in EZHConstantPoolValue to force loading its
+    // absolute address.
+    auto *CPV = EZHConstantPoolSymbol::Create(
+        Type::getInt32Ty(*DAG.getContext()), Name);
+    SDValue CPAddr = DAG.getTargetConstantPool(CPV, VT, Align(4));
+
+    // Load the address of the exception table from the constant pool
+    SDValue Ops[] = {CPAddr, DAG.getEntryNode()};
+    return SDValue(
+        DAG.getMachineNode(EZH::LOAD_CONSTANT, dl, MVT::i32, MVT::Other, Ops),
+        0);
   }
-  case ISD::ZERO_EXTEND: {
-    // (zext cc) can never be the all ones value.
-    if (AllOnes)
-      return false;
-    CC = N->getOperand(0);
-    if (CC.getValueType() != MVT::i1)
-      return false;
-    SDLoc dl(N);
-    EVT VT = N->getValueType(0);
-    OtherOp = DAG.getConstant(1, dl, VT);
-    Invert = true;
-    return true;
   }
-  case ISD::SIGN_EXTEND: {
-    CC = N->getOperand(0);
-    if (CC.getValueType() != MVT::i1)
-      return false;
-    SDLoc dl(N);
-    EVT VT = N->getValueType(0);
-    Invert = !AllOnes;
-    if (AllOnes)
-      // When looking for an AllOnes constant, N is an sext, and the 'other'
-      // value is 0.
-      OtherOp = DAG.getConstant(0, dl, VT);
+}
+
+MachineBasicBlock *
+EZHTargetLowering::emitSjLjDispatchBlock(MachineInstr &MI,
+                                         MachineBasicBlock *BB) const {
+  DebugLoc DL = MI.getDebugLoc();
+  MachineFunction *MF = BB->getParent();
+  MachineFrameInfo &MFI = MF->getFrameInfo();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+  const EZHSubtarget &STI = MF->getSubtarget<EZHSubtarget>();
+  const TargetInstrInfo *TII = STI.getInstrInfo();
+  int FI = MFI.getFunctionContextIndex();
+
+  // Find all landing pads and their associated call site numbers.
+  DenseMap<unsigned, SmallVector<MachineBasicBlock *, 2>> CallSiteNumToLPad;
+  unsigned MaxCSNum = 0;
+  for (auto &MBB : *MF) {
+    if (!MBB.isEHPad())
+      continue;
+
+    auto FirstI = MBB.getFirstNonDebugInstr();
+    if (FirstI == MBB.end())
+      continue;
+    assert(FirstI->isEHLabel() && "expected EH_LABEL");
+    MCSymbol *Sym = FirstI->getOperand(0).getMCSymbol();
+
+    if (!MF->hasCallSiteLandingPad(Sym))
+      continue;
+
+    for (unsigned CSI : MF->getCallSiteLandingPad(Sym)) {
+      CallSiteNumToLPad[CSI].push_back(&MBB);
+      MaxCSNum = std::max(MaxCSNum, CSI);
+    }
+  }
+
+  assert(MaxCSNum > 0 &&
+         "No landing pad destinations for the dispatch jump table!");
+
+  // Create the dispatch, continuation, and trap basic blocks.
+  MachineBasicBlock *DispatchBB = MF->CreateMachineBasicBlock();
+  DispatchBB->setIsEHPad(true);
+  DispatchBB->setMachineBlockAddressTaken();
+
+  MachineBasicBlock *DispContBB = MF->CreateMachineBasicBlock();
+
+  MachineBasicBlock *TrapBB = MF->CreateMachineBasicBlock();
+
+  // Insert them at the end of the function in layout order.
+  MF->insert(MF->end(), TrapBB);
+  MF->insert(MF->end(), DispatchBB);
+  MF->insert(MF->end(), DispContBB);
+
+  // Update CFG: Replace landing pad successors in invoke blocks with
+  // DispatchBB
+  SmallPtrSet<MachineBasicBlock *, 16> InvokeBBs;
+  for (unsigned CSI = 1; CSI <= MaxCSNum; ++CSI) {
+    for (auto *LPad : CallSiteNumToLPad[CSI]) {
+      for (auto *Pred : LPad->predecessors()) {
+        InvokeBBs.insert(Pred);
+      }
+    }
+  }
+
+  for (MachineBasicBlock *InvokeBB : InvokeBBs) {
+    SmallVector<MachineBasicBlock *, 4> Successors(InvokeBB->successors());
+    while (!Successors.empty()) {
+      MachineBasicBlock *SMBB = Successors.pop_back_val();
+      if (SMBB->isEHPad()) {
+        InvokeBB->removeSuccessor(SMBB);
+      }
+    }
+    InvokeBB->addSuccessor(DispatchBB, BranchProbability::getZero());
+    InvokeBB->normalizeSuccProbs();
+  }
+
+  // TrapBB just loops forever.
+  BuildMI(TrapBB, DL, TII->get(EZH::GOTO)).addMBB(TrapBB).addImm(EZHCC::ICC_EU);
+  TrapBB->addSuccessor(TrapBB);
+
+  // Load the address of DispatchBB and store it to jbuf[0] (offset 32 of
+  // context) in the entry block.
+  Register DispatchPCReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  Type *PtrTy = Type::getInt32Ty(MF->getFunction().getContext());
+  auto *CPV = EZHConstantPoolMBB::Create(PtrTy, DispatchBB);
+  unsigned CPI = MF->getConstantPool()->getConstantPoolIndex(CPV, Align(4));
+
+  BuildMI(*BB, MI, DL, TII->get(EZH::LOAD_CONSTANT), DispatchPCReg)
+      .addConstantPoolIndex(CPI);
+
+  BuildMI(*BB, MI, DL, TII->get(EZH::STR))
+      .addReg(DispatchPCReg)
+      .addFrameIndex(FI)
+      .addImm(36) // Offset 36 is jbuf[1]
+      .addImm(EZHCC::ICC_EU);
+
+  // Save Callee-Saved Register R6 (Base Pointer) at Offset 44 in function
+  // context (jbuf[3])
+  BuildMI(*BB, MI, DL, TII->get(EZH::STR))
+      .addReg(EZH::R6)
+      .addFrameIndex(FI)
+      .addImm(44) // Offset 44 is jbuf[3]
+      .addImm(EZHCC::ICC_EU);
+
+  // In DispatchBB, load the call_site value.
+  Register CSReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  BuildMI(DispatchBB, DL, TII->get(EZH::LDR), CSReg)
+      .addFrameIndex(FI)
+      .addImm(4) // offset of call_site in context
+      .addImm(EZHCC::ICC_EU);
+
+  // Build LPadList with placeholders for holes
+  std::vector<MachineBasicBlock *> LPadList;
+  LPadList.reserve(MaxCSNum);
+  for (unsigned I = 1; I <= MaxCSNum; ++I) {
+    SmallVectorImpl<MachineBasicBlock *> &MBBList = CallSiteNumToLPad[I];
+    if (!MBBList.empty())
+      LPadList.push_back(MBBList[0]); // Take first one
     else
-      OtherOp = DAG.getAllOnesConstant(dl, VT);
-    return true;
-  }
-  }
-}
-
-// Combine a constant select operand into its use:
-//
-//   (add (select cc, 0, c), x)  -> (select cc, x, (add, x, c))
-//   (sub x, (select cc, 0, c))  -> (select cc, x, (sub, x, c))
-//   (and (select cc, -1, c), x) -> (select cc, x, (and, x, c))  [AllOnes=1]
-//   (or  (select cc, 0, c), x)  -> (select cc, x, (or, x, c))
-//   (xor (select cc, 0, c), x)  -> (select cc, x, (xor, x, c))
-//
-// The transform is rejected if the select doesn't have a constant operand that
-// is null, or all ones when AllOnes is set.
-//
-// Also recognize sext/zext from i1:
-//
-//   (add (zext cc), x) -> (select cc (add x, 1), x)
-//   (add (sext cc), x) -> (select cc (add x, -1), x)
-//
-// These transformations eventually create predicated instructions.
-static SDValue combineSelectAndUse(SDNode *N, SDValue Slct, SDValue OtherOp,
-                                   TargetLowering::DAGCombinerInfo &DCI,
-                                   bool AllOnes) {
-  SelectionDAG &DAG = DCI.DAG;
-  EVT VT = N->getValueType(0);
-  SDValue NonConstantVal;
-  SDValue CCOp;
-  bool SwapSelectOps;
-  if (!isConditionalZeroOrAllOnes(Slct.getNode(), AllOnes, CCOp, SwapSelectOps,
-                                  NonConstantVal, DAG))
-    return SDValue();
-
-  // Slct is now know to be the desired identity constant when CC is true.
-  SDValue TrueVal = OtherOp;
-  SDValue FalseVal =
-      DAG.getNode(N->getOpcode(), SDLoc(N), VT, OtherOp, NonConstantVal);
-  // Unless SwapSelectOps says CC should be false.
-  if (SwapSelectOps)
-    std::swap(TrueVal, FalseVal);
-
-  return DAG.getNode(ISD::SELECT, SDLoc(N), VT, CCOp, TrueVal, FalseVal);
-}
-
-// Attempt combineSelectAndUse on each operand of a commutative operator N.
-static SDValue
-combineSelectAndUseCommutative(SDNode *N, TargetLowering::DAGCombinerInfo &DCI,
-                               bool AllOnes) {
-  SDValue N0 = N->getOperand(0);
-  SDValue N1 = N->getOperand(1);
-  if (N0.getNode()->hasOneUse())
-    if (SDValue Result = combineSelectAndUse(N, N0, N1, DCI, AllOnes))
-      return Result;
-  if (N1.getNode()->hasOneUse())
-    if (SDValue Result = combineSelectAndUse(N, N1, N0, DCI, AllOnes))
-      return Result;
-  return SDValue();
-}
-
-// PerformSUBCombine - Target-specific dag combine xforms for ISD::SUB.
-static SDValue PerformSUBCombine(SDNode *N,
-                                 TargetLowering::DAGCombinerInfo &DCI) {
-  SDValue N0 = N->getOperand(0);
-  SDValue N1 = N->getOperand(1);
-
-  // fold (sub x, (select cc, 0, c)) -> (select cc, x, (sub, x, c))
-  if (N1.getNode()->hasOneUse())
-    if (SDValue Result = combineSelectAndUse(N, N1, N0, DCI, /*AllOnes=*/false))
-      return Result;
-
-  return SDValue();
-}
-
-SDValue EZHTargetLowering::PerformDAGCombine(SDNode *N,
-                                             DAGCombinerInfo &DCI) const {
-  switch (N->getOpcode()) {
-  default:
-    break;
-  case ISD::ADD:
-  case ISD::OR:
-  case ISD::XOR:
-    return combineSelectAndUseCommutative(N, DCI, /*AllOnes=*/false);
-  case ISD::AND:
-    return combineSelectAndUseCommutative(N, DCI, /*AllOnes=*/true);
-  case ISD::SUB:
-    return PerformSUBCombine(N, DCI);
+      LPadList.push_back(TrapBB); // Placeholder for inactive CSI
   }
 
-  return SDValue();
-}
+  // Create Jump Table
+  MachineJumpTableInfo *MJTI =
+      MF->getOrCreateJumpTableInfo(MachineJumpTableInfo::EK_BlockAddress);
+  unsigned JTI = MJTI->createJumpTableIndex(LPadList);
 
-void EZHTargetLowering::computeKnownBitsForTargetNode(const SDValue Op,
-                                                      KnownBits &Known,
-                                                      const APInt &DemandedElts,
-                                                      const SelectionDAG &DAG,
-                                                      unsigned Depth) const {
-  unsigned BitWidth = Known.getBitWidth();
-  switch (Op.getOpcode()) {
-  default:
-    break;
-  case EZHISD::SETCC:
-    Known = KnownBits(BitWidth);
-    Known.Zero.setBits(1, BitWidth);
-    break;
-  case EZHISD::SELECT_CC:
-    KnownBits Known2;
-    Known = DAG.computeKnownBits(Op->getOperand(0), Depth + 1);
-    Known2 = DAG.computeKnownBits(Op->getOperand(1), Depth + 1);
-    Known = Known.intersectWith(Known2);
-    break;
+  // Bounds check in DispatchBB:
+  // IndexReg = CSReg
+  // If IndexReg >= MaxCSNum (unsigned) -> TrapBB (using GOTO_nc)
+  // Else -> DispContBB (fallthrough)
+  Register IndexReg = CSReg;
+
+  Register TempReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  BuildMI(DispatchBB, DL, TII->get(EZH::SUB_IMM_s), TempReg)
+      .addReg(IndexReg)
+      .addImm(MaxCSNum)
+      .addImm(EZHCC::ICC_EU);
+
+  BuildMI(DispatchBB, DL, TII->get(EZH::GOTO))
+      .addMBB(TrapBB)
+      .addImm(EZHCC::ICC_NC);
+  DispatchBB->addSuccessor(TrapBB);
+  DispatchBB->addSuccessor(DispContBB);
+
+  // In DispContBB: Load JT address and do indirect branch
+  Register TableReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  BuildMI(DispContBB, DL, TII->get(EZH::LEApcrelJT), TableReg)
+      .addJumpTableIndex(JTI);
+
+  Register AddrReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  BuildMI(DispContBB, DL, TII->get(EZH::LSL_ADD), AddrReg)
+      .addReg(TableReg)
+      .addReg(IndexReg)
+      .addImm(2)
+      .addImm(EZHCC::ICC_EU);
+
+  Register TargetReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
+  BuildMI(DispContBB, DL, TII->get(EZH::LDR), TargetReg)
+      .addReg(AddrReg)
+      .addImm(0)
+      .addImm(EZHCC::ICC_EU);
+
+  BuildMI(DispContBB, DL, TII->get(EZH::BR_JTr))
+      .addReg(TargetReg)
+      .addJumpTableIndex(JTI);
+
+  // Update successors for DispContBB (unique only)
+  SmallPtrSet<MachineBasicBlock *, 8> UniqueSuccs;
+  for (auto *LPad : LPadList) {
+    if (UniqueSuccs.insert(LPad).second) {
+      DispContBB->addSuccessor(LPad);
+    }
   }
+
+  // Mark all former landing pads as non-landing pads. The dispatch is the only
+  // landing pad now.
+  for (unsigned CSI = 1; CSI <= MaxCSNum; ++CSI)
+    for (auto *LPad : CallSiteNumToLPad[CSI])
+      LPad->setIsEHPad(false);
+
+  MI.eraseFromParent();
+  return BB;
 }

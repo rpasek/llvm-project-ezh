@@ -8,11 +8,25 @@
 //
 // This file contains the EZH implementation of the TargetRegisterInfo class.
 //
+// Description:
+//   Declares EZHRegisterInfo, managing physical register definitions, register
+//   classes, calling convention register allocation, and stack frame index
+//   elimination.
+//
+// Copied From:
+//   Lanai target backend (llvm/lib/Target/Lanai/LanaiRegisterInfo.h).
+//
+// Changes:
+//   Adapted to EZH register hierarchy (GPRs r0-r7, gp0-gp7, system registers
+//   sp, pc, ra); declared frame index elimination and reserved register
+//   tracking.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_EZH_EZHREGISTERINFO_H
 #define LLVM_LIB_TARGET_EZH_EZHREGISTERINFO_H
 
+#include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 
 #define GET_REGINFO_HEADER
@@ -20,6 +34,10 @@
 
 namespace llvm {
 
+class LiveIntervals;
+class RegScavenger;
+
+/// EZH Register Information.
 struct EZHRegisterInfo : public EZHGenRegisterInfo {
   EZHRegisterInfo();
 
@@ -43,6 +61,15 @@ struct EZHRegisterInfo : public EZHGenRegisterInfo {
   Register getFrameRegister(const MachineFunction &MF) const override;
   Register getBaseRegister() const;
   bool hasBasePointer(const MachineFunction &MF) const;
+  bool shouldCoalesce(MachineInstr *MI, const TargetRegisterClass *SrcRC,
+                      unsigned SubReg, const TargetRegisterClass *DstRC,
+                      unsigned DstSubReg, const TargetRegisterClass *NewRC,
+                      LiveIntervals &LIS) const override;
+
+  bool isAsmClobberable(const MachineFunction &MF,
+                        MCRegister PhysReg) const override;
+  bool isInlineAsmReadOnlyReg(const MachineFunction &MF,
+                              MCRegister PhysReg) const override;
 };
 
 } // end namespace llvm
