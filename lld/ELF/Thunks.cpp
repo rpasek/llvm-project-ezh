@@ -415,6 +415,16 @@ public:
   void addSymbols(ThunkSection &isec) override;
 };
 
+// EZH devices need thunks for R_EZH_21 when their destination is in a
+// different 8MB page.
+class EZHThunk : public Thunk {
+public:
+  EZHThunk(Ctx &ctx, Symbol &dest, int64_t addend) : Thunk(ctx, dest, addend) {}
+  uint32_t size() override { return 8; }
+  void writeTo(uint8_t *buf) override;
+  void addSymbols(ThunkSection &isec) override;
+};
+
 // Hexagon CPUs need thunks for R_HEX_B{9,1{3,5},22}_PCREL,
 // R_HEX_{,GD_}PLT_B22_PCREL when their destination is out of
 // range.
@@ -1245,6 +1255,16 @@ void AVRThunk::addSymbols(ThunkSection &isec) {
             isec);
 }
 
+void EZHThunk::writeTo(uint8_t *buf) {
+  write32(ctx, buf, 0xff077401); // E_LDR(PC, PC, -1)
+  write32(ctx, buf + 4, destination.getVA(ctx, addend));
+}
+
+void EZHThunk::addSymbols(ThunkSection &isec) {
+  addSymbol(ctx.saver.save("__EZHThunk_" + destination.getName()), STT_FUNC, 0,
+            isec);
+}
+
 // Write MIPS LA25 thunk code to call PIC function from the non-PIC one.
 void MipsThunk::writeTo(uint8_t *buf) {
   uint64_t s = destination.getVA(ctx);
@@ -1741,6 +1761,18 @@ static std::unique_ptr<Thunk> addThunkAVR(Ctx &ctx, RelType type, Symbol &s,
   }
 }
 
+static std::unique_ptr<Thunk> addThunkEZH(Ctx &ctx, const InputSection &isec,
+                                          Relocation &rel, Symbol &s) {
+  switch (rel.type) {
+  case R_EZH_21:
+    return std::make_unique<EZHThunk>(ctx, s, rel.addend);
+  default:
+    Fatal(ctx) << "unrecognized relocation " << rel.type << " to " << &s
+               << " for EZH target";
+    llvm_unreachable("");
+  }
+}
+
 static std::unique_ptr<Thunk> addThunkHexagon(Ctx &ctx,
                                               const InputSection &isec,
                                               Relocation &rel, Symbol &s) {
@@ -1822,6 +1854,8 @@ std::unique_ptr<Thunk> elf::addThunk(Ctx &ctx, const InputSection &isec,
     return addThunkArm(ctx, isec, rel.type, s, a);
   case EM_AVR:
     return addThunkAVR(ctx, rel.type, s, a);
+  case EM_EZH:
+    return addThunkEZH(ctx, isec, rel, s);
   case EM_MIPS:
     return addThunkMips(ctx, rel.type, s);
   case EM_PPC:
