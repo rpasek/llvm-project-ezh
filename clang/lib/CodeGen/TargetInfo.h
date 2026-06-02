@@ -505,6 +505,9 @@ std::unique_ptr<TargetCodeGenInfo>
 createWindowsARMTargetCodeGenInfo(CodeGenModule &CGM, ARMABIKind K);
 
 std::unique_ptr<TargetCodeGenInfo>
+createEZHTargetCodeGenInfo(CodeGenModule &CGM);
+
+std::unique_ptr<TargetCodeGenInfo>
 createAVRTargetCodeGenInfo(CodeGenModule &CGM, unsigned NPR, unsigned NRR);
 
 std::unique_ptr<TargetCodeGenInfo>
