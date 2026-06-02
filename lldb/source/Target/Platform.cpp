@@ -2153,6 +2153,12 @@ llvm::ArrayRef<uint8_t> Platform::SoftwareTrapOpcodeBytes(const ArchSpec &arch,
     static const uint8_t g_wasm_opcode[] = {0x00};
     trap_opcode = llvm::ArrayRef<uint8_t>(g_wasm_opcode, sizeof(g_wasm_opcode));
   } break;
+
+  case llvm::Triple::ezh: {
+    static const uint8_t g_ezh_opcode[] = {0x15, 0x02, 0x00, 0x00}; // goto 0
+    trap_opcode = llvm::ArrayRef<uint8_t>(g_ezh_opcode, sizeof(g_ezh_opcode));
+  } break;
+
   // The default case should not match against anything, so return empty Array.
   default: {
     trap_opcode = llvm::ArrayRef<uint8_t>{};
