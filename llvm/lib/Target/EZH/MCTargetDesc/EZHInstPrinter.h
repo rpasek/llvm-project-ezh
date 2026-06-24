@@ -21,7 +21,7 @@ class StringRef;
 class EZHInstPrinter : public MCInstPrinter {
 public:
   EZHInstPrinter(const MCAsmInfo &MAI, const MCInstrInfo &MII,
-                   const MCRegisterInfo &MRI)
+                 const MCRegisterInfo &MRI)
       : MCInstPrinter(MAI, MII, MRI) {}
 
   void printInst(const MCInst *MI, uint64_t Address, StringRef Annot,

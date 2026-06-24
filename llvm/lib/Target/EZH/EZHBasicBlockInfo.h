@@ -116,8 +116,7 @@ private:
 
 public:
   EZHBasicBlockUtils(MachineFunction &MF) : MF(MF) {
-    TII =
-      static_cast<const EZHInstrInfo*>(MF.getSubtarget().getInstrInfo());
+    TII = static_cast<const EZHInstrInfo *>(MF.getSubtarget().getInstrInfo());
     isThumb = MF.getInfo<EZHFunctionInfo>()->isThumbFunction();
   }
 
@@ -151,7 +150,6 @@ public:
   void clear() { BBInfo.clear(); }
 
   BBInfoVector &getBBInfo() { return BBInfo; }
-
 };
 
 } // end namespace llvm

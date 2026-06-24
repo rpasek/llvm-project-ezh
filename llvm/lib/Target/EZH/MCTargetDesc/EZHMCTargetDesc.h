@@ -26,12 +26,11 @@ class MCObjectTargetWriter;
 class MCSubtargetInfo;
 class Target;
 
-MCCodeEmitter *createEZHMCCodeEmitter(const MCInstrInfo &MCII,
-                                        MCContext &Ctx);
+MCCodeEmitter *createEZHMCCodeEmitter(const MCInstrInfo &MCII, MCContext &Ctx);
 
 MCAsmBackend *createEZHAsmBackend(const Target &T, const MCSubtargetInfo &STI,
-                                    const MCRegisterInfo &MRI,
-                                    const MCTargetOptions &Options);
+                                  const MCRegisterInfo &MRI,
+                                  const MCTargetOptions &Options);
 
 std::unique_ptr<MCObjectTargetWriter> createEZHELFObjectWriter(uint8_t OSABI);
 } // namespace llvm

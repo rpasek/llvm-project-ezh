@@ -60,7 +60,7 @@ public:
 };
 
 bool EZHAsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
-                                   const MCSubtargetInfo *STI) const {
+                                 const MCSubtargetInfo *STI) const {
   if ((Count % 4) != 0)
     return false;
 
@@ -71,8 +71,8 @@ bool EZHAsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
 }
 
 void EZHAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
-                                 const MCValue &Target, uint8_t *Data,
-                                 uint64_t Value, bool IsResolved) {
+                               const MCValue &Target, uint8_t *Data,
+                               uint64_t Value, bool IsResolved) {
   if (!IsResolved)
     Asm->getWriter().recordRelocation(F, Fixup, Target, Value);
 
@@ -123,12 +123,9 @@ MCFixupKindInfo EZHAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       //   no bits are set in the fixup range.
       //
       // name          offset bits flags
-      {"FIXUP_EZH_NONE", 0, 32, 0},
-      {"FIXUP_EZH_21", 16, 16 /*21*/, 0},
-      {"FIXUP_EZH_21_F", 16, 16 /*21*/, 0},
-      {"FIXUP_EZH_25", 7, 25, 0},
-      {"FIXUP_EZH_32", 0, 32, 0},
-      {"FIXUP_EZH_HI16", 16, 16, 0},
+      {"FIXUP_EZH_NONE", 0, 32, 0},         {"FIXUP_EZH_21", 16, 16 /*21*/, 0},
+      {"FIXUP_EZH_21_F", 16, 16 /*21*/, 0}, {"FIXUP_EZH_25", 7, 25, 0},
+      {"FIXUP_EZH_32", 0, 32, 0},           {"FIXUP_EZH_HI16", 16, 16, 0},
       {"FIXUP_EZH_LO16", 16, 16, 0}};
 
   if (Kind < FirstTargetFixupKind)
@@ -142,9 +139,9 @@ MCFixupKindInfo EZHAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
 } // namespace
 
 MCAsmBackend *llvm::createEZHAsmBackend(const Target &T,
-                                          const MCSubtargetInfo &STI,
-                                          const MCRegisterInfo & /*MRI*/,
-                                          const MCTargetOptions & /*Options*/) {
+                                        const MCSubtargetInfo &STI,
+                                        const MCRegisterInfo & /*MRI*/,
+                                        const MCTargetOptions & /*Options*/) {
   const Triple &TT = STI.getTargetTriple();
   if (!TT.isOSBinFormatELF())
     llvm_unreachable("OS not supported");

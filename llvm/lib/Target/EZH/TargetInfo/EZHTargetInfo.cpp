@@ -19,6 +19,5 @@ Target &llvm::getTheEZHTarget() {
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
 LLVMInitializeEZHTargetInfo() {
-  RegisterTarget<Triple::ezh> X(getTheEZHTarget(), "ezh", "EZH",
-                                  "EZH");
+  RegisterTarget<Triple::ezh> X(getTheEZHTarget(), "ezh", "EZH", "EZH");
 }

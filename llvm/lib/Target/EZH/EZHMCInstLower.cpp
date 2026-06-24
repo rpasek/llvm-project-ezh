@@ -63,7 +63,7 @@ EZHMCInstLower::GetConstantPoolIndexSymbol(const MachineOperand &MO) const {
 }
 
 MCOperand EZHMCInstLower::LowerSymbolOperand(const MachineOperand &MO,
-                                               MCSymbol *Sym) const {
+                                             MCSymbol *Sym) const {
   EZH::Specifier Kind;
   switch (MO.getTargetFlags()) {
   case EZHII::MO_NO_FLAG:
