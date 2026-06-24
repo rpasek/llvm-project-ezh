@@ -83,7 +83,7 @@ void EZHFrameLowering::replaceAdjDynAllocPseudo(MachineFunction &MF) const {
 //   add %sp,8,%fp          !generate new FP
 //   sub %sp,0x4,%sp        !allocate stack space (as needed)
 void EZHFrameLowering::emitPrologue(MachineFunction &MF,
-                                      MachineBasicBlock &MBB) const {
+                                    MachineBasicBlock &MBB) const {
   assert(&MF.front() == &MBB && "Shrink-wrapping not yet supported");
 
   MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -169,7 +169,7 @@ MachineBasicBlock::iterator EZHFrameLowering::eliminateCallFramePseudoInstr(
 // before RET and the delay slot filler will move RET such that these
 // instructions execute in the delay slots of the load to PC.
 void EZHFrameLowering::emitEpilogue(MachineFunction & /*MF*/,
-                                      MachineBasicBlock &MBB) const {
+                                    MachineBasicBlock &MBB) const {
   MachineBasicBlock::iterator MBBI = MBB.getLastNonDebugInstr();
   const EZHInstrInfo &LII = *STI.getInstrInfo();
   DebugLoc DL = MBBI->getDebugLoc();
@@ -187,8 +187,8 @@ void EZHFrameLowering::emitEpilogue(MachineFunction & /*MF*/,
 }
 
 void EZHFrameLowering::determineCalleeSaves(MachineFunction &MF,
-                                              BitVector &SavedRegs,
-                                              RegScavenger *RS) const {
+                                            BitVector &SavedRegs,
+                                            RegScavenger *RS) const {
   TargetFrameLowering::determineCalleeSaves(MF, SavedRegs, RS);
 
   MachineFrameInfo &MFI = MF.getFrameInfo();

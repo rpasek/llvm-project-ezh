@@ -33,8 +33,8 @@ using namespace llvm::MCD;
 typedef MCDisassembler::DecodeStatus DecodeStatus;
 
 static MCDisassembler *createEZHDisassembler(const Target & /*T*/,
-                                               const MCSubtargetInfo &STI,
-                                               MCContext &Ctx) {
+                                             const MCSubtargetInfo &STI,
+                                             MCContext &Ctx) {
   return new EZHDisassembler(STI, Ctx);
 }
 
@@ -201,10 +201,10 @@ static void PostOperandDecodeAdjust(MCInst &Instr, uint32_t Insn) {
   }
 }
 
-DecodeStatus
-EZHDisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
-                                  ArrayRef<uint8_t> Bytes, uint64_t Address,
-                                  raw_ostream & /*CStream*/) const {
+DecodeStatus EZHDisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
+                                             ArrayRef<uint8_t> Bytes,
+                                             uint64_t Address,
+                                             raw_ostream & /*CStream*/) const {
   uint32_t Insn;
 
   DecodeStatus Result = readInstruction32(Bytes, Size, Insn);

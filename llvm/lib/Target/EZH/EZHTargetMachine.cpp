@@ -29,8 +29,7 @@ using namespace llvm;
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeEZHTarget() {
   // Register the target.
-  RegisterTargetMachine<EZHTargetMachine> registered_target(
-      getTheEZHTarget());
+  RegisterTargetMachine<EZHTargetMachine> registered_target(getTheEZHTarget());
   PassRegistry &PR = *PassRegistry::getPassRegistry();
   initializeEZHAsmPrinterPass(PR);
   initializeEZHDAGToDAGISelLegacyPass(PR);
@@ -41,11 +40,12 @@ static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
   return RM.value_or(Reloc::PIC_);
 }
 
-EZHTargetMachine::EZHTargetMachine(
-    const Target &T, const Triple &TT, StringRef Cpu, StringRef FeatureString,
-    const TargetOptions &Options, std::optional<Reloc::Model> RM,
-    std::optional<CodeModel::Model> CodeModel, CodeGenOptLevel OptLevel,
-    bool JIT)
+EZHTargetMachine::EZHTargetMachine(const Target &T, const Triple &TT,
+                                   StringRef Cpu, StringRef FeatureString,
+                                   const TargetOptions &Options,
+                                   std::optional<Reloc::Model> RM,
+                                   std::optional<CodeModel::Model> CodeModel,
+                                   CodeGenOptLevel OptLevel, bool JIT)
     : CodeGenTargetMachineImpl(
           T, TT.computeDataLayout(), TT, Cpu, FeatureString, Options,
           getEffectiveRelocModel(RM),
@@ -64,8 +64,8 @@ EZHTargetMachine::getTargetTransformInfo(const Function &F) const {
 MachineFunctionInfo *EZHTargetMachine::createMachineFunctionInfo(
     BumpPtrAllocator &Allocator, const Function &F,
     const TargetSubtargetInfo *STI) const {
-  return EZHMachineFunctionInfo::create<EZHMachineFunctionInfo>(Allocator,
-                                                                    F, STI);
+  return EZHMachineFunctionInfo::create<EZHMachineFunctionInfo>(Allocator, F,
+                                                                STI);
 }
 
 namespace {
@@ -111,6 +111,4 @@ void EZHPassConfig::addPreEmitPass() {
 
 // Run passes after prolog-epilog insertion and before the second instruction
 // scheduling pass.
-void EZHPassConfig::addPreSched2() {
-  addPass(createEZHMemAluCombinerPass());
-}
+void EZHPassConfig::addPreSched2() { addPass(createEZHMemAluCombinerPass()); }

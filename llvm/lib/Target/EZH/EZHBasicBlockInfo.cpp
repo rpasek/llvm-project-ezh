@@ -23,20 +23,19 @@ namespace llvm {
 
 // mayOptimizeThumb2Instruction - Returns true if optimizeThumb2Instructions
 // below may shrink MI.
-static bool
-mayOptimizeThumb2Instruction(const MachineInstr *MI) {
-  switch(MI->getOpcode()) {
-    // optimizeThumb2Instructions.
-    case EZH::t2LEApcrel:
-    case EZH::t2LDRpci:
-    // optimizeThumb2Branches.
-    case EZH::t2B:
-    case EZH::t2Bcc:
-    case EZH::tBcc:
-    // optimizeThumb2JumpTables.
-    case EZH::t2BR_JT:
-    case EZH::tBR_JTr:
-      return true;
+static bool mayOptimizeThumb2Instruction(const MachineInstr *MI) {
+  switch (MI->getOpcode()) {
+  // optimizeThumb2Instructions.
+  case EZH::t2LEApcrel:
+  case EZH::t2LDRpci:
+  // optimizeThumb2Branches.
+  case EZH::t2B:
+  case EZH::t2Bcc:
+  case EZH::tBcc:
+  // optimizeThumb2JumpTables.
+  case EZH::t2BR_JT:
+  case EZH::tBR_JTr:
+    return true;
   }
   return false;
 }
@@ -90,8 +89,8 @@ unsigned EZHBasicBlockUtils::getOffsetOf(MachineInstr *MI) const {
 bool EZHBasicBlockUtils::isBBInRange(MachineInstr *MI,
                                      MachineBasicBlock *DestBB,
                                      unsigned MaxDisp) const {
-  unsigned PCAdj      = isThumb ? 4 : 8;
-  unsigned BrOffset   = getOffsetOf(MI) + PCAdj;
+  unsigned PCAdj = isThumb ? 4 : 8;
+  unsigned BrOffset = getOffsetOf(MI) + PCAdj;
   unsigned DestOffset = BBInfo[DestBB->getNumber()].Offset;
 
   LLVM_DEBUG(dbgs() << "Branch of destination " << printMBBReference(*DestBB)
@@ -102,10 +101,10 @@ bool EZHBasicBlockUtils::isBBInRange(MachineInstr *MI,
 
   if (BrOffset <= DestOffset) {
     // Branch before the Dest.
-    if (DestOffset-BrOffset <= MaxDisp)
+    if (DestOffset - BrOffset <= MaxDisp)
       return true;
   } else {
-    if (BrOffset-DestOffset <= MaxDisp)
+    if (BrOffset - DestOffset <= MaxDisp)
       return true;
   }
   return false;
@@ -117,12 +116,12 @@ void EZHBasicBlockUtils::adjustBBOffsetsAfter(MachineBasicBlock *BB) {
 
   unsigned BBNum = BB->getNumber();
   LLVM_DEBUG(dbgs() << "Adjust block:\n"
-             << " - name: " << BB->getName() << "\n"
-             << " - number: " << BB->getNumber() << "\n"
-             << " - function: " << MF.getName() << "\n"
-             << "   - blocks: " << MF.getNumBlockIDs() << "\n");
+                    << " - name: " << BB->getName() << "\n"
+                    << " - number: " << BB->getNumber() << "\n"
+                    << " - function: " << MF.getName() << "\n"
+                    << "   - blocks: " << MF.getNumBlockIDs() << "\n");
 
-  for(unsigned i = BBNum + 1, e = MF.getNumBlockIDs(); i < e; ++i) {
+  for (unsigned i = BBNum + 1, e = MF.getNumBlockIDs(); i < e; ++i) {
     // Get the offset and known bits at the end of the layout predecessor.
     // Include the alignment of the current block.
     const Align Align = MF.getBlockNumbered(i)->getAlignment();
@@ -132,8 +131,7 @@ void EZHBasicBlockUtils::adjustBBOffsetsAfter(MachineBasicBlock *BB) {
     // This is where block i begins.  Stop if the offset is already correct,
     // and we have updated 2 blocks.  This is the maximum number of blocks
     // changed before calling this function.
-    if (i > BBNum + 2 &&
-        BBInfo[i].Offset == Offset &&
+    if (i > BBNum + 2 && BBInfo[i].Offset == Offset &&
         BBInfo[i].KnownBits == KnownBits)
       break;
 

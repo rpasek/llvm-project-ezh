@@ -28,11 +28,10 @@ class EZHTargetMachine : public CodeGenTargetMachineImpl {
 
 public:
   EZHTargetMachine(const Target &TheTarget, const Triple &TargetTriple,
-                     StringRef Cpu, StringRef FeatureString,
-                     const TargetOptions &Options,
-                     std::optional<Reloc::Model> RM,
-                     std::optional<CodeModel::Model> CodeModel,
-                     CodeGenOptLevel OptLevel, bool JIT);
+                   StringRef Cpu, StringRef FeatureString,
+                   const TargetOptions &Options, std::optional<Reloc::Model> RM,
+                   std::optional<CodeModel::Model> CodeModel,
+                   CodeGenOptLevel OptLevel, bool JIT);
 
   const EZHSubtarget *
   getSubtargetImpl(const llvm::Function & /*Fn*/) const override {
@@ -52,9 +51,7 @@ public:
   createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
                             const TargetSubtargetInfo *STI) const override;
 
-  bool isMachineVerifierClean() const override {
-    return false;
-  }
+  bool isMachineVerifierClean() const override { return false; }
 };
 } // namespace llvm
 

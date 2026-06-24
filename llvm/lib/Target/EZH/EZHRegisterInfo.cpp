@@ -126,8 +126,8 @@ static unsigned getRRMOpcodeVariant(unsigned Opcode) {
 }
 
 bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
-                                            int SPAdj, unsigned FIOperandNum,
-                                            RegScavenger *RS) const {
+                                          int SPAdj, unsigned FIOperandNum,
+                                          RegScavenger *RS) const {
   assert(SPAdj == 0 && "Unexpected");
 
   MachineInstr &MI = *II;
@@ -261,6 +261,6 @@ Register EZHRegisterInfo::getBaseRegister() const { return EZH::R14; }
 
 const uint32_t *
 EZHRegisterInfo::getCallPreservedMask(const MachineFunction & /*MF*/,
-                                        CallingConv::ID /*CC*/) const {
+                                      CallingConv::ID /*CC*/) const {
   return CSR_RegMask;
 }

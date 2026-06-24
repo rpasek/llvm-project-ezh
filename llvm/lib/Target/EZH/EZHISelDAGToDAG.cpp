@@ -116,8 +116,8 @@ bool EZHDAGToDAGISel::selectAddrSls(SDValue Addr, SDValue &Offset) {
 }
 
 bool EZHDAGToDAGISel::selectAddrRiSpls(SDValue Addr, SDValue &Base,
-                                         SDValue &Offset, SDValue &AluOp,
-                                         bool RiMode) {
+                                       SDValue &Offset, SDValue &AluOp,
+                                       bool RiMode) {
   SDLoc DL(Addr);
 
   if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr)) {
@@ -195,13 +195,13 @@ bool EZHDAGToDAGISel::selectAddrRiSpls(SDValue Addr, SDValue &Base,
   return true;
 }
 
-bool EZHDAGToDAGISel::selectAddrRi(SDValue Addr, SDValue &Base,
-                                     SDValue &Offset, SDValue &AluOp) {
+bool EZHDAGToDAGISel::selectAddrRi(SDValue Addr, SDValue &Base, SDValue &Offset,
+                                   SDValue &AluOp) {
   return selectAddrRiSpls(Addr, Base, Offset, AluOp, /*RiMode=*/true);
 }
 
 bool EZHDAGToDAGISel::selectAddrSpls(SDValue Addr, SDValue &Base,
-                                       SDValue &Offset, SDValue &AluOp) {
+                                     SDValue &Offset, SDValue &AluOp) {
   return selectAddrRiSpls(Addr, Base, Offset, AluOp, /*RiMode=*/false);
 }
 
@@ -237,7 +237,7 @@ static AluCode isdToEZHAluCode(ISD::NodeType Node_type) {
 } // namespace llvm
 
 bool EZHDAGToDAGISel::selectAddrRr(SDValue Addr, SDValue &R1, SDValue &R2,
-                                     SDValue &AluOp) {
+                                   SDValue &AluOp) {
   // if Address is FI, get the TargetFrameIndex.
   if (Addr.getOpcode() == ISD::FrameIndex)
     return false;

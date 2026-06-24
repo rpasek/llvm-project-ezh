@@ -158,13 +158,12 @@ static unsigned adjustPqBits(const MCInst &Inst, unsigned Value,
 
 unsigned
 EZHMCCodeEmitter::adjustPqBitsRmAndRrm(const MCInst &Inst, unsigned Value,
-                                         const MCSubtargetInfo &STI) const {
+                                       const MCSubtargetInfo &STI) const {
   return adjustPqBits(Inst, Value, 17, 16);
 }
 
-unsigned
-EZHMCCodeEmitter::adjustPqBitsSpls(const MCInst &Inst, unsigned Value,
-                                     const MCSubtargetInfo &STI) const {
+unsigned EZHMCCodeEmitter::adjustPqBitsSpls(const MCInst &Inst, unsigned Value,
+                                            const MCSubtargetInfo &STI) const {
   return adjustPqBits(Inst, Value, 11, 10);
 }
 
@@ -252,8 +251,8 @@ unsigned EZHMCCodeEmitter::getRrMemoryOpValue(
 
 unsigned
 EZHMCCodeEmitter::getSplsOpValue(const MCInst &Inst, unsigned OpNo,
-                                   SmallVectorImpl<MCFixup> &Fixups,
-                                   const MCSubtargetInfo &SubtargetInfo) const {
+                                 SmallVectorImpl<MCFixup> &Fixups,
+                                 const MCSubtargetInfo &SubtargetInfo) const {
   unsigned Encoding;
   const MCOperand Op1 = Inst.getOperand(OpNo + 0);
   const MCOperand Op2 = Inst.getOperand(OpNo + 1);
@@ -299,8 +298,7 @@ unsigned EZHMCCodeEmitter::getBranchTargetOpValue(
 
 } // end namespace llvm
 
-llvm::MCCodeEmitter *
-llvm::createEZHMCCodeEmitter(const MCInstrInfo &InstrInfo,
-                               MCContext &context) {
+llvm::MCCodeEmitter *llvm::createEZHMCCodeEmitter(const MCInstrInfo &InstrInfo,
+                                                  MCContext &context) {
   return new EZHMCCodeEmitter(InstrInfo, context);
 }

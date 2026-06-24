@@ -27,8 +27,7 @@ STATISTIC(FilledSlots, "Number of delay slots filled");
 
 static cl::opt<bool>
     NopDelaySlotFiller("ezh-nop-delay-filler", cl::init(false),
-                       cl::desc("Fill EZH delay slots with NOPs."),
-                       cl::Hidden);
+                       cl::desc("Fill EZH delay slots with NOPs."), cl::Hidden);
 
 namespace {
 struct Filler : public MachineFunctionPass {
@@ -109,8 +108,7 @@ bool Filler::runOnMachineBasicBlock(MachineBasicBlock &MBB) {
                RI->getOperand(1).getReg() == EZH::FP &&
                RI->getOperand(2).isImm() && RI->getOperand(2).getImm() == -8);
         ++RI;
-        assert(RI->getOpcode() == EZH::ADD_I_LO &&
-               RI->getOperand(0).isReg() &&
+        assert(RI->getOpcode() == EZH::ADD_I_LO && RI->getOperand(0).isReg() &&
                RI->getOperand(0).getReg() == EZH::SP &&
                RI->getOperand(1).isReg() &&
                RI->getOperand(1).getReg() == EZH::FP);
