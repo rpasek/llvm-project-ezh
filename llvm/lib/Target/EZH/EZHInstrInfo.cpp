@@ -28,15 +28,14 @@ using namespace llvm;
 
 EZHInstrInfo::EZHInstrInfo(const EZHSubtarget &STI)
     : EZHGenInstrInfo(STI, RegisterInfo, EZH::ADJCALLSTACKDOWN,
-                        EZH::ADJCALLSTACKUP),
+                      EZH::ADJCALLSTACKUP),
       RegisterInfo() {}
 
 void EZHInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
-                                 MachineBasicBlock::iterator Position,
-                                 const DebugLoc &DL,
-                                 Register DestinationRegister,
-                                 Register SourceRegister, bool KillSource,
-                                 bool RenamableDest, bool RenamableSrc) const {
+                               MachineBasicBlock::iterator Position,
+                               const DebugLoc &DL, Register DestinationRegister,
+                               Register SourceRegister, bool KillSource,
+                               bool RenamableDest, bool RenamableSrc) const {
   if (!EZH::GPRRegClass.contains(DestinationRegister, SourceRegister)) {
     llvm_unreachable("Impossible reg-to-reg copy");
   }
@@ -46,11 +45,13 @@ void EZHInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       .addImm(0);
 }
 
-void EZHInstrInfo::storeRegToStackSlot(
-    MachineBasicBlock &MBB, MachineBasicBlock::iterator Position,
-    Register SourceRegister, bool IsKill, int FrameIndex,
-    const TargetRegisterClass *RegisterClass, Register /*VReg*/,
-    MachineInstr::MIFlag /*Flags*/) const {
+void EZHInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
+                                       MachineBasicBlock::iterator Position,
+                                       Register SourceRegister, bool IsKill,
+                                       int FrameIndex,
+                                       const TargetRegisterClass *RegisterClass,
+                                       Register /*VReg*/,
+                                       MachineInstr::MIFlag /*Flags*/) const {
   DebugLoc DL;
   if (Position != MBB.end()) {
     DL = Position->getDebugLoc();
@@ -170,15 +171,13 @@ ArrayRef<std::pair<unsigned, const char *>>
 EZHInstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
   using namespace EZHII;
   static const std::pair<unsigned, const char *> TargetFlags[] = {
-      {MO_ABS_HI, "ezh-hi"},
-      {MO_ABS_LO, "ezh-lo"},
-      {MO_NO_FLAG, "ezh-nf"}};
+      {MO_ABS_HI, "ezh-hi"}, {MO_ABS_LO, "ezh-lo"}, {MO_NO_FLAG, "ezh-nf"}};
   return ArrayRef(TargetFlags);
 }
 
 bool EZHInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
-                                    Register &SrcReg2, int64_t &CmpMask,
-                                    int64_t &CmpValue) const {
+                                  Register &SrcReg2, int64_t &CmpMask,
+                                  int64_t &CmpValue) const {
   switch (MI.getOpcode()) {
   default:
     break;
@@ -207,8 +206,7 @@ bool EZHInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
 inline static bool isRedundantFlagInstr(MachineInstr *CmpI, unsigned SrcReg,
                                         unsigned SrcReg2, int64_t ImmValue,
                                         MachineInstr *OI) {
-  if (CmpI->getOpcode() == EZH::SFSUB_F_RR &&
-      OI->getOpcode() == EZH::SUB_R &&
+  if (CmpI->getOpcode() == EZH::SFSUB_F_RR && OI->getOpcode() == EZH::SUB_R &&
       ((OI->getOperand(1).getReg() == SrcReg &&
         OI->getOperand(2).getReg() == SrcReg2) ||
        (OI->getOperand(1).getReg() == SrcReg2 &&
@@ -282,10 +280,10 @@ inline static unsigned flagSettingOpcodeVariant(unsigned OldOpcode) {
   }
 }
 
-bool EZHInstrInfo::optimizeCompareInstr(
-    MachineInstr &CmpInstr, Register SrcReg, Register SrcReg2,
-    int64_t /*CmpMask*/, int64_t CmpValue,
-    const MachineRegisterInfo *MRI) const {
+bool EZHInstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+                                        Register SrcReg2, int64_t /*CmpMask*/,
+                                        int64_t CmpValue,
+                                        const MachineRegisterInfo *MRI) const {
   // Get the unique definition of SrcReg.
   MachineInstr *MI = MRI->getUniqueVRegDef(SrcReg);
   if (!MI)
@@ -474,8 +472,8 @@ static MachineInstr *canFoldIntoSelect(Register Reg,
 
 MachineInstr *
 EZHInstrInfo::optimizeSelect(MachineInstr &MI,
-                               SmallPtrSetImpl<MachineInstr *> &SeenMIs,
-                               bool /*PreferFalse*/) const {
+                             SmallPtrSetImpl<MachineInstr *> &SeenMIs,
+                             bool /*PreferFalse*/) const {
   assert(MI.getOpcode() == EZH::SELECT && "unknown select instruction");
   MachineRegisterInfo &MRI = MI.getParent()->getParent()->getRegInfo();
   MachineInstr *DefMI = canFoldIntoSelect(MI.getOperand(1).getReg(), MRI);
@@ -543,10 +541,10 @@ EZHInstrInfo::optimizeSelect(MachineInstr &MI,
 //   to insert in insertBranch;
 // Returns: false if branch could successfully be analyzed.
 bool EZHInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
-                                   MachineBasicBlock *&TrueBlock,
-                                   MachineBasicBlock *&FalseBlock,
-                                   SmallVectorImpl<MachineOperand> &Condition,
-                                   bool AllowModify) const {
+                                 MachineBasicBlock *&TrueBlock,
+                                 MachineBasicBlock *&FalseBlock,
+                                 SmallVectorImpl<MachineOperand> &Condition,
+                                 bool AllowModify) const {
   // Iterator to current instruction being considered.
   MachineBasicBlock::iterator Instruction = MBB.end();
 
@@ -639,11 +637,10 @@ bool EZHInstrInfo::reverseBranchCondition(
 // (TrueBlock and FalseBlock). This function returns the number of machine
 // instructions inserted.
 unsigned EZHInstrInfo::insertBranch(MachineBasicBlock &MBB,
-                                      MachineBasicBlock *TrueBlock,
-                                      MachineBasicBlock *FalseBlock,
-                                      ArrayRef<MachineOperand> Condition,
-                                      const DebugLoc &DL,
-                                      int *BytesAdded) const {
+                                    MachineBasicBlock *TrueBlock,
+                                    MachineBasicBlock *FalseBlock,
+                                    ArrayRef<MachineOperand> Condition,
+                                    const DebugLoc &DL, int *BytesAdded) const {
   // Shouldn't be a fall through.
   assert(TrueBlock && "insertBranch must not be told to insert a fallthrough");
   assert(!BytesAdded && "code size not handled");
@@ -671,7 +668,7 @@ unsigned EZHInstrInfo::insertBranch(MachineBasicBlock &MBB,
 }
 
 unsigned EZHInstrInfo::removeBranch(MachineBasicBlock &MBB,
-                                      int *BytesRemoved) const {
+                                    int *BytesRemoved) const {
   assert(!BytesRemoved && "code size not handled");
 
   MachineBasicBlock::iterator Instruction = MBB.end();
@@ -696,7 +693,7 @@ unsigned EZHInstrInfo::removeBranch(MachineBasicBlock &MBB,
 }
 
 Register EZHInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
-                                             int &FrameIndex) const {
+                                           int &FrameIndex) const {
   if (MI.getOpcode() == EZH::LDW_RI)
     if (MI.getOperand(1).isFI() && MI.getOperand(2).isImm() &&
         MI.getOperand(2).getImm() == 0) {
@@ -707,14 +704,14 @@ Register EZHInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
 }
 
 Register EZHInstrInfo::isLoadFromStackSlotPostFE(const MachineInstr &MI,
-                                                   int &FrameIndex) const {
+                                                 int &FrameIndex) const {
   if (MI.getOpcode() == EZH::LDW_RI) {
     unsigned Reg;
     if ((Reg = isLoadFromStackSlot(MI, FrameIndex)))
       return Reg;
     // Check for post-frame index elimination operations
     SmallVector<const MachineMemOperand *, 1> Accesses;
-    if (hasLoadFromStackSlot(MI, Accesses)){
+    if (hasLoadFromStackSlot(MI, Accesses)) {
       FrameIndex =
           cast<FixedStackPseudoSourceValue>(Accesses.front()->getPseudoValue())
               ->getFrameIndex();
@@ -725,7 +722,7 @@ Register EZHInstrInfo::isLoadFromStackSlotPostFE(const MachineInstr &MI,
 }
 
 Register EZHInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
-                                            int &FrameIndex) const {
+                                          int &FrameIndex) const {
   if (MI.getOpcode() == EZH::SW_RI)
     if (MI.getOperand(0).isFI() && MI.getOperand(1).isImm() &&
         MI.getOperand(1).getImm() == 0) {

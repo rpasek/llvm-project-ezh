@@ -83,7 +83,7 @@ class EZHAsmParser : public MCTargetAsmParser {
 
 public:
   EZHAsmParser(const MCSubtargetInfo &STI, MCAsmParser &Parser,
-                 const MCInstrInfo &MII)
+               const MCInstrInfo &MII)
       : MCTargetAsmParser(STI, MII), Parser(Parser), Lexer(Parser.getLexer()),
         SubtargetInfo(STI) {
     setAvailableFeatures(
@@ -589,7 +589,7 @@ public:
   }
 
   static std::unique_ptr<EZHOperand> createReg(MCRegister Reg, SMLoc Start,
-                                                 SMLoc End) {
+                                               SMLoc End) {
     auto Op = std::make_unique<EZHOperand>(REGISTER);
     Op->Reg.RegNum = Reg;
     Op->StartLoc = Start;
@@ -597,8 +597,8 @@ public:
     return Op;
   }
 
-  static std::unique_ptr<EZHOperand> createImm(const MCExpr *Value,
-                                                 SMLoc Start, SMLoc End) {
+  static std::unique_ptr<EZHOperand> createImm(const MCExpr *Value, SMLoc Start,
+                                               SMLoc End) {
     auto Op = std::make_unique<EZHOperand>(IMMEDIATE);
     Op->Imm.Value = Value;
     Op->StartLoc = Start;
@@ -645,10 +645,9 @@ public:
 } // end anonymous namespace
 
 bool EZHAsmParser::matchAndEmitInstruction(SMLoc IdLoc, unsigned &Opcode,
-                                             OperandVector &Operands,
-                                             MCStreamer &Out,
-                                             uint64_t &ErrorInfo,
-                                             bool MatchingInlineAsm) {
+                                           OperandVector &Operands,
+                                           MCStreamer &Out, uint64_t &ErrorInfo,
+                                           bool MatchingInlineAsm) {
   MCInst Inst;
   SMLoc ErrorLoc;
 
@@ -684,8 +683,7 @@ bool EZHAsmParser::matchAndEmitInstruction(SMLoc IdLoc, unsigned &Opcode,
 // backwards compatible with GCC and the different ways inline assembly is
 // handled.
 // TODO: see if there isn't a better way to do this.
-std::unique_ptr<EZHOperand>
-EZHAsmParser::parseRegister(bool RestoreOnFailure) {
+std::unique_ptr<EZHOperand> EZHAsmParser::parseRegister(bool RestoreOnFailure) {
   SMLoc Start = Parser.getTok().getLoc();
   SMLoc End = SMLoc::getFromPointer(Parser.getTok().getLoc().getPointer() - 1);
   std::optional<AsmToken> PercentTok;
@@ -712,7 +710,7 @@ EZHAsmParser::parseRegister(bool RestoreOnFailure) {
 }
 
 bool EZHAsmParser::parseRegister(MCRegister &RegNum, SMLoc &StartLoc,
-                                   SMLoc &EndLoc) {
+                                 SMLoc &EndLoc) {
   const AsmToken &Tok = getParser().getTok();
   StartLoc = Tok.getLoc();
   EndLoc = Tok.getEndLoc();
@@ -723,7 +721,7 @@ bool EZHAsmParser::parseRegister(MCRegister &RegNum, SMLoc &StartLoc,
 }
 
 ParseStatus EZHAsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
-                                             SMLoc &EndLoc) {
+                                           SMLoc &EndLoc) {
   const AsmToken &Tok = getParser().getTok();
   StartLoc = Tok.getLoc();
   EndLoc = Tok.getEndLoc();
@@ -942,8 +940,8 @@ ParseStatus EZHAsmParser::parseMemoryOperand(OperandVector &Operands) {
             return Error(Parser.getTok().getLoc(),
                          "Memory address is not word aligned and larger than "
                          "class RM can handle");
-          Operands.push_back(EZHOperand::MorphToMemRegImm(
-              EZH::R0, std::move(Op), LPAC::ADD));
+          Operands.push_back(
+              EZHOperand::MorphToMemRegImm(EZH::R0, std::move(Op), LPAC::ADD));
         }
         return ParseStatus::Success;
       }
@@ -1005,7 +1003,7 @@ ParseStatus EZHAsmParser::parseMemoryOperand(OperandVector &Operands) {
 // information, adding to operands.
 // If operand was parsed, returns false, else true.
 ParseStatus EZHAsmParser::parseOperand(OperandVector *Operands,
-                                         StringRef Mnemonic) {
+                                       StringRef Mnemonic) {
   // Check if the current operand has a custom associated parser, if so, try to
   // custom parse the operand, or fallback to the general approach.
   ParseStatus Result = MatchOperandParserImpl(*Operands, Mnemonic);
@@ -1040,7 +1038,7 @@ ParseStatus EZHAsmParser::parseOperand(OperandVector *Operands,
 // Split the mnemonic into ASM operand, conditional code and instruction
 // qualifier (half-word, byte).
 StringRef EZHAsmParser::splitMnemonic(StringRef Name, SMLoc NameLoc,
-                                        OperandVector *Operands) {
+                                      OperandVector *Operands) {
   size_t Next = Name.find('.');
 
   StringRef Mnemonic = Name;
@@ -1160,8 +1158,8 @@ static bool MaybePredicatedInst(const OperandVector &Operands) {
 }
 
 bool EZHAsmParser::parseInstruction(ParseInstructionInfo & /*Info*/,
-                                      StringRef Name, SMLoc NameLoc,
-                                      OperandVector &Operands) {
+                                    StringRef Name, SMLoc NameLoc,
+                                    OperandVector &Operands) {
   // First operand is token for instruction
   StringRef Mnemonic = splitMnemonic(Name, NameLoc, &Operands);
 
@@ -1179,10 +1177,10 @@ bool EZHAsmParser::parseInstruction(ParseInstructionInfo & /*Info*/,
       Operands.size() == 2) {
     Operands.erase(Operands.begin(), Operands.begin() + 1);
     Operands.insert(Operands.begin(), EZHOperand::CreateToken("s", NameLoc));
-    Operands.insert(Operands.begin() + 1,
-                    EZHOperand::createImm(
-                        MCConstantExpr::create(LPCC::ICC_T, getContext()),
-                        NameLoc, NameLoc));
+    Operands.insert(
+        Operands.begin() + 1,
+        EZHOperand::createImm(MCConstantExpr::create(LPCC::ICC_T, getContext()),
+                              NameLoc, NameLoc));
   }
 
   // If the instruction is a bt instruction with 1 operand (in assembly) then it
@@ -1214,10 +1212,10 @@ bool EZHAsmParser::parseInstruction(ParseInstructionInfo & /*Info*/,
   // Insert always true operand for instruction that may be predicated but
   // are not. Currently the autogenerated parser always expects a predicate.
   if (MaybePredicatedInst(Operands)) {
-    Operands.insert(Operands.begin() + 1,
-                    EZHOperand::createImm(
-                        MCConstantExpr::create(LPCC::ICC_T, getContext()),
-                        NameLoc, NameLoc));
+    Operands.insert(
+        Operands.begin() + 1,
+        EZHOperand::createImm(MCConstantExpr::create(LPCC::ICC_T, getContext()),
+                              NameLoc, NameLoc));
   }
 
   return false;
@@ -1227,7 +1225,6 @@ bool EZHAsmParser::parseInstruction(ParseInstructionInfo & /*Info*/,
 #define GET_MATCHER_IMPLEMENTATION
 #include "EZHGenAsmMatcher.inc"
 
-extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
-LLVMInitializeEZHAsmParser() {
+extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeEZHAsmParser() {
   RegisterMCAsmParser<EZHAsmParser> x(getTheEZHTarget());
 }

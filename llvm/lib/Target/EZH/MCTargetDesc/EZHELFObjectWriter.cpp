@@ -35,8 +35,8 @@ EZHELFObjectWriter::EZHELFObjectWriter(uint8_t OSABI)
     : MCELFObjectTargetWriter(/*Is64Bit_=*/false, OSABI, ELF::EM_EZH,
                               /*HasRelocationAddend_=*/true) {}
 
-unsigned EZHELFObjectWriter::getRelocType(const MCFixup &Fixup,
-                                            const MCValue &, bool) const {
+unsigned EZHELFObjectWriter::getRelocType(const MCFixup &Fixup, const MCValue &,
+                                          bool) const {
   unsigned Type;
   unsigned Kind = static_cast<unsigned>(Fixup.getKind());
   switch (Kind) {
@@ -70,7 +70,7 @@ unsigned EZHELFObjectWriter::getRelocType(const MCFixup &Fixup,
 }
 
 bool EZHELFObjectWriter::needsRelocateWithSymbol(const MCValue &,
-                                                   unsigned Type) const {
+                                                 unsigned Type) const {
   switch (Type) {
   case ELF::R_EZH_21:
   case ELF::R_EZH_21_F:

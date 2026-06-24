@@ -33,8 +33,8 @@ void EZHInstPrinter::printRegName(raw_ostream &OS, MCRegister Reg) {
 }
 
 bool EZHInstPrinter::printInst(const MCInst *MI, raw_ostream &OS,
-                                 StringRef Alias, unsigned OpNo0,
-                                 unsigned OpNo1) {
+                               StringRef Alias, unsigned OpNo0,
+                               unsigned OpNo1) {
   OS << "\t" << Alias << " ";
   printOperand(MI, OpNo0, OS);
   OS << ", ";
@@ -65,10 +65,8 @@ static StringRef decIncOperator(const MCInst *MI) {
   return "++";
 }
 
-bool EZHInstPrinter::printMemoryLoadIncrement(const MCInst *MI,
-                                                raw_ostream &OS,
-                                                StringRef Opcode,
-                                                int AddOffset) {
+bool EZHInstPrinter::printMemoryLoadIncrement(const MCInst *MI, raw_ostream &OS,
+                                              StringRef Opcode, int AddOffset) {
   if (isPreIncrementForm(MI, AddOffset)) {
     OS << "\t" << Opcode << "\t[" << decIncOperator(MI) << "%"
        << getRegisterName(MI->getOperand(1).getReg()) << "], %"
@@ -85,9 +83,9 @@ bool EZHInstPrinter::printMemoryLoadIncrement(const MCInst *MI,
 }
 
 bool EZHInstPrinter::printMemoryStoreIncrement(const MCInst *MI,
-                                                 raw_ostream &OS,
-                                                 StringRef Opcode,
-                                                 int AddOffset) {
+                                               raw_ostream &OS,
+                                               StringRef Opcode,
+                                               int AddOffset) {
   if (isPreIncrementForm(MI, AddOffset)) {
     OS << "\t" << Opcode << "\t%" << getRegisterName(MI->getOperand(0).getReg())
        << ", [" << decIncOperator(MI) << "%"
@@ -135,16 +133,16 @@ bool EZHInstPrinter::printAlias(const MCInst *MI, raw_ostream &OS) {
 }
 
 void EZHInstPrinter::printInst(const MCInst *MI, uint64_t Address,
-                                 StringRef Annotation,
-                                 const MCSubtargetInfo & /*STI*/,
-                                 raw_ostream &OS) {
+                               StringRef Annotation,
+                               const MCSubtargetInfo & /*STI*/,
+                               raw_ostream &OS) {
   if (!printAlias(MI, OS) && !printAliasInstr(MI, Address, OS))
     printInstruction(MI, Address, OS);
   printAnnotation(OS, Annotation);
 }
 
 void EZHInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
-                                    raw_ostream &OS) {
+                                  raw_ostream &OS) {
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isReg())
     OS << "%" << getRegisterName(Op.getReg());
@@ -157,7 +155,7 @@ void EZHInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
 }
 
 void EZHInstPrinter::printMemImmOperand(const MCInst *MI, unsigned OpNo,
-                                          raw_ostream &OS) {
+                                        raw_ostream &OS) {
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isImm()) {
     OS << '[' << formatHex(Op.getImm()) << ']';
@@ -171,7 +169,7 @@ void EZHInstPrinter::printMemImmOperand(const MCInst *MI, unsigned OpNo,
 }
 
 void EZHInstPrinter::printHi16ImmOperand(const MCInst *MI, unsigned OpNo,
-                                           raw_ostream &OS) {
+                                         raw_ostream &OS) {
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isImm()) {
     OS << formatHex(Op.getImm() << 16);
@@ -183,7 +181,7 @@ void EZHInstPrinter::printHi16ImmOperand(const MCInst *MI, unsigned OpNo,
 }
 
 void EZHInstPrinter::printHi16AndImmOperand(const MCInst *MI, unsigned OpNo,
-                                              raw_ostream &OS) {
+                                            raw_ostream &OS) {
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isImm()) {
     OS << formatHex((Op.getImm() << 16) | 0xffff);
@@ -195,7 +193,7 @@ void EZHInstPrinter::printHi16AndImmOperand(const MCInst *MI, unsigned OpNo,
 }
 
 void EZHInstPrinter::printLo16AndImmOperand(const MCInst *MI, unsigned OpNo,
-                                              raw_ostream &OS) {
+                                            raw_ostream &OS) {
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isImm()) {
     OS << formatHex(0xffff0000 | Op.getImm());
@@ -231,7 +229,7 @@ static void printMemoryImmediateOffset(const MCAsmInfo &MAI,
 }
 
 void EZHInstPrinter::printMemRiOperand(const MCInst *MI, int OpNo,
-                                         raw_ostream &OS) {
+                                       raw_ostream &OS) {
   const MCOperand &RegOp = MI->getOperand(OpNo);
   const MCOperand &OffsetOp = MI->getOperand(OpNo + 1);
   const MCOperand &AluOp = MI->getOperand(OpNo + 2);
@@ -245,7 +243,7 @@ void EZHInstPrinter::printMemRiOperand(const MCInst *MI, int OpNo,
 }
 
 void EZHInstPrinter::printMemRrOperand(const MCInst *MI, int OpNo,
-                                         raw_ostream &OS) {
+                                       raw_ostream &OS) {
   const MCOperand &RegOp = MI->getOperand(OpNo);
   const MCOperand &OffsetOp = MI->getOperand(OpNo + 1);
   const MCOperand &AluOp = MI->getOperand(OpNo + 2);
@@ -265,7 +263,7 @@ void EZHInstPrinter::printMemRrOperand(const MCInst *MI, int OpNo,
 }
 
 void EZHInstPrinter::printMemSplsOperand(const MCInst *MI, int OpNo,
-                                           raw_ostream &OS) {
+                                         raw_ostream &OS) {
   const MCOperand &RegOp = MI->getOperand(OpNo);
   const MCOperand &OffsetOp = MI->getOperand(OpNo + 1);
   const MCOperand &AluOp = MI->getOperand(OpNo + 2);
@@ -279,7 +277,7 @@ void EZHInstPrinter::printMemSplsOperand(const MCInst *MI, int OpNo,
 }
 
 void EZHInstPrinter::printCCOperand(const MCInst *MI, int OpNo,
-                                      raw_ostream &OS) {
+                                    raw_ostream &OS) {
   LPCC::CondCode CC =
       static_cast<LPCC::CondCode>(MI->getOperand(OpNo).getImm());
   // Handle the undefined value here for printing so we don't abort().
@@ -290,7 +288,7 @@ void EZHInstPrinter::printCCOperand(const MCInst *MI, int OpNo,
 }
 
 void EZHInstPrinter::printPredicateOperand(const MCInst *MI, unsigned OpNo,
-                                             raw_ostream &OS) {
+                                           raw_ostream &OS) {
   LPCC::CondCode CC =
       static_cast<LPCC::CondCode>(MI->getOperand(OpNo).getImm());
   // Handle the undefined value here for printing so we don't abort().

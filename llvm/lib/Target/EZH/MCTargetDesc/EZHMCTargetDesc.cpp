@@ -52,8 +52,8 @@ static MCRegisterInfo *createEZHMCRegisterInfo(const Triple & /*TT*/) {
   return X;
 }
 
-static MCSubtargetInfo *
-createEZHMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
+static MCSubtargetInfo *createEZHMCSubtargetInfo(const Triple &TT,
+                                                 StringRef CPU, StringRef FS) {
   std::string CPUName = std::string(CPU);
   if (CPUName.empty())
     CPUName = "generic";
@@ -73,17 +73,17 @@ static MCStreamer *createMCStreamer(const Triple &T, MCContext &Context,
 }
 
 static MCInstPrinter *createEZHMCInstPrinter(const Triple & /*T*/,
-                                               unsigned SyntaxVariant,
-                                               const MCAsmInfo &MAI,
-                                               const MCInstrInfo &MII,
-                                               const MCRegisterInfo &MRI) {
+                                             unsigned SyntaxVariant,
+                                             const MCAsmInfo &MAI,
+                                             const MCInstrInfo &MII,
+                                             const MCRegisterInfo &MRI) {
   if (SyntaxVariant == 0)
     return new EZHInstPrinter(MAI, MII, MRI);
   return nullptr;
 }
 
 static MCRelocationInfo *createEZHElfRelocation(const Triple &TheTriple,
-                                                  MCContext &Ctx) {
+                                                MCContext &Ctx) {
   return createMCRelocationInfo(TheTriple, Ctx);
 }
 
@@ -127,18 +127,15 @@ static MCInstrAnalysis *createEZHInstrAnalysis(const MCInstrInfo *Info) {
   return new EZHMCInstrAnalysis(Info);
 }
 
-extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
-LLVMInitializeEZHTargetMC() {
+extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeEZHTargetMC() {
   // Register the MC asm info.
   RegisterMCAsmInfo<EZHMCAsmInfo> X(getTheEZHTarget());
 
   // Register the MC instruction info.
-  TargetRegistry::RegisterMCInstrInfo(getTheEZHTarget(),
-                                      createEZHMCInstrInfo);
+  TargetRegistry::RegisterMCInstrInfo(getTheEZHTarget(), createEZHMCInstrInfo);
 
   // Register the MC register info.
-  TargetRegistry::RegisterMCRegInfo(getTheEZHTarget(),
-                                    createEZHMCRegisterInfo);
+  TargetRegistry::RegisterMCRegInfo(getTheEZHTarget(), createEZHMCRegisterInfo);
 
   // Register the MC subtarget info.
   TargetRegistry::RegisterMCSubtargetInfo(getTheEZHTarget(),
@@ -149,8 +146,7 @@ LLVMInitializeEZHTargetMC() {
                                         createEZHMCCodeEmitter);
 
   // Register the ASM Backend
-  TargetRegistry::RegisterMCAsmBackend(getTheEZHTarget(),
-                                       createEZHAsmBackend);
+  TargetRegistry::RegisterMCAsmBackend(getTheEZHTarget(), createEZHAsmBackend);
 
   // Register the MCInstPrinter.
   TargetRegistry::RegisterMCInstPrinter(getTheEZHTarget(),

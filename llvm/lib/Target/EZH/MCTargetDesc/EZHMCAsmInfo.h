@@ -23,7 +23,7 @@ class EZHMCAsmInfo : public MCAsmInfoELF {
 
 public:
   explicit EZHMCAsmInfo(const Triple &TheTriple,
-                          const MCTargetOptions &Options);
+                        const MCTargetOptions &Options);
   void printSpecifierExpr(raw_ostream &OS,
                           const MCSpecifierExpr &Expr) const override;
 };

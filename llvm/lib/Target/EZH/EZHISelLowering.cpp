@@ -69,7 +69,7 @@ static cl::opt<int> EZHLowerConstantMulThreshold(
     cl::init(14));
 
 EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
-                                         const EZHSubtarget &STI)
+                                     const EZHSubtarget &STI)
     : TargetLowering(TM, STI) {
   // Set up the register classes.
   addRegisterClass(MVT::i32, &EZH::GPRRegClass);
@@ -163,8 +163,7 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   setMaxAtomicSizeInBitsSupported(0);
 }
 
-SDValue EZHTargetLowering::LowerOperation(SDValue Op,
-                                            SelectionDAG &DAG) const {
+SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
   case ISD::MUL:
     return LowerMUL(Op, DAG);
@@ -203,9 +202,9 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op,
 //                       EZH Inline Assembly Support
 //===----------------------------------------------------------------------===//
 
-Register EZHTargetLowering::getRegisterByName(
-  const char *RegName, LLT /*VT*/,
-  const MachineFunction & /*MF*/) const {
+Register
+EZHTargetLowering::getRegisterByName(const char *RegName, LLT /*VT*/,
+                                     const MachineFunction & /*MF*/) const {
   // Only unallocatable registers should be matched here.
   Register Reg = StringSwitch<Register>(RegName)
                      .Case("pc", EZH::PC)
@@ -222,8 +221,8 @@ Register EZHTargetLowering::getRegisterByName(
 
 std::pair<unsigned, const TargetRegisterClass *>
 EZHTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
-                                                  StringRef Constraint,
-                                                  MVT VT) const {
+                                                StringRef Constraint,
+                                                MVT VT) const {
   if (Constraint.size() == 1)
     // GCC Constraint Letters
     switch (Constraint[0]) {
@@ -269,9 +268,10 @@ EZHTargetLowering::getSingleConstraintMatchWeight(
 
 // LowerAsmOperandForConstraint - Lower the specified operand into the Ops
 // vector.  If it is invalid, don't add anything to Ops.
-void EZHTargetLowering::LowerAsmOperandForConstraint(
-    SDValue Op, StringRef Constraint, std::vector<SDValue> &Ops,
-    SelectionDAG &DAG) const {
+void EZHTargetLowering::LowerAsmOperandForConstraint(SDValue Op,
+                                                     StringRef Constraint,
+                                                     std::vector<SDValue> &Ops,
+                                                     SelectionDAG &DAG) const {
   SDValue Result;
 
   // Only support length 1 constraints for now.
@@ -354,9 +354,9 @@ void EZHTargetLowering::LowerAsmOperandForConstraint(
 #include "EZHGenCallingConv.inc"
 
 static bool CC_EZH32_VarArg(unsigned ValNo, MVT ValVT, MVT LocVT,
-                              CCValAssign::LocInfo LocInfo,
-                              ISD::ArgFlagsTy ArgFlags, Type *OrigTy,
-                              CCState &State) {
+                            CCValAssign::LocInfo LocInfo,
+                            ISD::ArgFlagsTy ArgFlags, Type *OrigTy,
+                            CCState &State) {
   // Handle fixed arguments with default CC.
   // Note: Both the default and fast CC handle VarArg the same and hence the
   // calling convention of the function is not considered here.
@@ -394,7 +394,7 @@ SDValue EZHTargetLowering::LowerFormalArguments(
 }
 
 SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
-                                       SmallVectorImpl<SDValue> &InVals) const {
+                                     SmallVectorImpl<SDValue> &InVals) const {
   SelectionDAG &DAG = CLI.DAG;
   SDLoc &DL = CLI.DL;
   SmallVectorImpl<ISD::OutputArg> &Outs = CLI.Outs;
@@ -528,10 +528,10 @@ bool EZHTargetLowering::CanLowerReturn(
 
 SDValue
 EZHTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
-                                 bool IsVarArg,
-                                 const SmallVectorImpl<ISD::OutputArg> &Outs,
-                                 const SmallVectorImpl<SDValue> &OutVals,
-                                 const SDLoc &DL, SelectionDAG &DAG) const {
+                               bool IsVarArg,
+                               const SmallVectorImpl<ISD::OutputArg> &Outs,
+                               const SmallVectorImpl<SDValue> &OutVals,
+                               const SDLoc &DL, SelectionDAG &DAG) const {
   // CCValAssign - represent the assignment of the return value to a location
   SmallVector<CCValAssign, 16> RVLocs;
 
@@ -961,8 +961,7 @@ SDValue EZHTargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   return DAG.getNode(EZHISD::SETCC, DL, Op.getValueType(), TargetCC, Glue);
 }
 
-SDValue EZHTargetLowering::LowerSELECT_CC(SDValue Op,
-                                            SelectionDAG &DAG) const {
+SDValue EZHTargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const {
   SDValue LHS = Op.getOperand(0);
   SDValue RHS = Op.getOperand(1);
   SDValue TrueV = Op.getOperand(2);
@@ -994,7 +993,7 @@ SDValue EZHTargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
 }
 
 SDValue EZHTargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
-                                                     SelectionDAG &DAG) const {
+                                                   SelectionDAG &DAG) const {
   SDValue Chain = Op.getOperand(0);
   SDValue Size = Op.getOperand(1);
   SDLoc DL(Op);
@@ -1029,7 +1028,7 @@ SDValue EZHTargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
 }
 
 SDValue EZHTargetLowering::LowerRETURNADDR(SDValue Op,
-                                             SelectionDAG &DAG) const {
+                                           SelectionDAG &DAG) const {
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   MFI.setReturnAddressIsTaken(true);
@@ -1051,8 +1050,7 @@ SDValue EZHTargetLowering::LowerRETURNADDR(SDValue Op,
   return DAG.getCopyFromReg(DAG.getEntryNode(), DL, Reg, VT);
 }
 
-SDValue EZHTargetLowering::LowerFRAMEADDR(SDValue Op,
-                                            SelectionDAG &DAG) const {
+SDValue EZHTargetLowering::LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const {
   MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
   MFI.setFrameAddressIsTaken(true);
 
@@ -1071,13 +1069,12 @@ SDValue EZHTargetLowering::LowerFRAMEADDR(SDValue Op,
 }
 
 SDValue EZHTargetLowering::LowerConstantPool(SDValue Op,
-                                               SelectionDAG &DAG) const {
+                                             SelectionDAG &DAG) const {
   SDLoc DL(Op);
   ConstantPoolSDNode *N = cast<ConstantPoolSDNode>(Op);
   const Constant *C = N->getConstVal();
-  const EZHTargetObjectFile *TLOF =
-      static_cast<const EZHTargetObjectFile *>(
-          getTargetMachine().getObjFileLowering());
+  const EZHTargetObjectFile *TLOF = static_cast<const EZHTargetObjectFile *>(
+      getTargetMachine().getObjFileLowering());
 
   // If the code model is small or constant will be placed in the small section,
   // then assume address will fit in 21-bits.
@@ -1104,14 +1101,13 @@ SDValue EZHTargetLowering::LowerConstantPool(SDValue Op,
 }
 
 SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
-                                                SelectionDAG &DAG) const {
+                                              SelectionDAG &DAG) const {
   SDLoc DL(Op);
   const GlobalValue *GV = cast<GlobalAddressSDNode>(Op)->getGlobal();
   int64_t Offset = cast<GlobalAddressSDNode>(Op)->getOffset();
 
-  const EZHTargetObjectFile *TLOF =
-      static_cast<const EZHTargetObjectFile *>(
-          getTargetMachine().getObjFileLowering());
+  const EZHTargetObjectFile *TLOF = static_cast<const EZHTargetObjectFile *>(
+      getTargetMachine().getObjFileLowering());
 
   // If the code model is small or global variable will be placed in the small
   // section, then assume address will fit in 21-bits.
@@ -1138,7 +1134,7 @@ SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
 }
 
 SDValue EZHTargetLowering::LowerBlockAddress(SDValue Op,
-                                               SelectionDAG &DAG) const {
+                                             SelectionDAG &DAG) const {
   SDLoc DL(Op);
   const BlockAddress *BA = cast<BlockAddressSDNode>(Op)->getBlockAddress();
 
@@ -1153,8 +1149,7 @@ SDValue EZHTargetLowering::LowerBlockAddress(SDValue Op,
   return Result;
 }
 
-SDValue EZHTargetLowering::LowerJumpTable(SDValue Op,
-                                            SelectionDAG &DAG) const {
+SDValue EZHTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   JumpTableSDNode *JT = cast<JumpTableSDNode>(Op);
 
@@ -1180,8 +1175,7 @@ SDValue EZHTargetLowering::LowerJumpTable(SDValue Op,
   }
 }
 
-SDValue EZHTargetLowering::LowerSHL_PARTS(SDValue Op,
-                                            SelectionDAG &DAG) const {
+SDValue EZHTargetLowering::LowerSHL_PARTS(SDValue Op, SelectionDAG &DAG) const {
   EVT VT = Op.getValueType();
   unsigned VTBits = VT.getSizeInBits();
   SDLoc dl(Op);
@@ -1229,8 +1223,7 @@ SDValue EZHTargetLowering::LowerSHL_PARTS(SDValue Op,
   return DAG.getMergeValues(Ops, dl);
 }
 
-SDValue EZHTargetLowering::LowerSRL_PARTS(SDValue Op,
-                                            SelectionDAG &DAG) const {
+SDValue EZHTargetLowering::LowerSRL_PARTS(SDValue Op, SelectionDAG &DAG) const {
   MVT VT = Op.getSimpleValueType();
   unsigned VTBits = VT.getSizeInBits();
   SDLoc dl(Op);
@@ -1415,7 +1408,7 @@ static SDValue PerformSUBCombine(SDNode *N,
 }
 
 SDValue EZHTargetLowering::PerformDAGCombine(SDNode *N,
-                                               DAGCombinerInfo &DCI) const {
+                                             DAGCombinerInfo &DCI) const {
   switch (N->getOpcode()) {
   default:
     break;
@@ -1432,9 +1425,11 @@ SDValue EZHTargetLowering::PerformDAGCombine(SDNode *N,
   return SDValue();
 }
 
-void EZHTargetLowering::computeKnownBitsForTargetNode(
-    const SDValue Op, KnownBits &Known, const APInt &DemandedElts,
-    const SelectionDAG &DAG, unsigned Depth) const {
+void EZHTargetLowering::computeKnownBitsForTargetNode(const SDValue Op,
+                                                      KnownBits &Known,
+                                                      const APInt &DemandedElts,
+                                                      const SelectionDAG &DAG,
+                                                      unsigned Depth) const {
   unsigned BitWidth = Known.getBitWidth();
   switch (Op.getOpcode()) {
   default:

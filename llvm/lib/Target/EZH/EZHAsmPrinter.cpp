@@ -38,7 +38,7 @@ namespace {
 class EZHAsmPrinter : public AsmPrinter {
 public:
   explicit EZHAsmPrinter(TargetMachine &TM,
-                           std::unique_ptr<MCStreamer> Streamer)
+                         std::unique_ptr<MCStreamer> Streamer)
       : AsmPrinter(TM, std::move(Streamer), ID) {}
 
   StringRef getPassName() const override { return "EZH Assembly Printer"; }
@@ -60,7 +60,7 @@ public:
 } // end of anonymous namespace
 
 void EZHAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
-                                   raw_ostream &O) {
+                                 raw_ostream &O) {
   const MachineOperand &MO = MI->getOperand(OpNum);
 
   switch (MO.getType()) {
@@ -107,7 +107,7 @@ void EZHAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
 
 // PrintAsmOperand - Print out an operand for an inline asm expression.
 bool EZHAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
-                                      const char *ExtraCode, raw_ostream &O) {
+                                    const char *ExtraCode, raw_ostream &O) {
   // Does this asm operand have a single letter operand modifier?
   if (ExtraCode && ExtraCode[0]) {
     if (ExtraCode[1])
@@ -153,11 +153,9 @@ void EZHAsmPrinter::emitCallInstruction(const MachineInstr *MI) {
   // Insert save rca instruction immediately before the call.
   // TODO: We should generate a pc-relative mov instruction here instead
   // of pc + 16 (should be mov .+16 %rca).
-  OutStreamer->emitInstruction(MCInstBuilder(EZH::ADD_I_LO)
-                                   .addReg(EZH::RCA)
-                                   .addReg(EZH::PC)
-                                   .addImm(16),
-                               STI);
+  OutStreamer->emitInstruction(
+      MCInstBuilder(EZH::ADD_I_LO).addReg(EZH::RCA).addReg(EZH::PC).addImm(16),
+      STI);
 
   // Push rca onto the stack.
   //   st %rca, [--%sp]
@@ -194,7 +192,7 @@ void EZHAsmPrinter::customEmitInstruction(const MachineInstr *MI) {
 
 void EZHAsmPrinter::emitInstruction(const MachineInstr *MI) {
   EZH_MC::verifyInstructionPredicates(MI->getOpcode(),
-                                        getSubtargetInfo().getFeatureBits());
+                                      getSubtargetInfo().getFeatureBits());
 
   MachineBasicBlock::const_instr_iterator I = MI->getIterator();
   MachineBasicBlock::const_instr_iterator E = MI->getParent()->instr_end();
@@ -239,8 +237,8 @@ bool EZHAsmPrinter::isBlockOnlyReachableByFallthrough(
 
 char EZHAsmPrinter::ID = 0;
 
-INITIALIZE_PASS(EZHAsmPrinter, "ezh-asm-printer", "EZH Assembly Printer",
-                false, false)
+INITIALIZE_PASS(EZHAsmPrinter, "ezh-asm-printer", "EZH Assembly Printer", false,
+                false)
 
 // Force static initialization.
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void

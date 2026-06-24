@@ -81,8 +81,8 @@ private:
 
 char EZHMemAluCombiner::ID = 0;
 
-INITIALIZE_PASS(EZHMemAluCombiner, DEBUG_TYPE,
-                "EZH memory ALU combiner pass", false, false)
+INITIALIZE_PASS(EZHMemAluCombiner, DEBUG_TYPE, "EZH memory ALU combiner pass",
+                false, false)
 
 namespace {
 bool isSpls(uint16_t Opcode) { return EZH::splsIdempotent(Opcode) == Opcode; }
@@ -227,9 +227,9 @@ LPAC::AluCode mergedAluCode(unsigned AluOpcode) {
 // This function builds a new machine instruction using the MachineInstrBuilder
 // class and inserts it before the memory instruction.
 void EZHMemAluCombiner::insertMergedInstruction(MachineBasicBlock *BB,
-                                                  const MbbIterator &MemInstr,
-                                                  const MbbIterator &AluInstr,
-                                                  bool Before) {
+                                                const MbbIterator &MemInstr,
+                                                const MbbIterator &AluInstr,
+                                                bool Before) {
   // Insert new combined load/store + alu operation
   MachineOperand Dest = MemInstr->getOperand(0);
   MachineOperand Base = MemInstr->getOperand(1);
@@ -300,13 +300,12 @@ bool isSuitableAluInstr(bool IsSpls, const MbbIterator &AluIter,
     if (Offset.isReg() && Offset.getReg() == EZH::R0)
       return true;
 
-    if (Offset.isImm() &&
-        ((Offset.getImm() == 0 &&
-          // Check that the Op2 would fit in the immediate field of the
-          // memory operation.
-          ((IsSpls && isInt<10>(Op2.getImm())) ||
-           (!IsSpls && isInt<16>(Op2.getImm())))) ||
-         Offset.getImm() == Op2.getImm()))
+    if (Offset.isImm() && ((Offset.getImm() == 0 &&
+                            // Check that the Op2 would fit in the immediate
+                            // field of the memory operation.
+                            ((IsSpls && isInt<10>(Op2.getImm())) ||
+                             (!IsSpls && isInt<16>(Op2.getImm())))) ||
+                           Offset.getImm() == Op2.getImm()))
       return true;
   } else if (Op2.isReg()) {
     // The Offset and 2nd operand are both registers and equal

@@ -29,16 +29,16 @@ void EZHSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
 }
 
 EZHSubtarget &EZHSubtarget::initializeSubtargetDependencies(StringRef CPU,
-                                                                StringRef FS) {
+                                                            StringRef FS) {
   initSubtargetFeatures(CPU, FS);
   return *this;
 }
 
 EZHSubtarget::EZHSubtarget(const Triple &TargetTriple, StringRef Cpu,
-                               StringRef FeatureString, const TargetMachine &TM,
-                               const TargetOptions & /*Options*/,
-                               CodeModel::Model /*CodeModel*/,
-                               CodeGenOptLevel /*OptLevel*/)
+                           StringRef FeatureString, const TargetMachine &TM,
+                           const TargetOptions & /*Options*/,
+                           CodeModel::Model /*CodeModel*/,
+                           CodeGenOptLevel /*OptLevel*/)
     : EZHGenSubtargetInfo(TargetTriple, Cpu, /*TuneCPU*/ Cpu, FeatureString),
       InstrInfo(initializeSubtargetDependencies(Cpu, FeatureString)),
       FrameLowering(*this), TLInfo(TM, *this) {}

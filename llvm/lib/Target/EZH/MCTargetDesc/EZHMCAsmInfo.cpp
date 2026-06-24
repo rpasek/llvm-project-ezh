@@ -20,7 +20,7 @@ using namespace llvm;
 void EZHMCAsmInfo::anchor() {}
 
 EZHMCAsmInfo::EZHMCAsmInfo(const Triple & /*TheTriple*/,
-                               const MCTargetOptions &Options)
+                           const MCTargetOptions &Options)
     : MCAsmInfoELF(Options) {
   IsLittleEndian = false;
   InternalSymbolPrefix = ".L";
@@ -42,7 +42,7 @@ EZHMCAsmInfo::EZHMCAsmInfo(const Triple & /*TheTriple*/,
 }
 
 void EZHMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
-                                        const MCSpecifierExpr &Expr) const {
+                                      const MCSpecifierExpr &Expr) const {
   if (Expr.getSpecifier() == 0) {
     printExpr(OS, *Expr.getSubExpr());
     return;

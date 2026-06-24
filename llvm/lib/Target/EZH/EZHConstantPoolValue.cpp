@@ -35,18 +35,17 @@ EZHConstantPoolValue::EZHConstantPoolValue(Type *Ty, unsigned id,
                                            unsigned char PCAdj,
                                            EZHCP::EZHCPModifier modifier,
                                            bool addCurrentAddress)
-  : MachineConstantPoolValue(Ty), LabelId(id), Kind(kind),
-    PCAdjust(PCAdj), Modifier(modifier),
-    AddCurrentAddress(addCurrentAddress) {}
+    : MachineConstantPoolValue(Ty), LabelId(id), Kind(kind), PCAdjust(PCAdj),
+      Modifier(modifier), AddCurrentAddress(addCurrentAddress) {}
 
 EZHConstantPoolValue::EZHConstantPoolValue(LLVMContext &C, unsigned id,
                                            EZHCP::EZHCPKind kind,
                                            unsigned char PCAdj,
                                            EZHCP::EZHCPModifier modifier,
                                            bool addCurrentAddress)
-  : MachineConstantPoolValue((Type*)Type::getInt32Ty(C)),
-    LabelId(id), Kind(kind), PCAdjust(PCAdj), Modifier(modifier),
-    AddCurrentAddress(addCurrentAddress) {}
+    : MachineConstantPoolValue((Type *)Type::getInt32Ty(C)), LabelId(id),
+      Kind(kind), PCAdjust(PCAdj), Modifier(modifier),
+      AddCurrentAddress(addCurrentAddress) {}
 
 EZHConstantPoolValue::~EZHConstantPoolValue() = default;
 
@@ -77,18 +76,14 @@ int EZHConstantPoolValue::getExistingMachineCPValue(MachineConstantPool *CP,
   llvm_unreachable("Shouldn't be calling this directly!");
 }
 
-void
-EZHConstantPoolValue::addSelectionDAGCSEId(FoldingSetNodeID &ID) {
+void EZHConstantPoolValue::addSelectionDAGCSEId(FoldingSetNodeID &ID) {
   ID.AddInteger(LabelId);
   ID.AddInteger(PCAdjust);
 }
 
-bool
-EZHConstantPoolValue::hasSameValue(EZHConstantPoolValue *ACPV) {
-  if (ACPV->Kind == Kind &&
-      ACPV->PCAdjust == PCAdjust &&
-      ACPV->Modifier == Modifier &&
-      ACPV->LabelId == LabelId &&
+bool EZHConstantPoolValue::hasSameValue(EZHConstantPoolValue *ACPV) {
+  if (ACPV->Kind == Kind && ACPV->PCAdjust == PCAdjust &&
+      ACPV->Modifier == Modifier && ACPV->LabelId == LabelId &&
       ACPV->AddCurrentAddress == AddCurrentAddress) {
     // Two PC relative constpool entries containing the same GV address or
     // external symbols. FIXME: What about blockaddress?
@@ -105,10 +100,12 @@ LLVM_DUMP_METHOD void EZHConstantPoolValue::dump() const {
 #endif
 
 void EZHConstantPoolValue::print(raw_ostream &O) const {
-  if (Modifier) O << "(" << getModifierText() << ")";
+  if (Modifier)
+    O << "(" << getModifierText() << ")";
   if (PCAdjust != 0) {
     O << "-(LPC" << LabelId << "+" << (unsigned)PCAdjust;
-    if (AddCurrentAddress) O << "-.";
+    if (AddCurrentAddress)
+      O << "-.";
     O << ")";
   }
 }
@@ -117,35 +114,31 @@ void EZHConstantPoolValue::print(raw_ostream &O) const {
 // EZHConstantPoolConstant
 //===----------------------------------------------------------------------===//
 
-EZHConstantPoolConstant::EZHConstantPoolConstant(Type *Ty,
-                                                 const Constant *C,
-                                                 unsigned ID,
-                                                 EZHCP::EZHCPKind Kind,
-                                                 unsigned char PCAdj,
-                                                 EZHCP::EZHCPModifier Modifier,
-                                                 bool AddCurrentAddress)
-  : EZHConstantPoolValue(Ty, ID, Kind, PCAdj, Modifier, AddCurrentAddress),
-    CVal(C) {}
+EZHConstantPoolConstant::EZHConstantPoolConstant(
+    Type *Ty, const Constant *C, unsigned ID, EZHCP::EZHCPKind Kind,
+    unsigned char PCAdj, EZHCP::EZHCPModifier Modifier, bool AddCurrentAddress)
+    : EZHConstantPoolValue(Ty, ID, Kind, PCAdj, Modifier, AddCurrentAddress),
+      CVal(C) {}
 
-EZHConstantPoolConstant::EZHConstantPoolConstant(const Constant *C,
-                                                 unsigned ID,
+EZHConstantPoolConstant::EZHConstantPoolConstant(const Constant *C, unsigned ID,
                                                  EZHCP::EZHCPKind Kind,
                                                  unsigned char PCAdj,
                                                  EZHCP::EZHCPModifier Modifier,
                                                  bool AddCurrentAddress)
-  : EZHConstantPoolValue((Type*)C->getType(), ID, Kind, PCAdj, Modifier,
-                         AddCurrentAddress),
-    CVal(C) {}
+    : EZHConstantPoolValue((Type *)C->getType(), ID, Kind, PCAdj, Modifier,
+                           AddCurrentAddress),
+      CVal(C) {}
 
 EZHConstantPoolConstant::EZHConstantPoolConstant(const GlobalVariable *GV,
                                                  const Constant *C)
     : EZHConstantPoolValue((Type *)C->getType(), 0, EZHCP::CPPromotedGlobal, 0,
-                           EZHCP::no_modifier, false), CVal(C) {
+                           EZHCP::no_modifier, false),
+      CVal(C) {
   GVars.insert(GV);
 }
 
-EZHConstantPoolConstant *
-EZHConstantPoolConstant::Create(const Constant *C, unsigned ID) {
+EZHConstantPoolConstant *EZHConstantPoolConstant::Create(const Constant *C,
+                                                         unsigned ID) {
   return new EZHConstantPoolConstant(C, ID, EZHCP::CPValue, 0,
                                      EZHCP::no_modifier, false);
 }
@@ -159,23 +152,21 @@ EZHConstantPoolConstant::Create(const GlobalVariable *GVar,
 EZHConstantPoolConstant *
 EZHConstantPoolConstant::Create(const GlobalValue *GV,
                                 EZHCP::EZHCPModifier Modifier) {
-  return new EZHConstantPoolConstant((Type*)Type::getInt32Ty(GV->getContext()),
-                                     GV, 0, EZHCP::CPValue, 0,
-                                     Modifier, false);
+  return new EZHConstantPoolConstant((Type *)Type::getInt32Ty(GV->getContext()),
+                                     GV, 0, EZHCP::CPValue, 0, Modifier, false);
 }
 
-EZHConstantPoolConstant *
-EZHConstantPoolConstant::Create(const Constant *C, unsigned ID,
-                                EZHCP::EZHCPKind Kind, unsigned char PCAdj) {
-  return new EZHConstantPoolConstant(C, ID, Kind, PCAdj,
-                                     EZHCP::no_modifier, false);
+EZHConstantPoolConstant *EZHConstantPoolConstant::Create(const Constant *C,
+                                                         unsigned ID,
+                                                         EZHCP::EZHCPKind Kind,
+                                                         unsigned char PCAdj) {
+  return new EZHConstantPoolConstant(C, ID, Kind, PCAdj, EZHCP::no_modifier,
+                                     false);
 }
 
-EZHConstantPoolConstant *
-EZHConstantPoolConstant::Create(const Constant *C, unsigned ID,
-                                EZHCP::EZHCPKind Kind, unsigned char PCAdj,
-                                EZHCP::EZHCPModifier Modifier,
-                                bool AddCurrentAddress) {
+EZHConstantPoolConstant *EZHConstantPoolConstant::Create(
+    const Constant *C, unsigned ID, EZHCP::EZHCPKind Kind, unsigned char PCAdj,
+    EZHCP::EZHCPModifier Modifier, bool AddCurrentAddress) {
   return new EZHConstantPoolConstant(C, ID, Kind, PCAdj, Modifier,
                                      AddCurrentAddress);
 }
@@ -191,9 +182,9 @@ const BlockAddress *EZHConstantPoolConstant::getBlockAddress() const {
 int EZHConstantPoolConstant::getExistingMachineCPValue(MachineConstantPool *CP,
                                                        Align Alignment) {
   int index =
-    getExistingMachineCPValueImpl<EZHConstantPoolConstant>(CP, Alignment);
+      getExistingMachineCPValueImpl<EZHConstantPoolConstant>(CP, Alignment);
   if (index != -1) {
-    auto *CPV = static_cast<EZHConstantPoolValue*>(
+    auto *CPV = static_cast<EZHConstantPoolValue *>(
         CP->getConstants()[index].Val.MachineCPVal);
     auto *Constant = cast<EZHConstantPoolConstant>(CPV);
     Constant->GVars.insert_range(GVars);
@@ -265,9 +256,9 @@ EZHConstantPoolMBB::EZHConstantPoolMBB(LLVMContext &C,
                                        unsigned id, unsigned char PCAdj,
                                        EZHCP::EZHCPModifier Modifier,
                                        bool AddCurrentAddress)
-  : EZHConstantPoolValue(C, id, EZHCP::CPMachineBasicBlock, PCAdj,
-                         Modifier, AddCurrentAddress),
-    MBB(mbb) {}
+    : EZHConstantPoolValue(C, id, EZHCP::CPMachineBasicBlock, PCAdj, Modifier,
+                           AddCurrentAddress),
+      MBB(mbb) {}
 
 EZHConstantPoolMBB *EZHConstantPoolMBB::Create(LLVMContext &C,
                                                const MachineBasicBlock *mbb,
@@ -284,7 +275,7 @@ int EZHConstantPoolMBB::getExistingMachineCPValue(MachineConstantPool *CP,
 bool EZHConstantPoolMBB::hasSameValue(EZHConstantPoolValue *ACPV) {
   const EZHConstantPoolMBB *ACPMBB = dyn_cast<EZHConstantPoolMBB>(ACPV);
   return ACPMBB && ACPMBB->MBB == MBB &&
-    EZHConstantPoolValue::hasSameValue(ACPV);
+         EZHConstantPoolValue::hasSameValue(ACPV);
 }
 
 void EZHConstantPoolMBB::addSelectionDAGCSEId(FoldingSetNodeID &ID) {
