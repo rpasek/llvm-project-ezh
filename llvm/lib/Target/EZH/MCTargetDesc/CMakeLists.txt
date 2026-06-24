@@ -1,18 +1,18 @@
-add_llvm_component_library(LLVMLanaiDesc
-  LanaiAsmBackend.cpp
-  LanaiELFObjectWriter.cpp
-  LanaiInstPrinter.cpp
-  LanaiMCAsmInfo.cpp
-  LanaiMCCodeEmitter.cpp
-  LanaiMCTargetDesc.cpp
+add_llvm_component_library(LLVMEZHDesc
+  EZHAsmBackend.cpp
+  EZHELFObjectWriter.cpp
+  EZHInstPrinter.cpp
+  EZHMCAsmInfo.cpp
+  EZHMCCodeEmitter.cpp
+  EZHMCTargetDesc.cpp
 
   LINK_COMPONENTS
-  LanaiInfo
+  EZHInfo
   MC
   MCDisassembler
   Support
   TargetParser
 
   ADD_TO_COMPONENT
-  Lanai
+  EZH
 )
