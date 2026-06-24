@@ -1,18 +1,18 @@
 include_directories( ${CMAKE_CURRENT_BINARY_DIR}/.. ${CMAKE_CURRENT_SOURCE_DIR}/.. )
 
-add_llvm_component_library(LLVMLanaiAsmParser
-  LanaiAsmParser.cpp
+add_llvm_component_library(LLVMEZHAsmParser
+  EZHAsmParser.cpp
 
   LINK_COMPONENTS
   CodeGenTypes
-  LanaiDesc
-  LanaiInfo
+  EZHDesc
+  EZHInfo
   MC
   MCParser
   Support
 
   ADD_TO_COMPONENT
-  Lanai
+  EZH
   )
 
-add_dependencies( LLVMLanaiAsmParser LanaiCommonTableGen )
+add_dependencies( LLVMEZHAsmParser EZHCommonTableGen )
