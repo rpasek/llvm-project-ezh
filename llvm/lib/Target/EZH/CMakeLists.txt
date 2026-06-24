@@ -1,35 +1,35 @@
-add_llvm_component_group(Lanai)
+add_llvm_component_group(EZH)
 
-set(LLVM_TARGET_DEFINITIONS Lanai.td)
+set(LLVM_TARGET_DEFINITIONS EZH.td)
 
-tablegen(LLVM LanaiGenAsmMatcher.inc -gen-asm-matcher)
-tablegen(LLVM LanaiGenAsmWriter.inc -gen-asm-writer)
-tablegen(LLVM LanaiGenCallingConv.inc -gen-callingconv)
-tablegen(LLVM LanaiGenDAGISel.inc -gen-dag-isel)
-tablegen(LLVM LanaiGenDisassemblerTables.inc -gen-disassembler)
-tablegen(LLVM LanaiGenInstrInfo.inc -gen-instr-info)
-tablegen(LLVM LanaiGenMCCodeEmitter.inc -gen-emitter)
-tablegen(LLVM LanaiGenRegisterInfo.inc -gen-register-info)
-tablegen(LLVM LanaiGenSDNodeInfo.inc -gen-sd-node-info)
-tablegen(LLVM LanaiGenSubtargetInfo.inc -gen-subtarget)
+tablegen(LLVM EZHGenAsmMatcher.inc -gen-asm-matcher)
+tablegen(LLVM EZHGenAsmWriter.inc -gen-asm-writer)
+tablegen(LLVM EZHGenCallingConv.inc -gen-callingconv)
+tablegen(LLVM EZHGenDAGISel.inc -gen-dag-isel)
+tablegen(LLVM EZHGenDisassemblerTables.inc -gen-disassembler)
+tablegen(LLVM EZHGenInstrInfo.inc -gen-instr-info)
+tablegen(LLVM EZHGenMCCodeEmitter.inc -gen-emitter)
+tablegen(LLVM EZHGenRegisterInfo.inc -gen-register-info)
+tablegen(LLVM EZHGenSDNodeInfo.inc -gen-sd-node-info)
+tablegen(LLVM EZHGenSubtargetInfo.inc -gen-subtarget)
 
-add_public_tablegen_target(LanaiCommonTableGen)
+add_public_tablegen_target(EZHCommonTableGen)
 
-add_llvm_target(LanaiCodeGen
-  LanaiAsmPrinter.cpp
-  LanaiDelaySlotFiller.cpp
-  LanaiFrameLowering.cpp
-  LanaiInstrInfo.cpp
-  LanaiISelDAGToDAG.cpp
-  LanaiISelLowering.cpp
-  LanaiMachineFunctionInfo.cpp
-  LanaiMCInstLower.cpp
-  LanaiMemAluCombiner.cpp
-  LanaiRegisterInfo.cpp
-  LanaiSelectionDAGInfo.cpp
-  LanaiSubtarget.cpp
-  LanaiTargetMachine.cpp
-  LanaiTargetObjectFile.cpp
+add_llvm_target(EZHCodeGen
+  EZHAsmPrinter.cpp
+  EZHDelaySlotFiller.cpp
+  EZHFrameLowering.cpp
+  EZHInstrInfo.cpp
+  EZHISelDAGToDAG.cpp
+  EZHISelLowering.cpp
+  EZHMachineFunctionInfo.cpp
+  EZHMCInstLower.cpp
+  EZHMemAluCombiner.cpp
+  EZHRegisterInfo.cpp
+  EZHSelectionDAGInfo.cpp
+  EZHSubtarget.cpp
+  EZHTargetMachine.cpp
+  EZHTargetObjectFile.cpp
 
   LINK_COMPONENTS
   Analysis
@@ -37,9 +37,9 @@ add_llvm_target(LanaiCodeGen
   CodeGen
   CodeGenTypes
   Core
-  LanaiAsmParser
-  LanaiDesc
-  LanaiInfo
+  EZHAsmParser
+  EZHDesc
+  EZHInfo
   MC
   SelectionDAG
   Support
@@ -48,7 +48,7 @@ add_llvm_target(LanaiCodeGen
   TransformUtils
 
   ADD_TO_COMPONENT
-  Lanai
+  EZH
   )
 
 add_subdirectory(AsmParser)
