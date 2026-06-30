@@ -31,7 +31,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -81,11 +83,18 @@ void EZHInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   if (!EZH::GPRRegClass.hasSubClassEq(RegisterClass)) {
     llvm_unreachable("Can't store this register to stack slot");
   }
+  MachineFunction &MF = *MBB.getParent();
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  MachineMemOperand *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, FrameIndex),
+      MachineMemOperand::MOStore, MFI.getObjectSize(FrameIndex),
+      MFI.getObjectAlign(FrameIndex));
   BuildMI(MBB, Position, DL, get(EZH::STR))
       .addReg(SourceRegister, getKillRegState(IsKill))
       .addFrameIndex(FrameIndex)
       .addImm(0)
       .addImm(EZHCC::ICC_EU)
+      .addMemOperand(MMO)
       .setMIFlags(Flags);
 }
 
@@ -102,10 +111,17 @@ void EZHInstrInfo::loadRegFromStackSlot(
   if (!EZH::GPRRegClass.hasSubClassEq(RegisterClass)) {
     llvm_unreachable("Can't load this register from stack slot");
   }
+  MachineFunction &MF = *MBB.getParent();
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  MachineMemOperand *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, FrameIndex),
+      MachineMemOperand::MOLoad, MFI.getObjectSize(FrameIndex),
+      MFI.getObjectAlign(FrameIndex));
   BuildMI(MBB, Position, DL, get(EZH::LDR), DestinationRegister)
       .addFrameIndex(FrameIndex)
       .addImm(0)
       .addImm(EZHCC::ICC_EU)
+      .addMemOperand(MMO)
       .setMIFlags(Flags);
 }
 

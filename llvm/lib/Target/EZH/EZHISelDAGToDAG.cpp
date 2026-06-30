@@ -150,6 +150,10 @@ bool EZHDAGToDAGISel::tryIndexedLoadStore(SDNode *Node) {
     SDNode *ResNode = CurDAG->getMachineNode(
         TargetOpcode, DL, CurDAG->getVTList(MVT::i32, MVT::i32, MVT::Other),
         Ops);
+    // Carry the load's MachineMemOperand so machine AA / scheduling can reason
+    // about this access (the indexed instruction is mayLoad but has no pattern).
+    CurDAG->setNodeMemRefs(cast<MachineSDNode>(ResNode),
+                           {MemNode->getMemOperand()});
     ReplaceUses(SDValue(Node, 0), SDValue(ResNode, 0)); // Value
     ReplaceUses(SDValue(Node, 1), SDValue(ResNode, 1)); // New Ptr
     ReplaceUses(SDValue(Node, 2), SDValue(ResNode, 2)); // Chain
@@ -160,6 +164,10 @@ bool EZHDAGToDAGISel::tryIndexedLoadStore(SDNode *Node) {
     SDValue Ops[] = {Val, Base, TargetImm, Pred, MemNode->getChain()};
     SDNode *ResNode = CurDAG->getMachineNode(
         TargetOpcode, DL, CurDAG->getVTList(MVT::i32, MVT::Other), Ops);
+    // Carry the store's MachineMemOperand so machine AA / scheduling can reason
+    // about this access (the indexed instruction is mayStore but has no pattern).
+    CurDAG->setNodeMemRefs(cast<MachineSDNode>(ResNode),
+                           {MemNode->getMemOperand()});
     ReplaceUses(SDValue(Node, 0), SDValue(ResNode, 0)); // New Ptr
     ReplaceUses(SDValue(Node, 1), SDValue(ResNode, 1)); // Chain
     CurDAG->RemoveDeadNode(Node);

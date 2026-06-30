@@ -228,13 +228,19 @@ multiclass MemOps<bits<5> major_op, bit is_store, bit is_word, bit is_signed,
                  opc_name#"$Cond "#asm_ops_normal,
                  pattern> {}
 
-  // Pre-indexed
+  // Pre-indexed. Selected manually in EZHISelDAGToDAG (empty pattern), so
+  // tablegen cannot infer mayLoad/mayStore as it does for the plain form above;
+  // set it explicitly or these are marked with conservative unmodeled side
+  // effects and machine AA / scheduling treat them as non-memory. (The
+  // base-register write-back is modeled by the $Rn_wb def.)
   def _PRE
     : EZHInstMem<major_op, is_store, is_word, is_signed, 0, 1,
                  outs_wb, ins_normal_pred,
                  opc_name#"_pre$Cond "#asm_ops_pre,
                  []> {
     let Constraints = "$Rn = $Rn_wb";
+    let mayLoad = !if(is_store, 0, 1);
+    let mayStore = is_store;
   }
 
   // Post-indexed
@@ -244,6 +250,8 @@ multiclass MemOps<bits<5> major_op, bit is_store, bit is_word, bit is_signed,
                  opc_name#"_post$Cond "#asm_ops_post,
                  []> {
     let Constraints = "$Rn = $Rn_wb";
+    let mayLoad = !if(is_store, 0, 1);
+    let mayStore = is_store;
   }
 }
 
