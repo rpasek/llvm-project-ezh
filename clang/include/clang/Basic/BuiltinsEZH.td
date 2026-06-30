@@ -15,6 +15,72 @@
 
 include "clang/Basic/BuiltinsBase.td"
 
+// --- Event / control fabric -------------------------------------------------
+
+def EZHHold : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_hold"];
+  let Attributes = [NoThrow];
+  let Prototype = "void()";
+}
+
+def EZHIntTrigger : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_int_trigger"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(_Constant unsigned int)";
+}
+
+def EZHReadCFM : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_read_cfm"];
+  let Attributes = [NoThrow];
+  let Prototype = "unsigned int()";
+}
+def EZHWriteCFM : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_write_cfm"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(unsigned int)";
+}
+
+def EZHReadCFS : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_read_cfs"];
+  let Attributes = [NoThrow];
+  let Prototype = "unsigned int()";
+}
+def EZHWriteCFS : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_write_cfs"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(unsigned int)";
+}
+
+def EZHWaitForBeat : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_wait_for_beat"];
+  let Attributes = [NoThrow];
+  let Prototype = "void()";
+}
+def EZHSynchAllToBeat : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_synch_all_to_beat"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(_Constant unsigned int)";
+}
+def EZHHeartRythm : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_heart_rythm"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(unsigned int)";
+}
+def EZHHeartRythmImm : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_heart_rythm_imm"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(_Constant unsigned int)";
+}
+
+// --- GPO / GPI / GPD --------------------------------------------------------
+
+// GPO read-modify-write: all three masks are compile-time 8-bit constants.
+def EZHModifyGPOByte : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_modify_gpo_byte"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(_Constant unsigned int, _Constant unsigned int, _Constant unsigned int)";
+}
+
 // Read the GPI input register.
 def EZHReadGPI : TargetBuiltin {
   let Spellings = ["__builtin_ezh_read_gpi"];

@@ -6,16 +6,58 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file defines the EZH-specific intrinsics. This first increment covers
-// the GPIO surface the SmartDMA bit-banging demos rely on: reading the GPI
-// input register and driving/releasing open-drain lines through the GPD
-// drive-enable register. Each carries side effects so the scheduler keeps it
-// ordered against the other I/O. The matching clang builtins are wired
-// automatically through the ClangBuiltin association (no manual CodeGen).
+// This file defines the EZH-specific intrinsics: the event/control fabric of
+// the SmartDMA EZH core (hold, software event triggering, the bitslice
+// configuration/status registers CFM and CFS, the beat/heart-rythm timing
+// primitives) and the GPIO surface (GPI/GPD/GPO). Each carries side effects so
+// the scheduler keeps it ordered against the rest of the I/O. The matching
+// clang builtins are wired automatically through the ClangBuiltin association
+// (no target-specific CodeGen).
 //
 //===----------------------------------------------------------------------===//
 
 let TargetPrefix = "ezh" in {
+
+// --- Event / control fabric -------------------------------------------------
+
+// Stop executing until a bitslice event arrives (hold).
+def int_ezh_hold : ClangBuiltin<"__builtin_ezh_hold">,
+    Intrinsic<[], [], [IntrHasSideEffects]>;
+
+// Raise the software event/interrupt encoded by the immediate (int_trigger).
+def int_ezh_int_trigger : ClangBuiltin<"__builtin_ezh_int_trigger">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;
+
+// Bitslice configuration/mask register CFM (special reg 11).
+def int_ezh_read_cfm : ClangBuiltin<"__builtin_ezh_read_cfm">,
+    Intrinsic<[llvm_i32_ty], [], [IntrHasSideEffects]>;
+def int_ezh_write_cfm : ClangBuiltin<"__builtin_ezh_write_cfm">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects]>;
+
+// Bitslice source-select register CFS (special reg 10).
+def int_ezh_read_cfs : ClangBuiltin<"__builtin_ezh_read_cfs">,
+    Intrinsic<[llvm_i32_ty], [], [IntrHasSideEffects]>;
+def int_ezh_write_cfs : ClangBuiltin<"__builtin_ezh_write_cfs">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects]>;
+
+// Beat / heart-rythm timing primitives.
+def int_ezh_wait_for_beat : ClangBuiltin<"__builtin_ezh_wait_for_beat">,
+    Intrinsic<[], [], [IntrHasSideEffects]>;
+def int_ezh_synch_all_to_beat : ClangBuiltin<"__builtin_ezh_synch_all_to_beat">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;
+def int_ezh_heart_rythm : ClangBuiltin<"__builtin_ezh_heart_rythm">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects]>;
+def int_ezh_heart_rythm_imm : ClangBuiltin<"__builtin_ezh_heart_rythm_imm">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;
+
+// --- GPO / GPI / GPD --------------------------------------------------------
+
+// Atomic read-modify-write of the GPO output register: GPO = (GPO & And) | Or
+// ^ Xor, all three masks compile-time 8-bit constants.
+def int_ezh_modify_gpo_byte : ClangBuiltin<"__builtin_ezh_modify_gpo_byte">,
+    Intrinsic<[], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+              [IntrHasSideEffects, ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>,
+               ImmArg<ArgIndex<2>>]>;
 
 // Read the GPI input register (special reg 14) -> mov $Rd, gpi.
 def int_ezh_read_gpi : ClangBuiltin<"__builtin_ezh_read_gpi">,

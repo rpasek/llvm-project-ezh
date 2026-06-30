@@ -598,7 +598,7 @@ let isPseudo = 1, hasSideEffects = 1 in {
 //===----------------------------------------------------------------------===//
 
 // HOLD family
-def HOLD : EZHCondInst<(outs), (ins pred:$Cond), "hold$Cond", []> {
+def HOLD : EZHCondInst<(outs), (ins pred:$Cond), "hold$Cond", [(int_ezh_hold)]> {
   let Opcode = OP_HOLD;
   let Inst{13-10} = REG_PC; // PC
   let Inst{14} = 0;
@@ -787,9 +787,10 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1 in {
 
 // Unconditional instructions
 def NOP : EZHInstSingle<OP_NOP, (outs), (ins), "nop", []> { let Inst{31-5} = 0; }
-def INT_TRIGGER : EZHInstSingle<OP_INT_TRIGGER, (outs), (ins imm24:$Imm), "int_trigger $Imm", []> { bits<24> Imm; let Inst{31-8} = Imm; let Inst{7-5} = 0; }
+def INT_TRIGGER : EZHInstSingle<OP_INT_TRIGGER, (outs), (ins imm24:$Imm), "int_trigger $Imm", [(int_ezh_int_trigger timm:$Imm)]> { bits<24> Imm; let Inst{31-8} = Imm; let Inst{7-5} = 0; }
 def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins imms8:$AndMask, imms8:$OrMask, imms8:$XorMask),
-                        "modify_gpo_byte $AndMask, $OrMask, $XorMask", []>;
+                        "modify_gpo_byte $AndMask, $OrMask, $XorMask",
+                        [(int_ezh_modify_gpo_byte timm:$AndMask, timm:$OrMask, timm:$XorMask)]>;
 
 // GPIO intrinsic instructions. These are the first defs that select LLVM
 // intrinsics; the matching __builtin_ezh_* are wired automatically through the
@@ -797,6 +798,13 @@ def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins imms8:$AndMask, imms8:$O
 // allocation (EZHRegisterInfo.cpp), so they are hardwired here. EZHInstALU /
 // EZHInstBit already carry hasSideEffects = 1, which matches the intrinsics'
 // IntrHasSideEffects -- the GPIO state is invisible to the optimizer otherwise.
+
+// These hardwire a reserved special register into an otherwise-generic mov /
+// bit-op, so they exist only for instruction selection: the assembler and
+// disassembler round-trip them through the generic form with the register name
+// (mov $Rd, gpi == this READ_GPI). isCodeGenOnly keeps them out of the matcher
+// and decoder, where they would otherwise collide with the generic mov/bset_imm.
+let isCodeGenOnly = 1 in {
 
 // Read the GPI input register (special reg 14): mov $Rd, gpi.
 let Uses = [GPI] in
@@ -836,14 +844,47 @@ def GPD_RELEASE : EZHInstBit<1, (outs), (ins imm5:$Bit5, pred:$Cond),
 }
 }
 
-def HEART_RYTHM_IMM : EZHInstSingle<OP_NOP, (outs), (ins imm16:$Imm), "heart_rythm_imm $Imm", []> {
+// Bitslice config/status registers CFM (special reg 11) and CFS (special reg
+// 10): readable and writable as a mov to/from the reserved special register.
+let Uses = [CFM] in
+def READ_CFM : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, cfm", [(set i32:$Rd, (int_ezh_read_cfm))]> {
+  let Rs1 = REG_CFM;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+let Defs = [CFM] in
+def WRITE_CFM : EZHInstALU<OP_MOV, 0, (outs), (ins GPR:$Rs1, pred:$Cond),
+                           "mov$Cond cfm, $Rs1", [(int_ezh_write_cfm i32:$Rs1)]> {
+  let Rd = REG_CFM;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+let Uses = [CFS] in
+def READ_CFS : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, cfs", [(set i32:$Rd, (int_ezh_read_cfs))]> {
+  let Rs1 = REG_CFS;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+let Defs = [CFS] in
+def WRITE_CFS : EZHInstALU<OP_MOV, 0, (outs), (ins GPR:$Rs1, pred:$Cond),
+                           "mov$Cond cfs, $Rs1", [(int_ezh_write_cfs i32:$Rs1)]> {
+  let Rd = REG_CFS;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+
+} // isCodeGenOnly = 1 (hardwired special-register mov/bit-op forms)
+
+def HEART_RYTHM_IMM : EZHInstSingle<OP_NOP, (outs), (ins imm16:$Imm), "heart_rythm_imm $Imm", [(int_ezh_heart_rythm_imm timm:$Imm)]> {
   bits<16> Imm;
   let Inst{31-16} = Imm;
   let Inst{15-6} = 0;
   let Inst{5} = 1;
 }
 
-def HEART_RYTHM : EZHInstSingle<OP_NOP, (outs), (ins GPR:$Rs), "heart_rythm $Rs", []> {
+def HEART_RYTHM : EZHInstSingle<OP_NOP, (outs), (ins GPR:$Rs), "heart_rythm $Rs", [(int_ezh_heart_rythm i32:$Rs)]> {
   bits<4> Rs;
   let Inst{31-18} = 0;
   let Inst{17-14} = Rs;
@@ -853,14 +894,14 @@ def HEART_RYTHM : EZHInstSingle<OP_NOP, (outs), (ins GPR:$Rs), "heart_rythm $Rs"
   let Inst{5} = 1;
 }
 
-def WAIT_FOR_BEAT : EZHInstSingle<OP_NOP, (outs), (ins), "wait_for_beat", []> {
+def WAIT_FOR_BEAT : EZHInstSingle<OP_NOP, (outs), (ins), "wait_for_beat", [(int_ezh_wait_for_beat)]> {
   let Inst{31-7} = 0;
   let Inst{6} = 1;
   let Inst{5} = 1;
   let Inst{4-0} = OP_NOP;
 }
 
-def SYNCH_ALL_TO_BEAT : EZHInstSingle<OP_NOP, (outs), (ins imm1:$Imm), "synch_all_to_beat $Imm", []> {
+def SYNCH_ALL_TO_BEAT : EZHInstSingle<OP_NOP, (outs), (ins imm1:$Imm), "synch_all_to_beat $Imm", [(int_ezh_synch_all_to_beat timm:$Imm)]> {
   bits<1> Imm;
   let Inst{31} = Imm;
   let Inst{30-7} = 0;
