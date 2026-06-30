@@ -106,6 +106,10 @@ clang_tablegen(BuiltinsBPF.inc -gen-clang-builtins
   SOURCE BuiltinsBPF.td
   TARGET ClangBuiltinsBPF)
 
+clang_tablegen(BuiltinsEZH.inc -gen-clang-builtins
+  SOURCE BuiltinsEZH.td
+  TARGET ClangBuiltinsEZH)
+
 clang_tablegen(BuiltinsDirectX.inc -gen-clang-builtins
   SOURCE BuiltinsDirectX.td
   TARGET ClangBuiltinsDirectX)

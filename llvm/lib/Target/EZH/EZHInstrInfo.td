@@ -791,6 +791,51 @@ def INT_TRIGGER : EZHInstSingle<OP_INT_TRIGGER, (outs), (ins imm24:$Imm), "int_t
 def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins imms8:$AndMask, imms8:$OrMask, imms8:$XorMask),
                         "modify_gpo_byte $AndMask, $OrMask, $XorMask", []>;
 
+// GPIO intrinsic instructions. These are the first defs that select LLVM
+// intrinsics; the matching __builtin_ezh_* are wired automatically through the
+// ClangBuiltin association (no manual CodeGen). GPI and GPD are reserved from
+// allocation (EZHRegisterInfo.cpp), so they are hardwired here. EZHInstALU /
+// EZHInstBit already carry hasSideEffects = 1, which matches the intrinsics'
+// IntrHasSideEffects -- the GPIO state is invisible to the optimizer otherwise.
+
+// Read the GPI input register (special reg 14): mov $Rd, gpi.
+let Uses = [GPI] in
+def READ_GPI : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, gpi", [(set i32:$Rd, (int_ezh_read_gpi))]> {
+  let Rs1 = REG_GPI;
+  let Rs2 = 0;
+  let Inst{31} = 0; // matches mov (is_mvn = 0)
+}
+
+// Read the GPD drive-enable register (special reg 9): mov $Rd, gpd.
+let Uses = [GPD] in
+def READ_GPD : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, gpd", [(set i32:$Rd, (int_ezh_read_gpd))]> {
+  let Rs1 = REG_GPD;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+
+// Open-drain line control via the GPD drive-enable register: set bit N to pull
+// the pin low, clear bit N to release it. GPD is hardwired as both source and
+// destination of a single bit-op. The bit position is a 0..31 immediate.
+let Defs = [GPD], Uses = [GPD] in {
+def GPD_DRIVE_LOW : EZHInstBit<2, (outs), (ins imm5:$Bit5, pred:$Cond),
+                               "bset_imm$Cond gpd, gpd, $Bit5",
+                               [(int_ezh_gpd_drive_low timm:$Bit5)]> {
+  let Rd = REG_GPD;
+  let Rs = REG_GPD;
+  let S_bit = 1; // matches bset_imm
+}
+def GPD_RELEASE : EZHInstBit<1, (outs), (ins imm5:$Bit5, pred:$Cond),
+                             "bclr_imm$Cond gpd, gpd, $Bit5",
+                             [(int_ezh_gpd_release timm:$Bit5)]> {
+  let Rd = REG_GPD;
+  let Rs = REG_GPD;
+  let S_bit = 0; // matches bclr_imm
+}
+}
+
 def HEART_RYTHM_IMM : EZHInstSingle<OP_NOP, (outs), (ins imm16:$Imm), "heart_rythm_imm $Imm", []> {
   bits<16> Imm;
   let Inst{31-16} = Imm;
