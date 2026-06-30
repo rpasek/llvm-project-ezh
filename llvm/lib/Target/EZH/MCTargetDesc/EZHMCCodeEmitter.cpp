@@ -144,8 +144,8 @@ unsigned EZHMCCodeEmitter::getPerAddrOpValue(const MCInst &MI, unsigned OpNo,
     uint64_t Imm = MO.getImm();
 
     // If it is a full physical address (from assembler), convert to offset
-    if (Imm >= 0x40000000 && Imm <= 0x400FFFFF) {
-      Imm -= 0x40000000;
+    if (Imm >= EZHPeripheral::Base && Imm <= EZHPeripheral::End) {
+      Imm -= EZHPeripheral::Base;
     }
 
     // Now Imm MUST be a valid 20-bit offset

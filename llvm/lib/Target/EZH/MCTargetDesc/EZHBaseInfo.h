@@ -28,6 +28,7 @@
 #include "EZHMCTargetDesc.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/Support/ErrorHandling.h"
+#include <cstdint>
 
 namespace llvm {
 
@@ -40,6 +41,19 @@ enum {
   IsPredicable = 1 << 2,
 };
 } // namespace EZHII
+
+// The per_read/per_write instructions reach memory-mapped peripherals through a
+// 20-bit offset added to a fixed base. That base is the Cortex-M architectural
+// peripheral region (0x40000000): the EZH/SmartDMA core shares the system bus,
+// so this is the same on every SmartDMA part -- it is NOT chip-specific. The
+// 1 MB span is the reach of the 20-bit offset. CodeGen folds an aligned
+// constant store/load in this window into per_write/per_read; the MC layer
+// converts between the physical address and the encoded offset.
+namespace EZHPeripheral {
+constexpr uint32_t Base = 0x40000000;
+constexpr uint32_t Size = 0x00100000;            // 1 MB == 20-bit offset window
+constexpr uint32_t End = Base + Size - 1;        // 0x400FFFFF (inclusive)
+} // namespace EZHPeripheral
 
 } // namespace llvm
 #endif // LLVM_LIB_TARGET_EZH_MCTARGETDESC_EZHBASEINFO_H

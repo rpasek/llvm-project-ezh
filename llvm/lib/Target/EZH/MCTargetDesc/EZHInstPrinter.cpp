@@ -24,6 +24,7 @@
 
 #include "EZHInstPrinter.h"
 #include "../EZHCondCode.h"
+#include "EZHBaseInfo.h"
 #include "EZHMCTargetDesc.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
@@ -115,7 +116,7 @@ void EZHInstPrinter::printPerAddrOperand(const MCInst *MI, unsigned OpNo,
                                          raw_ostream &O) {
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isImm()) {
-    uint32_t PhysAddr = (uint32_t)Op.getImm() + 0x40000000;
+    uint32_t PhysAddr = (uint32_t)Op.getImm() + EZHPeripheral::Base;
     O << format_hex(PhysAddr, 10); // Format as 0x400xxxxx
   } else {
     printOperand(MI, OpNo, O);
