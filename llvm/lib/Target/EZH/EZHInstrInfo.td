@@ -103,8 +103,10 @@ def imms8 : Operand<i32>, ImmLeaf<i32, [{ return isInt<8>(Imm); }]> {
   let DecoderMethod = "decodeSimm8";
 }
 
-def imm5 : Operand<i32>, ImmLeaf<i32, [{ return isInt<5>(Imm) || isUInt<5>(Imm); }]> {
+def imm5 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<5>(Imm); }]> {
   let PrintMethod = "printImmOperand";
+  // Range-check the 5-bit field at encode time (bit positions / shift amounts).
+  let EncoderMethod = "getImm5OpValue";
 }
 
 def imm16 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<16>(Imm); }]> {
