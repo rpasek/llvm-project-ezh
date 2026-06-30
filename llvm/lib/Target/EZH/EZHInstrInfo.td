@@ -610,12 +610,21 @@ def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs), (ins GPR:$ta
 // Tight Loop
 def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Cond), "tight_loop$Cond $Rend, $Rcount", []>;
 
-// Reg Offset Load/Store
-def LDR_REG : EZHInstMemReg<OP_MEM_REG, 0, 1, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_reg$Cond $Rd, $Rn, $Rm", []>;
-def LDR_REGB : EZHInstMemReg<OP_MEM_REG, 0, 0, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regb$Cond $Rd, $Rn, $Rm", []>;
-def LDR_REGBS : EZHInstMemReg<OP_MEM_REG, 0, 0, 1, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regbs$Cond $Rd, $Rn, $Rm", []>;
-def STR_REG : EZHInstMemReg<OP_MEM_REG, 1, 1, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_reg$Cond $Rn, $Rd, $Rm", []>;
-def STR_REGB : EZHInstMemReg<OP_MEM_REG, 1, 0, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_regb$Cond $Rn, $Rd, $Rm", []>;
+// Reg Offset Load/Store. address = Rn + Rm (Rm is a byte offset), validated on
+// silicon. The patterns fold a runtime-indexed access (a[i]) into one
+// instruction; they sit below the immediate-offset LDR/STR above, so a constant
+// in-range offset still prefers ldr/str. The pred:$Cond operand is auto-filled
+// with the "always" predicate for these unconditional patterns.
+def LDR_REG : EZHInstMemReg<OP_MEM_REG, 0, 1, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_reg$Cond $Rd, $Rn, $Rm",
+                            [(set i32:$Rd, (load (add i32:$Rn, i32:$Rm)))]>;
+def LDR_REGB : EZHInstMemReg<OP_MEM_REG, 0, 0, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regb$Cond $Rd, $Rn, $Rm",
+                             [(set i32:$Rd, (zextloadi8 (add i32:$Rn, i32:$Rm)))]>;
+def LDR_REGBS : EZHInstMemReg<OP_MEM_REG, 0, 0, 1, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regbs$Cond $Rd, $Rn, $Rm",
+                              [(set i32:$Rd, (sextloadi8 (add i32:$Rn, i32:$Rm)))]>;
+def STR_REG : EZHInstMemReg<OP_MEM_REG, 1, 1, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_reg$Cond $Rn, $Rd, $Rm",
+                            [(store i32:$Rd, (add i32:$Rn, i32:$Rm))]>;
+def STR_REGB : EZHInstMemReg<OP_MEM_REG, 1, 0, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_regb$Cond $Rn, $Rd, $Rm",
+                             [(truncstorei8 i32:$Rd, (add i32:$Rn, i32:$Rm))]>;
 
 // Push / Pop (Upward Stack)
 def PUSH : EZHInstMem<OP_STR, 1, 1, 0, 1, 1, (outs), (ins GPR:$Rd, pred:$Cond), "push$Cond $Rd", []> {

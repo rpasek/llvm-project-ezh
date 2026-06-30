@@ -412,9 +412,14 @@ class EZHInstMemReg<bits<5> op, bits<1> isStore, bits<1> wordSize, bits<1> signe
 
   let Inst{13-10} = !if(isStore, 0, Rd);
   let Inst{17-14} = Rn; // source/raddr
-  let Inst{23-20} = !if(isStore, Rd, {0, 0, signedAccess, 0}); // rdata for store
-  let Inst{27-24} = Rm; // roffset
   let Inst{18}    = wordSize;
+  let Inst{23-20} = !if(isStore, Rd, 0); // rdata for store; 0 for load
+  let Inst{27-24} = Rm; // roffset
+  // Sign-extend control for a byte load. Validated on silicon (EVK-MIMXRT595):
+  // for the 0x1D register-offset form this is Inst{29}, NOT Inst{21} as the
+  // 0x01 immediate-offset form (EZHInstMem) uses -- 0x1D ignores bit 21. Stores
+  // and word loads pass signedAccess = 0.
+  let Inst{29}    = signedAccess;
   let Inst{30}    = isStore;
   let Inst{9}     = 0; // Force S bit to 0
 
