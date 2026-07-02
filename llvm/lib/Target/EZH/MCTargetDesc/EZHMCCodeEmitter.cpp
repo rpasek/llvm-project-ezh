@@ -148,8 +148,8 @@ unsigned EZHMCCodeEmitter::getPerAddrOpValue(const MCInst &MI, unsigned OpNo,
     uint64_t Imm = MO.getImm();
 
     // If it is a full physical address (from assembler), convert to offset
-    if (Imm >= EZHPeripheral::Base && Imm <= EZHPeripheral::End) {
-      Imm -= EZHPeripheral::Base;
+    if (Imm >= EZHPeripheralBase && Imm <= EZHPeripheralEnd) {
+      Imm -= EZHPeripheralBase;
     }
 
     // Now Imm MUST be a valid 20-bit offset
@@ -286,9 +286,12 @@ unsigned EZHMCCodeEmitter::getMachineOpValue(const MCInst &MI,
 
   if (MO.isExpr()) {
     unsigned Opc = MI.getOpcode();
-    // Only the 16-bit hi/lo materialization pair (load_simm + or_imm) can carry
-    // a symbol/relocation in its immediate field, building a 32-bit address one
-    // half at a time.
+    // load_simm and or_imm keep their instruction-field relocations
+    // (FIXUP_EZH_11 / FIXUP_EZH_12), exactly as before. FIXUP_EZH_32 remains
+    // the fixup for DATA references and pointer literals (the constant-pool
+    // `.long sym` behind `ldr rX, pc, <off>`); it is no longer reachable from
+    // an instruction's immediate operand, where its write32le application
+    // would clobber the whole instruction word.
     if (Opc == EZH::LOAD_SIMM) {
       Fixups.push_back(
           MCFixup::create(0, MO.getExpr(), MCFixupKind(EZH::FIXUP_EZH_11)));

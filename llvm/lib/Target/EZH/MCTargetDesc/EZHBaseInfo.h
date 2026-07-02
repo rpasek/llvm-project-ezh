@@ -49,11 +49,9 @@ enum {
 // 1 MB span is the reach of the 20-bit offset. CodeGen folds an aligned
 // constant store/load in this window into per_write/per_read; the MC layer
 // converts between the physical address and the encoded offset.
-namespace EZHPeripheral {
-constexpr uint32_t Base = 0x40000000;
-constexpr uint32_t Size = 0x00100000;            // 1 MB == 20-bit offset window
-constexpr uint32_t End = Base + Size - 1;        // 0x400FFFFF (inclusive)
-} // namespace EZHPeripheral
+constexpr uint32_t EZHPeripheralBase = 0x40000000;
+constexpr uint32_t EZHPeripheralSize = 0x00100000;  // 1 MB == 20-bit offset window
+constexpr uint32_t EZHPeripheralEnd = EZHPeripheralBase + EZHPeripheralSize - 1;
 
 } // namespace llvm
 #endif // LLVM_LIB_TARGET_EZH_MCTARGETDESC_EZHBASEINFO_H

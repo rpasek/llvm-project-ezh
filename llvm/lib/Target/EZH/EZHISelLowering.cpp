@@ -402,9 +402,9 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     if (MemVT == MVT::i32) {
       if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Ptr)) {
         uint32_t Addr = C->getZExtValue();
-        if (Addr >= EZHPeripheral::Base && Addr <= EZHPeripheral::End &&
+        if (Addr >= EZHPeripheralBase && Addr <= EZHPeripheralEnd &&
             (Addr & 3) == 0) {
-          uint32_t Offset = Addr - EZHPeripheral::Base;
+          uint32_t Offset = Addr - EZHPeripheralBase;
           SDValue OffsetVal = DAG.getTargetConstant(Offset, DL, MVT::i32);
           SDVTList VTs = DAG.getVTList(MVT::Other);
           SDValue Ops[] = {Chain, Val, OffsetVal};
@@ -456,9 +456,9 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     if (MemVT == MVT::i32) {
       if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Ptr)) {
         uint32_t Addr = C->getZExtValue();
-        if (Addr >= EZHPeripheral::Base && Addr <= EZHPeripheral::End &&
+        if (Addr >= EZHPeripheralBase && Addr <= EZHPeripheralEnd &&
             (Addr & 3) == 0) {
-          uint32_t Offset = Addr - EZHPeripheral::Base;
+          uint32_t Offset = Addr - EZHPeripheralBase;
           SDValue OffsetVal = DAG.getTargetConstant(Offset, DL, MVT::i32);
           SDVTList VTs = DAG.getVTList(MVT::i32, MVT::Other);
           SDValue Ops[] = {Chain, OffsetVal};
