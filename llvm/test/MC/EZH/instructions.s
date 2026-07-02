@@ -79819,7 +79819,7 @@
 
     acc_vectored_hold r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold r5, r5, -1
+# DISASM: acc_vectored_hold r5, r5, 255
 
     acc_vectored_hold r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x70,0x40]
@@ -79839,7 +79839,7 @@
 
     acc_vectored_hold r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold r5, r5, -1
+# DISASM: acc_vectored_hold r5, r5, 255
 
     acc_vectored_hold r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x70,0x40]
@@ -79859,7 +79859,7 @@
 
     acc_vectored_hold r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold r5, r5, -1
+# DISASM: acc_vectored_hold r5, r5, 255
 
     acc_vectored_hold r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x70,0x40]
@@ -79883,7 +79883,7 @@
 
     acc_vectored_hold_po r5, r5, 0xff
 # CHECK: encoding: [0x7c,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold_po r5, r5, -1
+# DISASM: acc_vectored_hold_po r5, r5, 255
 
     acc_vectored_hold_ne r7, r7, 0x40
 # CHECK: encoding: [0x9c,0x1e,0x70,0x40]
@@ -79903,7 +79903,7 @@
 
     acc_vectored_hold_ca r5, r5, 0xff
 # CHECK: encoding: [0xfc,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold_ca r5, r5, -1
+# DISASM: acc_vectored_hold_ca r5, r5, 255
 
     acc_vectored_hold_nc r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1f,0x70,0x40]
@@ -79923,7 +79923,7 @@
 
     acc_vectored_hold_nbs r5, r5, 0xff
 # CHECK: encoding: [0x9c,0x17,0x50,0xff]
-# DISASM: acc_vectored_hold_nbs r5, r5, -1
+# DISASM: acc_vectored_hold_nbs r5, r5, 255
 
     acc_vectored_hold_nex r7, r7, 0x40
 # CHECK: encoding: [0xbc,0x1f,0x70,0x40]
@@ -79947,7 +79947,7 @@
 
     acc_vectored_hold_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x54,0xff]
-# DISASM: acc_vectored_hold_nra r5, r5, -1
+# DISASM: acc_vectored_hold_nra r5, r5, 255
 
     acc_vectored_hold_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x74,0x40]
@@ -79967,7 +79967,7 @@
 
     acc_vectored_hold_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x54,0xff]
-# DISASM: acc_vectored_hold_nra r5, r5, -1
+# DISASM: acc_vectored_hold_nra r5, r5, 255
 
     acc_vectored_hold_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x74,0x40]
@@ -79987,7 +79987,7 @@
 
     acc_vectored_hold_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x54,0xff]
-# DISASM: acc_vectored_hold_nra r5, r5, -1
+# DISASM: acc_vectored_hold_nra r5, r5, 255
 
     acc_vectored_hold_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x74,0x40]
@@ -80011,7 +80011,7 @@
 
     acc_vectored_hold_lv r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv r5, r5, -1
+# DISASM: acc_vectored_hold_lv r5, r5, 255
 
     acc_vectored_hold_lv r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x78,0x40]
@@ -80031,7 +80031,7 @@
 
     acc_vectored_hold_lv r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv r5, r5, -1
+# DISASM: acc_vectored_hold_lv r5, r5, 255
 
     acc_vectored_hold_lv r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x78,0x40]
@@ -80051,7 +80051,7 @@
 
     acc_vectored_hold_lv r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv r5, r5, -1
+# DISASM: acc_vectored_hold_lv r5, r5, 255
 
     acc_vectored_hold_lv r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x78,0x40]
@@ -80075,7 +80075,7 @@
 
     acc_vectored_hold_lv_po r5, r5, 0xff
 # CHECK: encoding: [0x7c,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv_po r5, r5, -1
+# DISASM: acc_vectored_hold_lv_po r5, r5, 255
 
     acc_vectored_hold_lv_ne r7, r7, 0x40
 # CHECK: encoding: [0x9c,0x1e,0x78,0x40]
@@ -80095,7 +80095,7 @@
 
     acc_vectored_hold_lv_ca r5, r5, 0xff
 # CHECK: encoding: [0xfc,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv_ca r5, r5, -1
+# DISASM: acc_vectored_hold_lv_ca r5, r5, 255
 
     acc_vectored_hold_lv_nc r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1f,0x78,0x40]
@@ -80115,7 +80115,7 @@
 
     acc_vectored_hold_lv_nbs r5, r5, 0xff
 # CHECK: encoding: [0x9c,0x17,0x58,0xff]
-# DISASM: acc_vectored_hold_lv_nbs r5, r5, -1
+# DISASM: acc_vectored_hold_lv_nbs r5, r5, 255
 
     acc_vectored_hold_lv_nex r7, r7, 0x40
 # CHECK: encoding: [0xbc,0x1f,0x78,0x40]
@@ -80139,7 +80139,7 @@
 
     acc_vectored_hold_lv_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x5c,0xff]
-# DISASM: acc_vectored_hold_lv_nra r5, r5, -1
+# DISASM: acc_vectored_hold_lv_nra r5, r5, 255
 
     acc_vectored_hold_lv_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x7c,0x40]
@@ -80159,7 +80159,7 @@
 
     acc_vectored_hold_lv_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x5c,0xff]
-# DISASM: acc_vectored_hold_lv_nra r5, r5, -1
+# DISASM: acc_vectored_hold_lv_nra r5, r5, 255
 
     acc_vectored_hold_lv_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x7c,0x40]
@@ -80179,7 +80179,7 @@
 
     acc_vectored_hold_lv_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x5c,0xff]
-# DISASM: acc_vectored_hold_lv_nra r5, r5, -1
+# DISASM: acc_vectored_hold_lv_nra r5, r5, 255
 
     acc_vectored_hold_lv_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x7c,0x40]
@@ -80843,7 +80843,7 @@
 
     modify_gpo_byte 0xff, 0xff, 0xff
 # CHECK: encoding: [0x1e,0xff,0xff,0xff]
-# DISASM: modify_gpo_byte -1, -1, -1
+# DISASM: modify_gpo_byte 255, 255, 255
 
     modify_gpo_byte 0x40, 0x40, 0x40
 # CHECK: encoding: [0x1e,0x40,0x40,0x40]
@@ -80863,7 +80863,7 @@
 
     modify_gpo_byte 0xff, 0xff, 0xff
 # CHECK: encoding: [0x1e,0xff,0xff,0xff]
-# DISASM: modify_gpo_byte -1, -1, -1
+# DISASM: modify_gpo_byte 255, 255, 255
 
     modify_gpo_byte 0x40, 0x40, 0x40
 # CHECK: encoding: [0x1e,0x40,0x40,0x40]
@@ -80883,7 +80883,7 @@
 
     modify_gpo_byte 0xff, 0xff, 0xff
 # CHECK: encoding: [0x1e,0xff,0xff,0xff]
-# DISASM: modify_gpo_byte -1, -1, -1
+# DISASM: modify_gpo_byte 255, 255, 255
 
     modify_gpo_byte 0x40, 0x40, 0x40
 # CHECK: encoding: [0x1e,0x40,0x40,0x40]
@@ -81201,3 +81201,59 @@
 # CHECK: encoding: [0x19,0x50,0x6d,0x7f]
 # DISASM: xorn_rror r4, r5, r6, r7
 
+
+# Special-register access forms (round-trip through the generic mov/bit-op
+# matcher; the isCodeGenOnly READ_*/WRITE_*/CFM_*/GPD_* defs share these
+# encodings). Pins both the matcher path and the field placement for the
+# reserved registers gpi/gpd/gpo/cfm/cfs.
+    mov r1, gpi
+# CHECK: encoding: [0x00,0x84,0x03,0x00]
+# DISASM: mov r1, gpi
+
+    mov r2, gpd
+# CHECK: encoding: [0x00,0x48,0x02,0x00]
+# DISASM: mov r2, gpd
+
+    mov r3, gpo
+# CHECK: encoding: [0x00,0x0c,0x02,0x00]
+# DISASM: mov r3, gpo
+
+    mov gpo, r4
+# CHECK: encoding: [0x00,0x20,0x01,0x00]
+# DISASM: mov gpo, r4
+
+    mov gpd, r5
+# CHECK: encoding: [0x00,0x64,0x01,0x00]
+# DISASM: mov gpd, r5
+
+    mov r6, cfm
+# CHECK: encoding: [0x00,0xd8,0x02,0x00]
+# DISASM: mov r6, cfm
+
+    mov cfm, r7
+# CHECK: encoding: [0x00,0xec,0x01,0x00]
+# DISASM: mov cfm, r7
+
+    mov r0, cfs
+# CHECK: encoding: [0x00,0x80,0x02,0x00]
+# DISASM: mov r0, cfs
+
+    mov cfs, r1
+# CHECK: encoding: [0x00,0x68,0x00,0x00]
+# DISASM: mov cfs, r1
+
+    bset_imm gpd, gpd, 29
+# CHECK: encoding: [0x18,0x64,0x02,0xdd]
+# DISASM: bset_imm gpd, gpd, 29
+
+    bclr_imm gpd, gpd, 30
+# CHECK: encoding: [0x18,0x64,0x02,0x3e]
+# DISASM: bclr_imm gpd, gpd, 30
+
+    bset_imm cfm, cfm, 0
+# CHECK: encoding: [0x18,0xec,0x02,0xc0]
+# DISASM: bset_imm cfm, cfm, 0
+
+    bclr_imm cfm, cfm, 7
+# CHECK: encoding: [0x18,0xec,0x02,0x27]
+# DISASM: bclr_imm cfm, cfm, 7

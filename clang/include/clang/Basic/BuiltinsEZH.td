@@ -25,8 +25,10 @@ def EZHHold : TargetBuiltin {
 
 // The tight_loop (OP_LOOP) hardware loop: re-executes the code between this
 // point and the address rend (normally `&&label` right after the body) a total
-// of rcount+1 times. Expert primitive -- see IntrinsicsEZH.td for the body
-// contract (side-effecting straight-line ops only, event-paced via hold).
+// of rcount+1 times -- ONLY when each iteration holds on an armed bitslice
+// event; a free-running loop executes the body ZERO times. Expert primitive --
+// see IntrinsicsEZH.td for the body contract (side-effecting straight-line ops
+// only, no operations that may lower to a libcall).
 def EZHTightLoop : TargetBuiltin {
   let Spellings = ["__builtin_ezh_tight_loop"];
   let Attributes = [NoThrow];
@@ -51,8 +53,8 @@ def EZHWriteCFM : TargetBuiltin {
 }
 
 // CFM single-bit set/clear (1-instruction slice arm/disarm). Bit must be a
-// constant in [0,31]. A CFM bit-op does NOT clear the sticky bitslice flags
-// (only a full write_cfm does) -- see IntrinsicsEZH.td.
+// constant in [0,31] (range-checked in Sema). A CFM bit-op does NOT clear the
+// sticky bitslice flags (only a full write_cfm does) -- see IntrinsicsEZH.td.
 def EZHCFMBSet : TargetBuiltin {
   let Spellings = ["__builtin_ezh_cfm_bset"];
   let Attributes = [NoThrow];
@@ -105,8 +107,10 @@ def EZHNop : TargetBuiltin {
 
 // Vectored hold (ACC form): blocks until a bitslice event; returns the
 // hardware-computed vector address (table + 4 + 4*slice) when the winning
-// slice is enabled in the constant mask. Dispatch through the result (e.g.
-// mov pc). See IntrinsicsEZH.td for the full contract.
+// slice is enabled in the constant mask. Dispatch through the result with an
+// inline-asm `mov pc` -- NEVER a C computed goto, which lets the optimizer
+// assume an in-function label target and delete the indirection. See
+// IntrinsicsEZH.td for the full contract.
 def EZHAccVectoredHold : TargetBuiltin {
   let Spellings = ["__builtin_ezh_acc_vectored_hold"];
   let Attributes = [NoThrow];
@@ -156,7 +160,7 @@ def EZHReadGPD : TargetBuiltin {
 }
 
 // Pull an open-drain line low: set GPD bit N. N must be a constant in [0,31]
-// (the range is enforced by the imm5 encoder / the intrinsic's ImmArg).
+// (range-checked in Sema; the imm5 encoder is a backstop).
 def EZHGPDDriveLow : TargetBuiltin {
   let Spellings = ["__builtin_ezh_gpd_drive_low"];
   let Attributes = [NoThrow];

@@ -36,6 +36,7 @@
 #include "clang/AST/Stmt.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
+#include "clang/Basic/TargetBuiltins.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/TypeBase.h"
 #include "clang/AST/TypeLoc.h"
@@ -2138,6 +2139,40 @@ bool Sema::CheckTSBuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,
     return BPF().CheckBPFBuiltinFunctionCall(BuiltinID, TheCall);
   case llvm::Triple::dxil:
     return DirectX().CheckDirectXBuiltinFunctionCall(BuiltinID, TheCall);
+  case llvm::Triple::ezh:
+    // Range-check the constant (ImmArg) operands of the EZH builtins. Without
+    // this an out-of-range literal silently truncates to the instruction's
+    // immediate field width (e.g. int_trigger(0x1000005) raises event 5) or,
+    // for the imm5 fields, dies at object emission with no source location.
+    // Each range is the instruction's encodable immediate field (see
+    // EZHInstrInfo.td). AN14650: the int_trigger payload is additionally
+    // required to be strictly positive.
+    switch (BuiltinID) {
+    case EZH::BI__builtin_ezh_int_trigger:
+      return BuiltinConstantArgRange(TheCall, 0, 1, (1 << 24) - 1);
+    case EZH::BI__builtin_ezh_synch_all_to_beat:
+      return BuiltinConstantArgRange(TheCall, 0, 0, 1);
+    case EZH::BI__builtin_ezh_heart_rythm_imm:
+      return BuiltinConstantArgRange(TheCall, 0, 0, 65535);
+    case EZH::BI__builtin_ezh_modify_gpo_byte: {
+      // and/or/xor masks, each an 8-bit field. Accumulate (not short-circuit)
+      // so every out-of-range mask is diagnosed, not just the first.
+      bool Err = BuiltinConstantArgRange(TheCall, 0, 0, 255);
+      Err |= BuiltinConstantArgRange(TheCall, 1, 0, 255);
+      Err |= BuiltinConstantArgRange(TheCall, 2, 0, 255);
+      return Err;
+    }
+    case EZH::BI__builtin_ezh_acc_vectored_hold:
+      // The per-slice dispatch-enable mask, an 8-bit field.
+      return BuiltinConstantArgRange(TheCall, 1, 0, 255);
+    case EZH::BI__builtin_ezh_gpd_drive_low:
+    case EZH::BI__builtin_ezh_gpd_release:
+    case EZH::BI__builtin_ezh_cfm_bset:
+    case EZH::BI__builtin_ezh_cfm_bclr:
+      return BuiltinConstantArgRange(TheCall, 0, 0, 31);
+    default:
+      return false;
+    }
   case llvm::Triple::hexagon:
     return Hexagon().CheckHexagonBuiltinFunctionCall(BuiltinID, TheCall);
   case llvm::Triple::mips:

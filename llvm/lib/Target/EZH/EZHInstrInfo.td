@@ -109,6 +109,15 @@ def imm5 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<5>(Imm); }]> {
   let EncoderMethod = "getImm5OpValue";
 }
 
+// Unsigned 8-bit mask fields (the acc_vectored_hold dispatch-enable mask and
+// the modify_gpo_byte AND/OR/XOR masks). Distinct from imms8: the field is a
+// bit mask, so it decodes and prints unsigned (0xFF is 255, not -1) and the
+// encoder range-checks [0,255].
+def uimm8 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<8>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
+  let EncoderMethod = "getUimm8OpValue";
+}
+
 def imm16 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<16>(Imm); }]> {
   let PrintMethod = "printImmOperand";
   let DecoderMethod = "decodeSimm16";
@@ -623,15 +632,17 @@ def VECTORED_HOLD_LV_NRA : EZHInstVectoredHold<1, 1, (outs GPR:$Rd), (ins GPR:$t
 // $table (silicon: the same-register form does not deliver a usable vector),
 // so the allocator must not coalesce them.
 let Constraints = "@earlyclobber $Rd" in
-def ACC_VECTORED_HOLD : EZHInstAccVectoredHold<0, 0, (outs GPR:$Rd), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold$Cond $Rd, $table, $vectors", [(set i32:$Rd, (int_ezh_acc_vectored_hold GPR:$table, timm:$vectors))]>;
-def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs GPR:$Rd), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_nra$Cond $Rd, $table, $vectors", []>;
-def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs GPR:$Rd), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv$Cond $Rd, $table, $vectors", []>;
-def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs GPR:$Rd), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $Rd, $table, $vectors", []>;
+def ACC_VECTORED_HOLD : EZHInstAccVectoredHold<0, 0, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold$Cond $Rd, $table, $vectors", [(set i32:$Rd, (int_ezh_acc_vectored_hold GPR:$table, timm:$vectors))]>;
+def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold_nra$Cond $Rd, $table, $vectors", []>;
+def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold_lv$Cond $Rd, $table, $vectors", []>;
+def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $Rd, $table, $vectors", []>;
 
 // Tight Loop. The pattern makes the OP_LOOP hardware loop reachable from C as
 // __builtin_ezh_tight_loop(rend, rcount) -- an expert, event-paced primitive
 // (see IntrinsicsEZH.td for the body contract). Silicon-validated: Rcount+1
-// iterations of the single straight-line body ending at the address in Rend.
+// iterations of the single straight-line body ending at the address in Rend
+// when each iteration holds on an armed bitslice event; a free-running loop
+// executes the body zero times.
 def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Cond), "tight_loop$Cond $Rend, $Rcount", [(int_ezh_tight_loop GPR:$Rend, GPR:$Rcount)]>;
 
 // Reg Offset Load/Store. address = Rn + Rm (Rm is a byte offset), validated on
@@ -804,7 +815,8 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1 in {
 // Unconditional instructions
 def NOP : EZHInstSingle<OP_NOP, (outs), (ins), "nop", [(int_ezh_nop)]> { let Inst{31-5} = 0; }
 def INT_TRIGGER : EZHInstSingle<OP_INT_TRIGGER, (outs), (ins imm24:$Imm), "int_trigger $Imm", [(int_ezh_int_trigger timm:$Imm)]> { bits<24> Imm; let Inst{31-8} = Imm; let Inst{7-5} = 0; }
-def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins imms8:$AndMask, imms8:$OrMask, imms8:$XorMask),
+let Defs = [GPO], Uses = [GPO] in
+def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins uimm8:$AndMask, uimm8:$OrMask, uimm8:$XorMask),
                         "modify_gpo_byte $AndMask, $OrMask, $XorMask",
                         [(int_ezh_modify_gpo_byte timm:$AndMask, timm:$OrMask, timm:$XorMask)]>;
 
@@ -820,6 +832,8 @@ def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins imms8:$AndMask, imms8:$O
 // disassembler round-trip them through the generic form with the register name
 // (mov $Rd, gpi == this READ_GPI). isCodeGenOnly keeps them out of the matcher
 // and decoder, where they would otherwise collide with the generic mov/bset_imm.
+// Side-effect ordering comes from the IntrHasSideEffects on their intrinsic
+// patterns (TableGen infers hasSideEffects = 1 from the pattern).
 let isCodeGenOnly = 1 in {
 
 // Read the GPI input register (special reg 14): mov $Rd, gpi.

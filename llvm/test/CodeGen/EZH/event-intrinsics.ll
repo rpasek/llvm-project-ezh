@@ -128,7 +128,10 @@ declare ptr @llvm.ezh.acc.vectored.hold(ptr, i32 immarg)
 
 define ptr @t_acc_vectored_hold(ptr %table) {
 ; CHECK-LABEL: t_acc_vectored_hold:
-; CHECK: acc_vectored_hold r{{[0-9]+}}, r0, 255
+; The Rd operand must differ from the table register (r0): $Rd is
+; @earlyclobber because the same-register form does not deliver a usable
+; vector on silicon.
+; CHECK: acc_vectored_hold r{{[1-7]}}, r0, 255
   %v = call ptr @llvm.ezh.acc.vectored.hold(ptr %table, i32 255)
   ret ptr %v
 }

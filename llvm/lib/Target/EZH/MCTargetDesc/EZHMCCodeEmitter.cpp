@@ -83,6 +83,10 @@ public:
   unsigned getImm5OpValue(const MCInst &MI, unsigned OpNo,
                           SmallVectorImpl<MCFixup> &Fixups,
                           const MCSubtargetInfo &STI) const;
+
+  unsigned getUimm8OpValue(const MCInst &MI, unsigned OpNo,
+                           SmallVectorImpl<MCFixup> &Fixups,
+                           const MCSubtargetInfo &STI) const;
 };
 } // end anonymous namespace
 
@@ -213,6 +217,27 @@ EZHMCCodeEmitter::getImm5OpValue(const MCInst &MI, unsigned OpNo,
                       "bit position / shift amount " + Twine(Imm) +
                           " is out of range (requires 5-bit unsigned "
                           "immediate, 0 to 31)");
+      return 0;
+    }
+    return static_cast<unsigned>(Imm);
+  }
+  return getMachineOpValue(MI, MO, Fixups, STI);
+}
+
+unsigned
+EZHMCCodeEmitter::getUimm8OpValue(const MCInst &MI, unsigned OpNo,
+                                  SmallVectorImpl<MCFixup> &Fixups,
+                                  const MCSubtargetInfo &STI) const {
+  // Encoder for the unsigned 8-bit mask fields (the acc_vectored_hold
+  // dispatch-enable mask, the modify_gpo_byte AND/OR/XOR masks). Out of range
+  // must be diagnosed rather than silently truncated.
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isImm()) {
+    int64_t Imm = MO.getImm();
+    if (!isUInt<8>(Imm)) {
+      Ctx.reportError(MI.getLoc(), "mask " + Twine(Imm) +
+                                       " is out of range (requires 8-bit "
+                                       "unsigned immediate, 0 to 255)");
       return 0;
     }
     return static_cast<unsigned>(Imm);

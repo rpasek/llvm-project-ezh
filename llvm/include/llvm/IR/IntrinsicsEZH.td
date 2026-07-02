@@ -26,13 +26,17 @@ def int_ezh_hold : ClangBuiltin<"__builtin_ezh_hold">,
 
 // The tight_loop (OP_LOOP) hardware loop: re-execute the instructions between
 // this point and the code address Rend a total of Rcount+1 times, then fall
-// through to Rend. Expert primitive with the same contract as hold: the body
-// is meant to hold on an armed bitslice event each iteration (event-paced DMA;
-// a free-running loop does not iterate). Because the compiler models the body
-// as straight-line code that runs once, the body must consist of side-effecting
-// operations only (volatile/MMIO accesses and EZH intrinsics), with any
-// loop-carried state in volatile storage, and must contain no control flow.
-// Rend is normally `&&label` of the label placed immediately after the body.
+// through to Rend -- ONLY when each iteration holds on an armed bitslice
+// event (event-paced DMA); a FREE-RUNNING loop executes the body ZERO times
+// (measured). Expert primitive with the same contract family as hold. Because
+// the compiler models the body as straight-line code that runs once, the body
+// must consist of side-effecting operations only (volatile/MMIO accesses and
+// EZH intrinsics), with any loop-carried state in volatile storage, and must
+// contain no control flow -- INCLUDING operations that lower to a libcall
+// (32-bit mul/div/mod, soft-float), which insert a gosub inside the loop
+// region; with the default bitslice-interrupts feature the injection pass
+// adds a further gotol_bs before such calls. Rend is normally `&&label` of
+// the label placed immediately after the body.
 def int_ezh_tight_loop : ClangBuiltin<"__builtin_ezh_tight_loop">,
     Intrinsic<[], [llvm_ptr_ty, llvm_i32_ty], [IntrHasSideEffects]>;
 
@@ -73,9 +77,11 @@ def int_ezh_nop : ClangBuiltin<"__builtin_ezh_nop">,
 // hardware-computed vector address table + 4 + 4*n; a masked-out slice still
 // wakes but resumes with an unspecified return value (the spurious-wake
 // path -- callers that mask a subset should compare the result against the
-// table bounds). The caller dispatches through the returned address (e.g.
-// `asm volatile("mov pc, %0" :: "r"(vec))`); each table slot is one
-// instruction (typically a goto to the slice's handler). Silicon-validated:
+// table bounds). The caller dispatches through the returned address with
+// inline asm: `asm volatile("mov pc, %0" :: "r"(vec))`. NEVER use a C
+// computed goto (`goto *vec`): the optimizer may assume the target is an
+// in-function address-taken label and delete the indirection entirely. Each
+// table slot is one instruction (typically a goto to the slice's handler). Silicon-validated:
 // slice n lands at slot 1+n. The plain (non-ACC) vectored_hold encodes an
 // empty mask and never dispatches; it stays assembler-only.
 def int_ezh_acc_vectored_hold
