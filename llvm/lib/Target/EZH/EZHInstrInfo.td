@@ -606,14 +606,27 @@ def HOLD : EZHCondInst<(outs), (ins pred:$Cond), "hold$Cond", [(int_ezh_hold)]> 
   let Inst{31-16} = 0;
   let Inst{9} = 0; // Force S bit to 0
 }
-def VECTORED_HOLD : EZHInstVectoredHold<0, 0, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold$Cond $table", []>;
-def VECTORED_HOLD_NRA : EZHInstVectoredHold<1, 0, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_nra$Cond $table", []>;
-def VECTORED_HOLD_LV : EZHInstVectoredHold<0, 1, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_lv$Cond $table", []>;
-def VECTORED_HOLD_LV_NRA : EZHInstVectoredHold<1, 1, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_lv_nra$Cond $table", []>;
-def ACC_VECTORED_HOLD : EZHInstAccVectoredHold<0, 0, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold$Cond $table, $vectors", []>;
-def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_nra$Cond $table, $vectors", []>;
-def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv$Cond $table, $vectors", []>;
-def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $table, $vectors", []>;
+// Vectored holds. Two distinct register roles (see EZHInstrFormats.td): $Rd
+// receives the hardware-computed vector (table + 4 + 4*slice) on a
+// dispatching wake, $table is the jump-table base. The plain (non-ACC) forms
+// encode an empty dispatch-enable mask and never dispatch -- they wake and
+// resume inline; only the acc_* forms (with a nonzero $vectors mask) vector.
+// __builtin_ezh_acc_vectored_hold exposes the base ACC form: it returns the
+// vector address, which the caller dispatches through (e.g. mov pc). All
+// silicon-validated; the _nra/_lv bit semantics remain unconfirmed, so those
+// variants stay assembler-only.
+def VECTORED_HOLD : EZHInstVectoredHold<0, 0, (outs GPR:$Rd), (ins GPR:$table, pred:$Cond), "vectored_hold$Cond $Rd, $table", []>;
+def VECTORED_HOLD_NRA : EZHInstVectoredHold<1, 0, (outs GPR:$Rd), (ins GPR:$table, pred:$Cond), "vectored_hold_nra$Cond $Rd, $table", []>;
+def VECTORED_HOLD_LV : EZHInstVectoredHold<0, 1, (outs GPR:$Rd), (ins GPR:$table, pred:$Cond), "vectored_hold_lv$Cond $Rd, $table", []>;
+def VECTORED_HOLD_LV_NRA : EZHInstVectoredHold<1, 1, (outs GPR:$Rd), (ins GPR:$table, pred:$Cond), "vectored_hold_lv_nra$Cond $Rd, $table", []>;
+// @earlyclobber: the hardware writes $Rd while still needing the value in
+// $table (silicon: the same-register form does not deliver a usable vector),
+// so the allocator must not coalesce them.
+let Constraints = "@earlyclobber $Rd" in
+def ACC_VECTORED_HOLD : EZHInstAccVectoredHold<0, 0, (outs GPR:$Rd), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold$Cond $Rd, $table, $vectors", [(set i32:$Rd, (int_ezh_acc_vectored_hold GPR:$table, timm:$vectors))]>;
+def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs GPR:$Rd), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_nra$Cond $Rd, $table, $vectors", []>;
+def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs GPR:$Rd), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv$Cond $Rd, $table, $vectors", []>;
+def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs GPR:$Rd), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $Rd, $table, $vectors", []>;
 
 // Tight Loop. The pattern makes the OP_LOOP hardware loop reachable from C as
 // __builtin_ezh_tight_loop(rend, rcount) -- an expert, event-paced primitive

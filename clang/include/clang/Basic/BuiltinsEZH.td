@@ -103,6 +103,16 @@ def EZHNop : TargetBuiltin {
   let Prototype = "void()";
 }
 
+// Vectored hold (ACC form): blocks until a bitslice event; returns the
+// hardware-computed vector address (table + 4 + 4*slice) when the winning
+// slice is enabled in the constant mask. Dispatch through the result (e.g.
+// mov pc). See IntrinsicsEZH.td for the full contract.
+def EZHAccVectoredHold : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_acc_vectored_hold"];
+  let Attributes = [NoThrow];
+  let Prototype = "void*(void*, _Constant unsigned int)";
+}
+
 // --- GPO / GPI / GPD --------------------------------------------------------
 
 // GPO read-modify-write: all three masks are compile-time 8-bit constants.

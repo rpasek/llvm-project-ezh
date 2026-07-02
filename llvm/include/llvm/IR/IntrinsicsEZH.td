@@ -68,6 +68,21 @@ def int_ezh_write_cfs : ClangBuiltin<"__builtin_ezh_write_cfs">,
 def int_ezh_nop : ClangBuiltin<"__builtin_ezh_nop">,
     Intrinsic<[], [], [IntrHasSideEffects]>;
 
+// The vectored hold (ACC form): block until a bitslice event; if the winning
+// slice n has bit n set in the constant dispatch-enable mask, return the
+// hardware-computed vector address table + 4 + 4*n; a masked-out slice still
+// wakes but resumes with an unspecified return value (the spurious-wake
+// path -- callers that mask a subset should compare the result against the
+// table bounds). The caller dispatches through the returned address (e.g.
+// `asm volatile("mov pc, %0" :: "r"(vec))`); each table slot is one
+// instruction (typically a goto to the slice's handler). Silicon-validated:
+// slice n lands at slot 1+n. The plain (non-ACC) vectored_hold encodes an
+// empty mask and never dispatches; it stays assembler-only.
+def int_ezh_acc_vectored_hold
+    : ClangBuiltin<"__builtin_ezh_acc_vectored_hold">,
+      Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i32_ty],
+                [IntrHasSideEffects, ImmArg<ArgIndex<1>>]>;
+
 // Beat / heart-rythm timing primitives.
 def int_ezh_wait_for_beat : ClangBuiltin<"__builtin_ezh_wait_for_beat">,
     Intrinsic<[], [], [IntrHasSideEffects]>;

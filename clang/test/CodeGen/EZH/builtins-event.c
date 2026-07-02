@@ -48,3 +48,6 @@ void cbc(void) { __builtin_ezh_cfm_bclr(0); }
 // CHECK-LABEL: @np(
 // CHECK: call void @llvm.ezh.nop()
 void np(void) { __builtin_ezh_nop(); }
+// CHECK-LABEL: @avh(
+// CHECK: call ptr @llvm.ezh.acc.vectored.hold(ptr %{{.*}}, i32 5)
+void *avh(void *table) { return __builtin_ezh_acc_vectored_hold(table, 5); }
