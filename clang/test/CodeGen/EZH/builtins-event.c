@@ -36,3 +36,6 @@ void hri(void) { __builtin_ezh_heart_rythm_imm(1000); }
 // CHECK-LABEL: @mod(
 // CHECK: call void @llvm.ezh.modify.gpo.byte(i32 255, i32 0, i32 15)
 void mod(void) { __builtin_ezh_modify_gpo_byte(255, 0, 15); }
+// CHECK-LABEL: @tl(
+// CHECK: call void @llvm.ezh.tight.loop(ptr %{{.*}}, i32 %{{.*}})
+void tl(void *rend, unsigned rcount) { __builtin_ezh_tight_loop(rend, rcount); }

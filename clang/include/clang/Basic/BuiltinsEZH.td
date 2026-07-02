@@ -23,6 +23,16 @@ def EZHHold : TargetBuiltin {
   let Prototype = "void()";
 }
 
+// The tight_loop (OP_LOOP) hardware loop: re-executes the code between this
+// point and the address rend (normally `&&label` right after the body) a total
+// of rcount+1 times. Expert primitive -- see IntrinsicsEZH.td for the body
+// contract (side-effecting straight-line ops only, event-paced via hold).
+def EZHTightLoop : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_tight_loop"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(void*, unsigned int)";
+}
+
 def EZHIntTrigger : TargetBuiltin {
   let Spellings = ["__builtin_ezh_int_trigger"];
   let Attributes = [NoThrow];

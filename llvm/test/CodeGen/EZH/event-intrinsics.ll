@@ -84,3 +84,23 @@ define void @t_mod() {
   call void @llvm.ezh.modify.gpo.byte(i32 255, i32 0, i32 15)
   ret void
 }
+
+declare void @llvm.ezh.tight.loop(ptr, i32)
+
+; The tight_loop hardware loop: Rcount materialized as an immediate, Rend as a
+; PC-relative literal-pool load of the after-body block address.
+define void @t_tight_loop() {
+; CHECK-LABEL: t_tight_loop:
+; CHECK-DAG: load_imm [[CNT:r[0-9]+]], 6
+; CHECK-DAG: ldr [[END:r[0-9]+]], pc, .LCPI[[L:[0-9_]+]]
+; CHECK: tight_loop [[END]], [[CNT]]
+; CHECK-NEXT: hold
+; CHECK: .LCPI[[L]]:
+; CHECK-NEXT: .long .Ltmp0
+entry:
+  call void @llvm.ezh.tight.loop(ptr blockaddress(@t_tight_loop, %end), i32 6)
+  call void @llvm.ezh.hold()
+  br label %end
+end:
+  ret void
+}

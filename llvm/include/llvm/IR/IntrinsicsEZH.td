@@ -24,6 +24,18 @@ let TargetPrefix = "ezh" in {
 def int_ezh_hold : ClangBuiltin<"__builtin_ezh_hold">,
     Intrinsic<[], [], [IntrHasSideEffects]>;
 
+// The tight_loop (OP_LOOP) hardware loop: re-execute the instructions between
+// this point and the code address Rend a total of Rcount+1 times, then fall
+// through to Rend. Expert primitive with the same contract as hold: the body
+// is meant to hold on an armed bitslice event each iteration (event-paced DMA;
+// a free-running loop does not iterate). Because the compiler models the body
+// as straight-line code that runs once, the body must consist of side-effecting
+// operations only (volatile/MMIO accesses and EZH intrinsics), with any
+// loop-carried state in volatile storage, and must contain no control flow.
+// Rend is normally `&&label` of the label placed immediately after the body.
+def int_ezh_tight_loop : ClangBuiltin<"__builtin_ezh_tight_loop">,
+    Intrinsic<[], [llvm_ptr_ty, llvm_i32_ty], [IntrHasSideEffects]>;
+
 // Raise the software event/interrupt encoded by the immediate (int_trigger).
 def int_ezh_int_trigger : ClangBuiltin<"__builtin_ezh_int_trigger">,
     Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;

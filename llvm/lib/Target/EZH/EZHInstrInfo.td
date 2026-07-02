@@ -615,8 +615,11 @@ def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs), (ins GPR:$table
 def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv$Cond $table, $vectors", []>;
 def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $table, $vectors", []>;
 
-// Tight Loop
-def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Cond), "tight_loop$Cond $Rend, $Rcount", []>;
+// Tight Loop. The pattern makes the OP_LOOP hardware loop reachable from C as
+// __builtin_ezh_tight_loop(rend, rcount) -- an expert, event-paced primitive
+// (see IntrinsicsEZH.td for the body contract). Silicon-validated: Rcount+1
+// iterations of the single straight-line body ending at the address in Rend.
+def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Cond), "tight_loop$Cond $Rend, $Rcount", [(int_ezh_tight_loop GPR:$Rend, GPR:$Rcount)]>;
 
 // Reg Offset Load/Store. address = Rn + Rm (Rm is a byte offset), validated on
 // silicon. The patterns fold a runtime-indexed access (a[i]) into one
