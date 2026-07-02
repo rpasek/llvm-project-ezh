@@ -789,7 +789,7 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1 in {
 }
 
 // Unconditional instructions
-def NOP : EZHInstSingle<OP_NOP, (outs), (ins), "nop", []> { let Inst{31-5} = 0; }
+def NOP : EZHInstSingle<OP_NOP, (outs), (ins), "nop", [(int_ezh_nop)]> { let Inst{31-5} = 0; }
 def INT_TRIGGER : EZHInstSingle<OP_INT_TRIGGER, (outs), (ins imm24:$Imm), "int_trigger $Imm", [(int_ezh_int_trigger timm:$Imm)]> { bits<24> Imm; let Inst{31-8} = Imm; let Inst{7-5} = 0; }
 def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins imms8:$AndMask, imms8:$OrMask, imms8:$XorMask),
                         "modify_gpo_byte $AndMask, $OrMask, $XorMask",
@@ -843,6 +843,56 @@ def GPD_RELEASE : EZHInstBit<1, (outs), (ins imm5:$Bit5, pred:$Cond),
                              [(int_ezh_gpd_release timm:$Bit5)]> {
   let Rd = REG_GPD;
   let Rs = REG_GPD;
+  let S_bit = 0; // matches bclr_imm
+}
+}
+
+// Full-width GPO output register (special reg 8): mov to/from. The runtime,
+// all-32-bit counterpart of MODIFY_GPO_BYTE (whose masks are constant and
+// limited to GPO[7:0]); this is the parallel-bus output path.
+let Uses = [GPO] in
+def READ_GPO : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, gpo", [(set i32:$Rd, (int_ezh_read_gpo))]> {
+  let Rs1 = REG_GPO;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+let Defs = [GPO] in
+def WRITE_GPO : EZHInstALU<OP_MOV, 0, (outs), (ins GPR:$Rs1, pred:$Cond),
+                           "mov$Cond gpo, $Rs1", [(int_ezh_write_gpo i32:$Rs1)]> {
+  let Rd = REG_GPO;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+
+// Full-width GPD drive-enable write (special reg 9): atomic multi-line
+// open-drain update with a runtime mask; complements the constant-bit
+// GPD_DRIVE_LOW/GPD_RELEASE pair and the existing READ_GPD.
+let Defs = [GPD] in
+def WRITE_GPD : EZHInstALU<OP_MOV, 0, (outs), (ins GPR:$Rs1, pred:$Cond),
+                           "mov$Cond gpd, $Rs1", [(int_ezh_write_gpd i32:$Rs1)]> {
+  let Rd = REG_GPD;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+
+// CFM single-bit set/clear: the 1-instruction slice arm/disarm. Same
+// hardwired bit-op shape as the GPD pair above. Silicon note: a CFM bit-op
+// does NOT clear the sticky bitslice flags -- only a full mov-to-CFM write
+// (WRITE_CFM) does.
+let Defs = [CFM], Uses = [CFM] in {
+def CFM_BSET : EZHInstBit<2, (outs), (ins imm5:$Bit5, pred:$Cond),
+                          "bset_imm$Cond cfm, cfm, $Bit5",
+                          [(int_ezh_cfm_bset timm:$Bit5)]> {
+  let Rd = REG_CFM;
+  let Rs = REG_CFM;
+  let S_bit = 1; // matches bset_imm
+}
+def CFM_BCLR : EZHInstBit<1, (outs), (ins imm5:$Bit5, pred:$Cond),
+                          "bclr_imm$Cond cfm, cfm, $Bit5",
+                          [(int_ezh_cfm_bclr timm:$Bit5)]> {
+  let Rd = REG_CFM;
+  let Rs = REG_CFM;
   let S_bit = 0; // matches bclr_imm
 }
 }

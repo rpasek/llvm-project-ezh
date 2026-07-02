@@ -46,11 +46,27 @@ def int_ezh_read_cfm : ClangBuiltin<"__builtin_ezh_read_cfm">,
 def int_ezh_write_cfm : ClangBuiltin<"__builtin_ezh_write_cfm">,
     Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects]>;
 
+// CFM single-bit set/clear: bset_imm/bclr_imm with CFM hardwired as both
+// source and destination, the 1-instruction slice arm/disarm (NXP's display
+// firmware disarms a slice right after every HOLD wake). The bit position is
+// a compile-time constant in [0,31]. Note (measured on silicon): unlike a
+// full mov-to-CFM write, a CFM bit-op does NOT clear the sticky bitslice
+// flags -- using bset as the per-iteration re-arm in an event-paced stream
+// loses pacing by one event; keep write_cfm as the flag-clearing re-arm.
+def int_ezh_cfm_bset : ClangBuiltin<"__builtin_ezh_cfm_bset">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;
+def int_ezh_cfm_bclr : ClangBuiltin<"__builtin_ezh_cfm_bclr">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;
+
 // Bitslice source-select register CFS (special reg 10).
 def int_ezh_read_cfs : ClangBuiltin<"__builtin_ezh_read_cfs">,
     Intrinsic<[llvm_i32_ty], [], [IntrHasSideEffects]>;
 def int_ezh_write_cfs : ClangBuiltin<"__builtin_ezh_write_cfs">,
     Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects]>;
+
+// Single-cycle nop, for cycle-exact padding in bit-banged waveforms.
+def int_ezh_nop : ClangBuiltin<"__builtin_ezh_nop">,
+    Intrinsic<[], [], [IntrHasSideEffects]>;
 
 // Beat / heart-rythm timing primitives.
 def int_ezh_wait_for_beat : ClangBuiltin<"__builtin_ezh_wait_for_beat">,
@@ -70,6 +86,21 @@ def int_ezh_modify_gpo_byte : ClangBuiltin<"__builtin_ezh_modify_gpo_byte">,
     Intrinsic<[], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
               [IntrHasSideEffects, ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>,
                ImmArg<ArgIndex<2>>]>;
+
+// Full-width GPO output register (special reg 8): mov to/from. This is the
+// parallel-bus output path (camera/LCD PIO streaming) -- modify_gpo_byte only
+// reaches GPO[7:0] with compile-time masks; these carry runtime values across
+// the full 32-bit width, and the read enables arbitrary read-modify-write.
+def int_ezh_read_gpo : ClangBuiltin<"__builtin_ezh_read_gpo">,
+    Intrinsic<[llvm_i32_ty], [], [IntrHasSideEffects]>;
+def int_ezh_write_gpo : ClangBuiltin<"__builtin_ezh_write_gpo">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects]>;
+
+// Full-width GPD drive-enable write (special reg 9): atomic multi-line
+// open-drain update with a runtime mask; complements the constant-bit
+// gpd_drive_low/gpd_release pair below.
+def int_ezh_write_gpd : ClangBuiltin<"__builtin_ezh_write_gpd">,
+    Intrinsic<[], [llvm_i32_ty], [IntrHasSideEffects]>;
 
 // Read the GPI input register (special reg 14) -> mov $Rd, gpi.
 def int_ezh_read_gpi : ClangBuiltin<"__builtin_ezh_read_gpi">,

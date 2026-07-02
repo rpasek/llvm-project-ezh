@@ -33,3 +33,22 @@ define void @release() {
   call void @llvm.ezh.gpd.release(i32 3)
   ret void
 }
+
+declare i32 @llvm.ezh.read.gpo()
+declare void @llvm.ezh.write.gpo(i32)
+declare void @llvm.ezh.write.gpd(i32)
+
+define i32 @t_gpo_rw(i32 %v) {
+; CHECK-LABEL: t_gpo_rw:
+; CHECK: mov gpo, r0
+; CHECK: mov r0, gpo
+  call void @llvm.ezh.write.gpo(i32 %v)
+  %r = call i32 @llvm.ezh.read.gpo()
+  ret i32 %r
+}
+define void @t_gpd_w(i32 %m) {
+; CHECK-LABEL: t_gpd_w:
+; CHECK: mov gpd, r0
+  call void @llvm.ezh.write.gpd(i32 %m)
+  ret void
+}

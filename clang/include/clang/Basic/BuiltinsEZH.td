@@ -50,6 +50,20 @@ def EZHWriteCFM : TargetBuiltin {
   let Prototype = "void(unsigned int)";
 }
 
+// CFM single-bit set/clear (1-instruction slice arm/disarm). Bit must be a
+// constant in [0,31]. A CFM bit-op does NOT clear the sticky bitslice flags
+// (only a full write_cfm does) -- see IntrinsicsEZH.td.
+def EZHCFMBSet : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_cfm_bset"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(_Constant unsigned int)";
+}
+def EZHCFMBClr : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_cfm_bclr"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(_Constant unsigned int)";
+}
+
 def EZHReadCFS : TargetBuiltin {
   let Spellings = ["__builtin_ezh_read_cfs"];
   let Attributes = [NoThrow];
@@ -82,6 +96,13 @@ def EZHHeartRythmImm : TargetBuiltin {
   let Prototype = "void(_Constant unsigned int)";
 }
 
+// Single-cycle nop, for cycle-exact padding.
+def EZHNop : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_nop"];
+  let Attributes = [NoThrow];
+  let Prototype = "void()";
+}
+
 // --- GPO / GPI / GPD --------------------------------------------------------
 
 // GPO read-modify-write: all three masks are compile-time 8-bit constants.
@@ -89,6 +110,25 @@ def EZHModifyGPOByte : TargetBuiltin {
   let Spellings = ["__builtin_ezh_modify_gpo_byte"];
   let Attributes = [NoThrow];
   let Prototype = "void(_Constant unsigned int, _Constant unsigned int, _Constant unsigned int)";
+}
+
+// Full-width GPO output register read/write (runtime values, all 32 bits).
+def EZHReadGPO : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_read_gpo"];
+  let Attributes = [NoThrow];
+  let Prototype = "unsigned int()";
+}
+def EZHWriteGPO : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_write_gpo"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(unsigned int)";
+}
+
+// Full-width GPD drive-enable write (atomic multi-line open-drain update).
+def EZHWriteGPD : TargetBuiltin {
+  let Spellings = ["__builtin_ezh_write_gpd"];
+  let Attributes = [NoThrow];
+  let Prototype = "void(unsigned int)";
 }
 
 // Read the GPI input register.

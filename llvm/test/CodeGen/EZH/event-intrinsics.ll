@@ -104,3 +104,22 @@ entry:
 end:
   ret void
 }
+
+declare void @llvm.ezh.cfm.bset(i32 immarg)
+declare void @llvm.ezh.cfm.bclr(i32 immarg)
+declare void @llvm.ezh.nop()
+
+define void @t_cfm_bits() {
+; CHECK-LABEL: t_cfm_bits:
+; CHECK: bset_imm cfm, cfm, 3
+; CHECK: bclr_imm cfm, cfm, 0
+  call void @llvm.ezh.cfm.bset(i32 3)
+  call void @llvm.ezh.cfm.bclr(i32 0)
+  ret void
+}
+define void @t_nop() {
+; CHECK-LABEL: t_nop:
+; CHECK: nop
+  call void @llvm.ezh.nop()
+  ret void
+}

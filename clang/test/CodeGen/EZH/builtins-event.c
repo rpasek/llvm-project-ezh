@@ -39,3 +39,12 @@ void mod(void) { __builtin_ezh_modify_gpo_byte(255, 0, 15); }
 // CHECK-LABEL: @tl(
 // CHECK: call void @llvm.ezh.tight.loop(ptr %{{.*}}, i32 %{{.*}})
 void tl(void *rend, unsigned rcount) { __builtin_ezh_tight_loop(rend, rcount); }
+// CHECK-LABEL: @cbs(
+// CHECK: call void @llvm.ezh.cfm.bset(i32 3)
+void cbs(void) { __builtin_ezh_cfm_bset(3); }
+// CHECK-LABEL: @cbc(
+// CHECK: call void @llvm.ezh.cfm.bclr(i32 0)
+void cbc(void) { __builtin_ezh_cfm_bclr(0); }
+// CHECK-LABEL: @np(
+// CHECK: call void @llvm.ezh.nop()
+void np(void) { __builtin_ezh_nop(); }
