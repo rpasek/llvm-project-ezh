@@ -41,7 +41,7 @@ using namespace llvm;
 
 namespace {
 class EZHMCCodeEmitter : public MCCodeEmitter {
-  const MCInstrInfo &MCII;
+  [[maybe_unused]] const MCInstrInfo &MCII;
   MCContext &Ctx;
 
 public:

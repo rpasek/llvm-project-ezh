@@ -117,7 +117,7 @@ bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     const std::vector<CalleeSavedInfo> &CSI =
         MF.getFrameInfo().getCalleeSavedInfo();
     int FPFI = 0;
-    bool FoundFP = false;
+    [[maybe_unused]] bool FoundFP = false;
     for (const auto &Info : CSI) {
       if (Info.getReg() == EZH::R7) {
         FPFI = Info.getFrameIdx();

@@ -1019,12 +1019,6 @@ int EZHConstantIslands::findInRangeCPEntry(CPUser &U, unsigned UserOffset) {
   return 0;
 }
 
-/// getUnconditionalBrDisp - Returns the maximum displacement that can fit in
-/// the specific unconditional branch instruction.
-static inline unsigned getUnconditionalBrDisp(int Opc) {
-  return 8 * 1024 * 1024;
-}
-
 /// findAvailableWater - Look for an existing entry in the WaterList in which
 /// we can place the CPE referenced from U so it's within range of U's MI.
 /// Returns true if found, false if not. If it returns true, WaterIter
@@ -1141,7 +1135,7 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
   // insertion offset based on the user instruction's maximum reach,
   // allowing space for the 4-byte unconditional jump we will insert to
   // branch around the island.
-  const Align Align = MF->getAlignment();
+  [[maybe_unused]] const Align Align = MF->getAlignment();
   assert(Align >= CPEAlign && "Over-aligned constant pool entry");
   unsigned BaseInsertOffset = UserOffset + U.getMaxDisp();
 

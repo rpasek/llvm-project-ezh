@@ -12,7 +12,13 @@
 #   EZH source files.
 #
 add_llvm_component_group(EZH)
-add_compile_options(-Werror -Wall -Wextra -Wundef)
+# -Wextra re-enables -Wunused-parameter, which LLVM's own build disables globally
+# (append("-Wno-unused-parameter") in HandleLLVMOptions) because it fires on the
+# unused args of virtual-method default bodies in generic LLVM headers and on
+# TableGen-generated .inc files -- neither of which is EZH code. Restore LLVM's
+# policy here so -Werror stays strict for real EZH warnings without policing
+# headers/generated code.
+add_compile_options(-Werror -Wall -Wextra -Wundef -Wno-unused-parameter)
 
 set(LLVM_TARGET_DEFINITIONS EZH.td)
 tablegen(LLVM EZHGenAsmMatcher.inc -gen-asm-matcher)

@@ -228,7 +228,7 @@ void EZHFrameLowering::emitPrologue(MachineFunction &MF,
   if (hasFP(MF)) {
     // Find FP spill frame index to get its offset
     int FPFI = 0;
-    bool FoundFP = false;
+    [[maybe_unused]] bool FoundFP = false;
     for (const auto &Info : CSI) {
       if (Info.getReg() == EZH::R7) {
         FPFI = Info.getFrameIdx();
@@ -342,7 +342,7 @@ void EZHFrameLowering::emitEpilogue(MachineFunction &MF,
   if (hasFP(MF)) {
     // Find FP spill frame index to get its offset
     int FPFI = 0;
-    bool FoundFP = false;
+    [[maybe_unused]] bool FoundFP = false;
     for (const auto &Info : CSI) {
       if (Info.getReg() == EZH::R7) {
         FPFI = Info.getFrameIdx();
