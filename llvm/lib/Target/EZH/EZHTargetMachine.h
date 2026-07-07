@@ -42,7 +42,9 @@
 
 namespace llvm {
 
-class PassManagerBase;
+// PassManagerBase comes from llvm/Target/TargetMachine.h (as `using
+// legacy::PassManagerBase`); a local forward declaration here conflicts with
+// that on current LLVM and makes createPassConfig's override ambiguous.
 
 /// TargetMachine implementation for the NXP EZH architecture.
 class EZHTargetMachine : public CodeGenTargetMachineImpl {
