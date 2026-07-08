@@ -12,7 +12,11 @@
 #
 #===------------------------------------------------------------------------===#
 
-add_compile_options(-Werror -Wall -Wextra)
+# -Wextra re-enables -Wunused-parameter, which LLVM/LLDB disable globally because
+# it fires on generic LLVM/LLDB headers (not EZH code). Restore that policy here
+# so -Werror stays strict for real EZH-plugin warnings only. (Matches the EZH
+# target directory in llvm/lib/Target/EZH/CMakeLists.txt.)
+add_compile_options(-Werror -Wall -Wextra -Wno-unused-parameter)
 
 add_lldb_library(lldbPluginProcessEZH PLUGIN
   ProcessEZH.cpp

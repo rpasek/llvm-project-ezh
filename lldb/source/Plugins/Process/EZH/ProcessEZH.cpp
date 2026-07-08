@@ -1022,11 +1022,9 @@ void ProcessEZH::PollingThread() {
     uint32_t sp_val = 0;
     lldb::addr_t exc_signal_addr = LLDB_INVALID_ADDRESS;
     bool first_poll = true;
-    int poll_count = 0;
 
     while (GetPrivateState() == lldb::eStateRunning &&
            !m_destroy_polling_thread) {
-      poll_count++;
       if (first_poll) {
         if (m_is_stepping)
           std::this_thread::sleep_for(std::chrono::milliseconds(
