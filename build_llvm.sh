@@ -60,24 +60,34 @@ ninja -C build #llc clang
 
 # Changes to llvm and clang will go undetected changes when building the
 # following libraries so it's important that we cleanly rebuild them
-echo "=== Build compiler-rt ==="
+echo "=== Build compiler-rt builtins (hand-built) ==="
+# compiler-rt's builtins CMake does not auto-enable the custom EZH arch, so build
+# the archive directly: every generic builtins/*.c that compiles for ezh-none-elf,
+# plus the hand-written ezh/*.S (EZH has no hardware multiply/divide). ~17
+# arch-specific .c files do not compile for ezh and are skipped -- expected.
 rm -rf build/compiler-rt
-cmake -S compiler-rt/lib/builtins -B build/compiler-rt \
-    -DCMAKE_C_COMPILER=${ROOT_DIR}/build/bin/clang \
-    -DCMAKE_CXX_COMPILER=${ROOT_DIR}/build/bin/clang++ \
-    -DCMAKE_ASM_COMPILER=${ROOT_DIR}/build/bin/clang \
-    -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
-    -DCOMPILER_RT_BAREMETAL_BUILD=ON \
-    -DCMAKE_C_COMPILER_TARGET=ezh-none-elf \
-    -DCMAKE_ASM_COMPILER_TARGET=ezh-none-elf \
-    -DCMAKE_C_COMPILER_WORKS=ON \
-    -DCMAKE_CXX_COMPILER_WORKS=ON \
-    -DCMAKE_ASM_COMPILER_WORKS=ON \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_ASM_FLAGS="-Os -Wno-everything" \
-    -DCMAKE_BUILD_TYPE=MinSizeRel \
-    -G Ninja
-ninja -v -C build/compiler-rt
+CRT_SRC="${ROOT_DIR}/compiler-rt/lib/builtins"
+CRT_OBJ="${ROOT_DIR}/build/compiler-rt/ezh-obj"
+CRT_OUT="${ROOT_DIR}/build/compiler-rt/lib/linux"
+mkdir -p "${CRT_OBJ}" "${CRT_OUT}"
+CRT_OBJS=()
+for f in "${CRT_SRC}"/*.c; do
+    base=$(basename "${f}" .c)
+    # udivsi3/umodsi3 are provided by the EZH-tuned ezh/*.S below
+    case "${base}" in udivsi3|umodsi3) continue;; esac
+    if ${ROOT_DIR}/build/bin/clang -target ezh-none-elf -Os -ffreestanding -fno-builtin \
+           -c "${f}" -o "${CRT_OBJ}/${base}.c.o" 2>/dev/null; then
+        CRT_OBJS+=("${CRT_OBJ}/${base}.c.o")
+    fi
+done
+for s in mulsi3 udivsi3 umodsi3; do
+    ${ROOT_DIR}/build/bin/clang -target ezh-none-elf -Os -ffreestanding \
+        -c "${CRT_SRC}/ezh/${s}.S" -o "${CRT_OBJ}/${s}.S.o"
+    CRT_OBJS+=("${CRT_OBJ}/${s}.S.o")
+done
+rm -f "${CRT_OUT}/libclang_rt.builtins-ezh.a"
+${ROOT_DIR}/build/bin/llvm-ar rcs "${CRT_OUT}/libclang_rt.builtins-ezh.a" "${CRT_OBJS[@]}"
+echo "    built ${CRT_OUT}/libclang_rt.builtins-ezh.a (${#CRT_OBJS[@]} objects)"
 
 # Common CMake arguments for both full and nano builds
 COMMON_CMAKE_ARGS=(
