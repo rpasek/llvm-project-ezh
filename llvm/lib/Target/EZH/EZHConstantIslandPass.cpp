@@ -71,8 +71,6 @@ using namespace llvm;
   "EZH constant island placement and branch shortening pass"
 STATISTIC(NumCPEs, "Number of constpool entries");
 STATISTIC(NumSplit, "Number of uncond branches inserted");
-STATISTIC(NumCBrFixed, "Number of cond branches fixed");
-STATISTIC(NumUBrFixed, "Number of uncond branches fixed");
 
 
 static cl::opt<unsigned>
