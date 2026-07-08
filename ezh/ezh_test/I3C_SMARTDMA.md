@@ -1,0 +1,147 @@
+<!--
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+# HW-I2C via SmartDMA, and the literal `tight_loop`
+
+Instead of bit-banging I2C on the EZH (see the `ezh_i2c_*` tests, which top out
+~410 kHz), this drives the on-chip **I3C0** peripheral in **legacy-I2C master
+mode** and uses the EZH/SmartDMA as its data engine. I3C0 generates START,
+address, ACK sampling, byte timing and STOP; the EZH just feeds/paces the FIFO.
+It runs over the *already-wired* two-board I3C header — `PIO2_29 = I3C0_SCL`,
+`PIO2_30 = I3C0_SDA` — the same pins the bit-bang slave reads as `SMARTDMA_PIO`.
+
+Run it: `./run_i3c_smartdma.sh` (board A `:4444` = master, board B `:4445` =
+`ezh_i2c_slave_regmap` slave). Three stages, all validated on an EVK-MIMXRT595:
+
+| stage | firmware | what it shows |
+|-------|----------|---------------|
+| M0b | [`i3c_hw_master.c`](i3c_hw_master.c) | EZH drives the I3C0 master, 5-byte poll write |
+| M1  | [`i3c_stream.c`](i3c_stream.c) | event-paced streaming of 16 bytes (2× the FIFO) via `__builtin_ezh_hold` |
+| M1b | [`i3c_tight_loop.c`](i3c_tight_loop.c) | the **literal `tight_loop` (OP_LOOP)** hardware loop |
+
+Why I3C0 and not FLEXCOMM: I3C0 (`0x40036000`) sits **inside** the EZH
+`per_read`/`per_write` window (`0x40000000`–`0x400FFFFF`), so the EZH reaches it
+with the optimized single-instruction peripheral access; it has a TX/RX FIFO;
+and it routes to the SmartDMA event fabric. FLEXCOMM is outside the window and
+would have needed re-wiring.
+
+## Master bring-up (M33 side) — the one non-obvious step
+
+`run_i3c_smartdma.sh:i3c_init()` does the whole bring-up. Register-for-register
+it mirrors NXP's `I3C_MasterInit`, and the step a naïve raw-poke path skips is
+the **peripheral-reset pulse**:
+
+```
+RSTCTL1.PRSTCTL2_SET (0x40020048) = 1<<16   # assert I3C0 reset
+RSTCTL1.PRSTCTL2_CLR (0x40020078) = 1<<16   # deassert -> bus FSM initialises
+```
+
+I3C0 is *not* held in reset (the bit reads 0), but without the assert→deassert
+pulse the bus state machine will not emit a START: `EmitStartAddr` silently
+no-ops (STATE stays IDLE, no `MCTRLDONE`, no error), while `EmitStop` /
+`IbiAckNack` *do* move the FSM — which misleads you into blaming the clock, the
+pull-ups, or `MSTENA`. The pulse both arms the START engine and clears the
+power-on phantom-IBI, giving a clean `STATE=0` (IDLE). The rest:
+
+- **Clocks (CLKCTL1 `0x40021xxx`):** gate `PSCCTL2` bit16; functional clock
+  `FCLKSEL=FRO_DIV8`, `FCLKDIV` div1 (reset-pulse it); timing-control clock
+  `STCSEL/STCDIV` derived from the functional clock. `FRODIVOEN` (`0x40001110`)
+  enables the FRO divided outputs first.
+- **MCONFIG (`0x40036000`):** `MSTENA` (0b01 = MASTER_ON), `DISTO`, `ODSTOP`,
+  `ODHPP` (actively drives the bus high), `SKEW=1` (I2C errata), + baud ~100 kHz.
+- **Pins:** `IOPCTL PIO2_29/30 = 0x71` (FUNC1 + pull-up + input buffer, drain
+  *disabled* — the peripheral manages open-drain), `PIO2_31 = I3C0_PUR`.
+- **FIFO:** `MDATACTRL = 0x3B` (UNLOCK | TX-trigger | flush both).
+
+Transaction from the EZH: clear `MSTATUS`; `MCTRL = EmitStartAddr | TYPE=I2C |
+DIR=W | ADDR<<9`; poll `MCTRLDONE`; push bytes to `MWDATAB`, last via `MWDATABE`
+(appends STOP); poll `COMPLETE`.
+
+## Event pacing (M1) — feeding more than the FIFO holds
+
+To stream 16 bytes through the 8-deep FIFO, each write is gated by
+`__builtin_ezh_hold()`, which blocks the core until the I3C0 "TX not full"
+event, routed:
+
+```
+I3C0 MINTSET.TXNOTFULL -> IRQ
+  -> INPUTMUX SMART_DMA_TRIG_CH_SEL[0]=26 (I3c0Irq) -> SmartDMA trig ch 0
+    -> bitslice 0 (CFS=ch0, CFM=level) -> logical combiner -> hold wakes
+```
+
+`TXNOTFULL` is a **level**, so after each byte the firmware re-writes `CFM` to
+clear the sticky bitslice flag; otherwise the stale level double-wakes the next
+hold and two bytes land in one freed slot (overflow → `OWRITE`, first 8 bytes
+correct then every other one drops). With the per-byte clear it is exactly one
+write per drained slot, and all 16 bytes arrive byte-exact. (Event fabric
+details: [`../EVENT_FABRIC.md`](../EVENT_FABRIC.md).)
+
+## The literal `tight_loop` (M1b)
+
+`tight_loop <Rend>, <Rcount>` is the EZH's zero-overhead hardware loop. Both
+operands are **registers**:
+
+```
+tight_loop Rend, Rcount     ; Rcount = (iterations) - 1
+  <single straight-line body, no internal branches>   ; runs Rcount+1 times
+Rend:                       ; execution falls through to this address after
+```
+
+Validated in `i3c_tight_loop.c` (Rcount=6 → **exactly 7 iterations**, body =
+`hold; ldrb_post r4,r0,1; per_write r4,MWDATAB; mov cfm,r2`, slave got
+`0x10..0x16` byte-exact, COMPLETE, no error). Two things make it work:
+
+1. **`Rend` is a code address after the body.** Materialising one in hand asm is
+   the classic trap (`ldr rX, pc, <lit>` read back 0 at runtime). The compiler
+   gets it right: `__builtin_ezh_tight_loop(&&loop_end, n-1)` turns the
+   label-as-value into a blockaddress and emits a correct PC-relative
+   literal-pool load, and register-allocates both operands.
+2. **The body must be a single basic block** and is meant to `hold` on a
+   peripheral event each iteration (why NXP's SmartDMA bodies always hold).
+   Because the compiler models the body as straight-line code that runs once,
+   every body operation must be side-effecting (EZH intrinsics / volatile
+   accesses) and loop-carried state must live in volatile storage — see the
+   body contract in `IntrinsicsEZH.td` and the `vptr` idiom in the test.
+3. A silicon bonus fact from the builtin run: the compiler reused the Rend
+   register inside the body and the loop still iterated correctly — the
+   hardware **latches** Rend/Rcount at loop entry (NXP's firmware relies on
+   the same).
+
+### The compiler surface: a builtin, not a loop transformation
+
+`tight_loop` is exposed as `__builtin_ezh_tight_loop(rend, rcount)` — it emits
+exactly the one instruction. What the backend deliberately does **not** do is
+convert counted C loops into `tight_loop` automatically (a HardwareLoops-style
+optimization), because that would change behaviour, not just speed:
+
+- A **free-running** `tight_loop` (no armed fabric, no hold) runs its body
+  **zero** times on silicon — a transparently converted plain loop would
+  miscompile.
+- The `hold` **inside** `tight_loop` does **not** cleanly pace a *level*
+  peripheral event the way a plain hold in a C loop does. Streaming > 8 bytes
+  with `tight_loop` overflows: the 2-slot scheduled loop-back's delay slots +
+  the level `TXNOTFULL` + the per-iteration `CFM` clear don't compose into
+  one-write-per-slot (this test streams ≤ 7 bytes so the count semantics are
+  unambiguous). The plain C loop in `i3c_stream.c` paces the same level event
+  perfectly.
+- Its pacing event is hardware-fabric state (INPUTMUX/CFS/CFM/peripheral
+  interrupt routing) the compiler has no model of, and the loop-branch it
+  removes costs nanoseconds — only relevant for MHz-class event streams
+  (e.g. FLEXIO display DMA) that are hand-written anyway.
+
+So the boundary is: ordinary C `for`-loop + `__builtin_ezh_hold` for robust
+event-paced streaming; `__builtin_ezh_tight_loop` for the expert hand-tuned
+MHz-class case — the whole ISA reachable from C, no inline asm required.
