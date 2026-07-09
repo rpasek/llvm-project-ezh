@@ -145,3 +145,20 @@ optimization), because that would change behaviour, not just speed:
 So the boundary is: ordinary C `for`-loop + `__builtin_ezh_hold` for robust
 event-paced streaming; `__builtin_ezh_tight_loop` for the expert hand-tuned
 MHz-class case — the whole ISA reachable from C, no inline asm required.
+
+## M2 — fully interrupt-driven, both directions (`run_i3c_irq.sh`)
+
+`i3c_slave_irq.c` closes the loop: board B now runs the I3C0 block in
+**I2C-legacy slave mode** (static address 0x42, same J18 pins) with the EZH
+asleep in `__builtin_ezh_hold()` between bus events. The slave's
+`SINTSET.{RXPEND,STOP}` interrupts ride the same path the master's TX pacing
+uses (I3C0 IRQ -> INPUTMUX ch0 -> bitslice 0 -> combiner), so with the
+event-paced `i3c_stream.c` master on board A **neither side polls its data
+path**. Silicon result: 17/17 bytes, STOP caught, slave woke once per event
+(18 wakes incl. one tolerated spurious arm-time wake), both cores exit
+0xCAFEBABE.
+
+Why not an interrupt-driven *bit-bang* slave: the event fabric's slice inputs
+are Port0/1 GPIO and IRQ lines only -- the J18 pins are Port2, so their edges
+can never reach the combiner (see EVENT_FABRIC.md). Routing the peripheral's
+IRQ is the correct idiom.
