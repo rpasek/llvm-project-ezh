@@ -225,3 +225,21 @@ Facts this demo surfaced:
 * **PENDTRAP REQ latches**: re-firing the same channel needs REQ toggled low
   first to make a fresh rising edge (a real peripheral trigger produces fresh
   edges by itself).
+
+### Vectored-hold arbitration, measured (`run_vh_prio.sh`)
+
+With two armed slices both pending at the moment `acc_vectored_hold` samples
+(fired A-then-B, B-then-A, and both in one register write):
+
+* **The lowest slice index wins** -- fixed priority, arrival order irrelevant
+  (like the NVIC's exception-number priority).
+* **A dispatch does not consume the sticky flags.** Every latched flag
+  persists until the next full CFM write, so without a re-arm the winner just
+  re-dispatches on every subsequent hold. The full-CFM re-arm is what clears
+  -- and it clears ALL slices at once.
+
+Design consequence for mixed sources: put must-not-miss pulse sources on low
+slice numbers (they win and get serviced first), and within one wake service
+the winner, then check the other sources' own status registers before the CFM
+clear; level-type sources (like the I3C IRQ) are immune since they re-wake as
+long as their line is high.
