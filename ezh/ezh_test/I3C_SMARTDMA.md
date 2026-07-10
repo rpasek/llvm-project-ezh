@@ -162,3 +162,34 @@ Why not an interrupt-driven *bit-bang* slave: the event fabric's slice inputs
 are Port0/1 GPIO and IRQ lines only -- the J18 pins are Port2, so their edges
 can never reach the combiner (see EVENT_FABRIC.md). Routing the peripheral's
 IRQ is the correct idiom.
+
+## M3 — true I3C SDR with ENTDAA, interrupt-driven both ends (`run_i3c_sdr.sh`)
+
+`i3c_sdr_master.c` + `i3c_sdr_slave.c` run native I3C (not I2C-legacy): RSTDAA
+broadcast, then the real ENTDAA ceremony -- the master collects the slave's 8
+DAA ID bytes (PID incl. our programmed part-no 0xCAFE1234, BCR, DCR) and
+assigns dynamic address 0x30 -- then a 17-byte private SDR write at ~12 MHz
+push-pull. Both EZH cores sleep in `__builtin_ezh_hold()` for every phase
+(master: MCTRLDONE/RXPEND/COMPLETE/TXNOTFULL via MINTSET switching; slave:
+DACHG/RXPEND/STOP). Silicon result: DA assigned (SDYNADDR 0x61), 17/17 bytes,
+both cores exit 0xCAFEBABE.
+
+Hard-won bring-up facts (each cost a debugging round on silicon):
+
+* **The CCC/DAA engine runs off the I3C time-control (slow) clock** -- LPOSC
+  1 MHz via CLKCTL1 `I3C0FCLKSTCSEL=1`, with BOTH the TC and SLOW dividers
+  unhalted (`0x40021808`/`0x4002180C`). Without it, repeated-START requests
+  lodge in MCTRL forever and every CCC is silently ignored. SCONFIG.BAMATCH
+  counts this clock: 1 MHz -> BAMATCH=1 (SDK formula, clamped).
+* **Pin drive strength gates CCC/DAA specifically**: IOPCTL 0x1C1 (full drive,
+  slew, no internal pulls) on SCL/SDA and 0x181 on PUR. With the weak 0x71
+  config, address match and private SDR writes still work -- but the
+  PUR-dependent open-drain turnarounds corrupt, so the slave ACKs 0x7E and
+  never sees the CCC byte. Diagnosed by diffing the live registers of NXP's
+  working `i3c_interrupt_b2b` example running on the same boards.
+* **MCTRL requests race at EZH speed**: a new request written ~1 us after the
+  previous phase lodges but never executes. Let the TX FIFO drain
+  (MDATACTRL[20:16]==0) plus a ~1 ms settle before the next request.
+
+The M33-side bring-up (clocks, reset pulse, pins, SCONFIG/SMAXLIMITS) is in
+`run_i3c_sdr.sh`.
