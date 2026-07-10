@@ -243,3 +243,31 @@ slice numbers (they win and get serviced first), and within one wake service
 the winner, then check the other sources' own status registers before the CFM
 clear; level-type sources (like the I3C IRQ) are immune since they re-wake as
 long as their line is high.
+
+## M5 — the preemptive model: tiling mainline + I3C as a real ISR (`run_i3c_preempt.sh`)
+
+The counterpart of M4 with the opposite interrupt model. `i3c_preempt_slave.c`
+is compiled WITH bitslice interrupts (no `-mno-ezh-bitslice-interrupts`): the
+backend injects a conditional `gotol_bs bitslice_handler` before every branch
+and call, so the mainline -- a flat-out tile-copy loop that never mentions
+I3C -- is preempted into `vector0()` (a plain C function overriding crt0's
+weak stub) by every I3C0 IRQ. Board A runs the unchanged M3 master.
+
+Silicon result (deterministic across 4 consecutive runs): ~1.3M tiles copied
+by the mainline while the complete I3C ceremony (RSTDAA, ENTDAA -> DA 0x30,
+17-byte SDR write) was serviced entirely from the ISR in 14 preemptive
+entries; both cores exit 0xCAFEBABE. The ISR entry log (s_log) shows the
+level-IRQ discipline working: bursts re-enter at the next branch boundary
+until the line drops.
+
+Model facts:
+* Under the feature, EVERY function saves RA (determineCalleeSaves), because
+  a taken `gotol_bs` writes RA; returns compile to `popd pc` so there is no
+  live-RA window in epilogues.
+* Worst-case latency = the longest branchless straight-line stretch; cost =
+  one 4-byte conditional call per branch site.
+* crt0's handler masks all slice enables during vectorN() (no nesting) and
+  its CFM restore re-arms + clears the sticky flags -- so a vectorN() must
+  service its peripheral until the line drops, and must not touch CFM.
+* Slice 7 + PENDTRAP are used by the lldb debug tooling (vector7 ->
+  debug_call); keep slice 7 free if debugging with the plugin.
