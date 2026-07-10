@@ -204,3 +204,24 @@ flash -- e.g. the factory demo an EVK ships with -- keeps the part awake and
 debuggable, and all these demos fully re-initialize the I3C block anyway, so
 whatever is in flash is harmless. Also: prefer `reset halt` over `reset run`
 when poking blank-ish boards over JTAG.
+
+## M4 — two-source vectored dispatch, "the EZH's NVIC" (`run_i3c_vectored.sh`)
+
+`i3c_vectored_slave.c`: one EZH core serves two interrupt sources concurrently
+via `__builtin_ezh_acc_vectored_hold` -- slice 0 = the I3C0 IRQ (the full M3
+SDR slave: DACHG/RXPEND/STOP), slice 1 = a software doorbell (PENDTRAP,
+standing in for a display/tiling trigger) that copies 16-byte tiles. The
+hardware computes the winning source's vector (base + 4 + 4*slice); the loop
+derives the slice and runs the matching C handler. Board A runs the unchanged
+M3 master. Silicon result: 22 hardware-vectored I3C wakes + 3 tile wakes, zero
+spurious, 17/17 bytes + DA 0x61 + all tiles byte-exact, both cores 0xCAFEBABE.
+
+Facts this demo surfaced:
+
+* **The base vectored holds hardware-write RA** (the resume address --
+  NVIC-style handler linkage; the `_nra` variants opt out). This was an
+  unmodeled compiler clobber until now (fixed with `Defs=[RA]`): without it,
+  returning from a function that used the builtin jumped back into the loop.
+* **PENDTRAP REQ latches**: re-firing the same channel needs REQ toggled low
+  first to make a fresh rising edge (a real peripheral trigger produces fresh
+  edges by itself).
