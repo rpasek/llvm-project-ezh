@@ -193,3 +193,14 @@ Hard-won bring-up facts (each cost a debugging round on silicon):
 
 The M33-side bring-up (clocks, reset pulse, pins, SCONFIG/SMAXLIMITS) is in
 `run_i3c_sdr.sh`.
+
+### Board gotcha: never fully erase the flash
+
+A COMPLETELY blank RT595 (mass-erased flash) is un-attachable by OpenOCD: the
+ROM finds no image and enters deep sleep with the debug port unpowered
+("Target not examined yet"). Recovery needs NXP LinkServer (its connect script
+wakes the part via the debug mailbox) or ISP-mode straps. Any valid app in
+flash -- e.g. the factory demo an EVK ships with -- keeps the part awake and
+debuggable, and all these demos fully re-initialize the I3C block anyway, so
+whatever is in flash is harmless. Also: prefer `reset halt` over `reset run`
+when poking blank-ish boards over JTAG.
