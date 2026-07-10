@@ -128,10 +128,16 @@ declare ptr @llvm.ezh.acc.vectored.hold(ptr, i32 immarg)
 
 define ptr @t_acc_vectored_hold(ptr %table) {
 ; CHECK-LABEL: t_acc_vectored_hold:
+; The base (non-_nra) vectored holds hardware-write RA (NVIC-style handler
+; linkage), so a function that returns after the hold must preserve RA across
+; it -- without the Defs=[RA] modeling this silently jumped back into the
+; caller's own loop on return (found on silicon).
+; CHECK: pushd ra
 ; The Rd operand must differ from the table register (r0): $Rd is
 ; @earlyclobber because the same-register form does not deliver a usable
 ; vector on silicon.
 ; CHECK: acc_vectored_hold r{{[1-7]}}, r0, 255
+; CHECK: popd pc
   %v = call ptr @llvm.ezh.acc.vectored.hold(ptr %table, i32 255)
   ret ptr %v
 }
