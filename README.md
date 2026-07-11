@@ -37,15 +37,21 @@ git clone https://github.com/rpasek/llvm-project-ezh.git
 
 ## Build the LLVM EZH project
 
-A helper script is provided that configures and builds all tools and libraries.
+Helper scripts are provided to build the toolchain and run target tests.x
 
-This script requires that python and ninja are already installed.
+These scripts require Python and Ninja to be installed.
 
-```
-./build_llvm.sh
-```
+* **To build only the LLVM EZH toolchain and runtimes:**
+  ```bash
+  ./build_llvm.sh
+  ```
 
-This script will also run ezh_test after completing the build. OpenOCD (or another GDB server) needs to be running for these test to complete properly but otherwise will not affect the build in any way.
+* **To build the toolchain and run `ezh_test` regression suite on target hardware:**
+  ```bash
+  ./build_and_test.sh
+  ```
+
+Note: Target tests requires OpenOCD (or another GDB server) to be running on localhost:3333.
 
 ## Testing LLVM EZH
 
@@ -53,7 +59,7 @@ An extensive amount of tests are provided in the ezh folder. All tests have been
 
 The tests:
 * llvm_test: llvm-test-suite/SingleSource/Regression test suite (this includes the GCC torture test suite) with llvm-lit with -O0 and -Os optimizations. This test uses a smartdma_large.ld linkerscript that will wipe out M33 memory so it's recommend having the M33 halted when running this code. The rest of the tests use the reserved 32K of SmartDMA RAM.
-* ezh_test: This is a home grown test suite (with some EZH specific tests) that combines many tests into a few ELFs allowing for testing many things in minimal time. This test is run every time build_llvm.sh is run to help guarantee that changes made to LLVM still result in baseline functionality.
+* ezh_test: This is a home grown test suite (with some EZH specific tests) that combines many tests into a few ELFs allowing for testing many things in minimal time. This test is run every time build_and_test.sh is run to help guarantee that changes made to LLVM still result in baseline functionality.
 * csmith_test: This uses csmith (a random c code generator) to generate some pretty terrible looking code that pushes the limits of compilers. You will need to apt install this to use it.
 * ctimer_test: This configures CTIMER2 to generate an interrupt on EZH every second and expects 5 interrupts for the code to pass. EZH is busy doing arbitrary work during this time, which helps guarantee that EZH can handle an interrupt and return without corrupting the interrupted state. It's worth pointing out that EZH doesn't support interrupts. This test is specifically crafted to prove that emulated interrupts (otherwise referred to as bitslice interrupts) work correctly.
 * debug_test: This tests lldb functionality. It guarantees that halting, continuing, stepping and variable inspection work correctly. It's worth mentioning that debugging is implemented entirely in software. Breakpoints work by lldb swapping instructions out with `goto debug_software_breakpoint_[n]`. Stepping works simply by moving the breakpoint to the next instruction or next logical line. Halting works by triggering a bitslice interrupt on vector 7 (jumps to the debug handler) which is now reserved for debugging.

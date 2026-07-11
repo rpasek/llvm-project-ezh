@@ -23,8 +23,8 @@ silicon EZH core with ./run.sh inside that folder.
 
 Because of the limited information present to us in the documentation, we should
 expect to have to do significant amounts of experimentation. We typically write
-inline assembly in ezh/ezh_test/ezh_basic.c and remove our changes after we get the answers
-we are looking for.
+inline assembly in ezh/ezh_test/ezh_basic.c and remove our changes after we get
+the answers we are looking for.
 
 To better communicate our experimental results, we discuss without emotions, in
 a calm level headed tone.
@@ -56,8 +56,8 @@ Every effort should be made to make code of the highest possible quality. We
 intend to upstream this work and I expect it to receive a high level of
 scrutiny.
 
-llvm is configured with configured with ./configure_llvm.sh and built with
-./build_llvm.sh inside the `llvm-project` directory.
+LLVM is built and tested with `./build_and_test.sh` inside the `llvm-project`
+directory. Always build and test changes using `./build_and_test.sh`.
 
 We don't want to pollute our project. Please do all experimentation in the
 scratch folder.
@@ -65,5 +65,5 @@ scratch folder.
 AHB accessible EZHB_SP and EZHB_PC registers are read-only (in hardware).
 They are broken and read incorrect values (in hardware).
 
-Reset resets the core, memory is unaffected. If reset is applied, AHB registers 
+Reset resets the core, memory is unaffected. If reset is applied, AHB registers
 ignore all accesses.
