@@ -31,10 +31,34 @@ define i32 @mul320(i32 %a) {
   ret i32 %r
 }
 
-; 100 has no supported decomposition and must stay a libcall.
+; Beyond the generic combiner's shapes, the target combine synthesizes
+; short chains: 100 = (8*3 + 1) * 4, three shifted-ALU instructions.
 define i32 @mul100(i32 %a) {
 ; CHECK-LABEL: mul100:
-; CHECK:       gosub __mulsi3
+; CHECK:       lsl_add r1, r0, r0, 1
+; CHECK-NEXT:  lsl_add r0, r0, r1, 3
+; CHECK-NEXT:  lsl r0, r0, 2
+; CHECK-NOT:   __mulsi3
   %r = mul i32 %a, 100
+  ret i32 %r
+}
+
+; 365 = (8*9 + 1) * 5: the last factor-of-five step multiplies the
+; accumulator in place, so no final shift is needed.
+define i32 @mul365(i32 %a) {
+; CHECK-LABEL: mul365:
+; CHECK:       lsl_add r1, r0, r0, 3
+; CHECK-NEXT:  lsl_add r0, r0, r1, 3
+; CHECK-NEXT:  lsl_add r0, r0, r0, 2
+; CHECK-NOT:   __mulsi3
+  %r = mul i32 %a, 365
+  ret i32 %r
+}
+
+; No chain of at most three instructions exists: stays a libcall.
+define i32 @mul1234567(i32 %a) {
+; CHECK-LABEL: mul1234567:
+; CHECK:       gosub __mulsi3
+  %r = mul i32 %a, 1234567
   ret i32 %r
 }

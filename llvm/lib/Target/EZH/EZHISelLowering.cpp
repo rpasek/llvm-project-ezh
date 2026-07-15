@@ -64,6 +64,10 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   // re-mask a boolean with and_imm 1.
   setBooleanContents(ZeroOrOneBooleanContent);
 
+  // Synthesize short shift-add chains for multiplies by constant that the
+  // generic combiner's shapes miss (see PerformDAGCombine).
+  setTargetDAGCombine(ISD::MUL);
+
   setOperationAction(ISD::LOAD, MVT::i64, Expand);
   setOperationAction(ISD::STORE, MVT::i64, Expand);
 
@@ -1259,6 +1263,102 @@ EVT EZHTargetLowering::getSetCCResultType(const DataLayout &DL,
   if (!VT.isVector())
     return getPointerTy(DL);
   return VT.changeVectorElementTypeToInteger();
+}
+
+// Minimal number of shift/add/sub instructions to synthesize a multiply by
+// the odd constant C, or a value > Budget if it cannot be done within
+// Budget. The EZH shifted-ALU forms make each step exactly one instruction:
+//   peel low bits:   a*C = a + (a*D << k)      (lsl_add)  C = (D << k) + 1
+//                    a*C = (a*D << k) - a      (lsl_sub)  C = (D << k) - 1
+//   odd factor:      a*C = t + (t << k)        (lsl_add)  C = D * (2^k + 1)
+//                    a*C = (t << k) - t        (lsl_sub)  C = D * (2^k - 1)
+// All identities hold in Z and therefore also mod 2^32.
+static unsigned mulChainCost(uint64_t C, unsigned Budget) {
+  assert((C & 1) && C && "expected an odd constant");
+  // Over-budget sentinel: must exceed any comparison a caller can make
+  // after adding its own +1 steps, so it can never alias a legal cost.
+  constexpr unsigned TooExpensive = 100;
+  if (C == 1)
+    return 0;
+  if (Budget == 0)
+    return TooExpensive;
+  unsigned Best = TooExpensive;
+  for (int Dir : {-1, +1}) {
+    uint64_t E = C + Dir; // C-1 / C+1, even and nonzero
+    unsigned K = llvm::countr_zero(E);
+    if (K < 32)
+      Best = std::min(Best, 1 + mulChainCost(E >> K, Budget - 1));
+  }
+  for (unsigned K = 2; K < 32 && Best > 1; ++K)
+    for (int Dir : {+1, -1}) {
+      uint64_t F = (uint64_t(1) << K) + Dir;
+      if (F <= C && C % F == 0)
+        Best = std::min(Best, 1 + mulChainCost(C / F, Budget - 1));
+    }
+  return Best;
+}
+
+// Emit the chain found by mulChainCost, mirroring its search order.
+static SDValue buildMulChain(SelectionDAG &DAG, const SDLoc &DL, SDValue A,
+                             uint64_t C, unsigned Budget) {
+  if (C == 1)
+    return A;
+  auto Shl = [&](SDValue V, unsigned K) {
+    return DAG.getNode(ISD::SHL, DL, MVT::i32, V,
+                       DAG.getConstant(K, DL, MVT::i32));
+  };
+  for (int Dir : {-1, +1}) {
+    uint64_t E = C + Dir;
+    unsigned K = llvm::countr_zero(E);
+    if (K < 32 && 1 + mulChainCost(E >> K, Budget - 1) <= Budget) {
+      SDValue T = Shl(buildMulChain(DAG, DL, A, E >> K, Budget - 1), K);
+      return DAG.getNode(Dir < 0 ? ISD::ADD : ISD::SUB, DL, MVT::i32, T, A);
+    }
+  }
+  for (unsigned K = 2; K < 32; ++K)
+    for (int Dir : {+1, -1}) {
+      uint64_t F = (uint64_t(1) << K) + Dir;
+      if (F <= C && C % F == 0 &&
+          1 + mulChainCost(C / F, Budget - 1) <= Budget) {
+        SDValue T = buildMulChain(DAG, DL, A, C / F, Budget - 1);
+        return DAG.getNode(Dir > 0 ? ISD::ADD : ISD::SUB, DL, MVT::i32,
+                           Shl(T, K), T);
+      }
+    }
+  llvm_unreachable("mulChainCost accepted a constant buildMulChain cannot");
+}
+
+SDValue EZHTargetLowering::PerformDAGCombine(SDNode *N,
+                                             DAGCombinerInfo &DCI) const {
+  // Multiplies are __mulsi3 libcalls. The generic combiner (via
+  // decomposeMulByConstant) already turns 2^N and sums/differences of two
+  // powers into shifts and adds; here we synthesize short shift-add chains
+  // for the remaining constants -- a * 100 is t = a + (a << 2); t + (t << 3);
+  // t << 2 -- whenever at most MaxChain shifted-ALU instructions suffice.
+  // That is never larger than the call site it replaces and dozens of
+  // cycles faster.
+  if (N->getOpcode() == ISD::MUL && N->getValueType(0) == MVT::i32) {
+    auto *C = dyn_cast<ConstantSDNode>(N->getOperand(1));
+    if (!C || C->isZero() || C->isOne())
+      return SDValue();
+    const unsigned MaxChain = 3;
+    uint64_t Val = C->getZExtValue();
+    unsigned K = llvm::countr_zero(Val);
+    uint64_t Odd = Val >> K;
+    unsigned ShiftCost = K ? 1 : 0;
+    if (Odd == 1 || mulChainCost(Odd, MaxChain - ShiftCost) + ShiftCost >
+                        MaxChain)
+      return SDValue();
+    SelectionDAG &DAG = DCI.DAG;
+    SDLoc DL(N);
+    SDValue Chain =
+        buildMulChain(DAG, DL, N->getOperand(0), Odd, MaxChain - ShiftCost);
+    if (K)
+      Chain = DAG.getNode(ISD::SHL, DL, MVT::i32, Chain,
+                          DAG.getConstant(K, DL, MVT::i32));
+    return Chain;
+  }
+  return SDValue();
 }
 
 bool EZHTargetLowering::decomposeMulByConstant(LLVMContext &Context, EVT VT,
