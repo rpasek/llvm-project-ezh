@@ -1200,6 +1200,17 @@ EVT EZHTargetLowering::getSetCCResultType(const DataLayout &DL,
   return VT.changeVectorElementTypeToInteger();
 }
 
+bool EZHTargetLowering::decomposeMulByConstant(LLVMContext &Context, EVT VT,
+                                               SDValue C) const {
+  // EZH multiplies through the __mulsi3 libcall (a software shift-add loop
+  // plus call overhead), while the shifted-ALU forms (lsl_add etc.) fold a
+  // shift and an add/sub into one instruction. Every constant shape the
+  // DAG combiner knows how to decompose (2^N, 2^N +/- 1 and their negated
+  // and shifted variants) therefore beats the call by an order of
+  // magnitude, so accept them all.
+  return VT == MVT::i32 && isa<ConstantSDNode>(C.getNode());
+}
+
 bool EZHTargetLowering::CanLowerReturn(
     CallingConv::ID CallConv, MachineFunction &MF, bool IsVarArg,
     const SmallVectorImpl<ISD::OutputArg> &Outs, LLVMContext &Context,

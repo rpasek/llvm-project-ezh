@@ -42,6 +42,7 @@ TESTS = [
     "llvm/test/CodeGen/EZH/spill-memref.ll",
     "llvm/test/CodeGen/EZH/frame.ll",
     "llvm/test/CodeGen/EZH/cmp-fusion.ll",
+    "llvm/test/CodeGen/EZH/mul-const.ll",
     "clang/test/CodeGen/EZH/builtins-event.c",
     "clang/test/CodeGen/EZH/builtins-gpio.c",
     "clang/test/Sema/builtins-ezh.c",
