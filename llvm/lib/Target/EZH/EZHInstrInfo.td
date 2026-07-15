@@ -35,6 +35,14 @@ def SDT_EZHCallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 def SDT_EZHCall : SDTypeProfile<0, -1, [SDTCisVT<0, i32>]>;
 def EZH_call : SDNode<"EZHISD::CALL", SDT_EZHCall, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
 def EZH_tcret : SDNode<"EZHISD::TC_RETURN", SDT_EZHCall, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
+
+// 64-bit carry chain (see ReplaceNodeResults): the low half sets the carry
+// (glue out), the high half consumes it (glue in); glue keeps each pair
+// adjacent through scheduling.
+def EZH_adds : SDNode<"EZHISD::ADDS", SDTIntBinOp, [SDNPCommutative, SDNPOutGlue]>;
+def EZH_subs : SDNode<"EZHISD::SUBS", SDTIntBinOp, [SDNPOutGlue]>;
+def EZH_adc  : SDNode<"EZHISD::ADC",  SDTIntBinOp, [SDNPCommutative, SDNPInGlue]>;
+def EZH_sbc  : SDNode<"EZHISD::SBC",  SDTIntBinOp, [SDNPInGlue]>;
 def EZH_adjcallstackdown : SDNode<"ISD::CALLSEQ_START", SDT_EZHCallSeqStart, [SDNPHasChain, SDNPOutGlue]>;
 def EZH_adjcallstackup : SDNode<"ISD::CALLSEQ_END", SDT_EZHCallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def EZH_ret_glue_node : SDNode<"EZHISD::RET_GLUE_INTERNAL", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
@@ -1071,6 +1079,17 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
 // Instruction Selection Patterns
 //===----------------------------------------------------------------------===//
 def : Pat<(EZHbtog i32:$Rs, (i32 imm:$Bit)), (BTOG_IMM GPR:$Rs, imm:$Bit, 0)>;
+
+// 64-bit carry chain: low halves in the flag-setting forms, high halves in
+// the carry-consuming forms. Immediate variants cover i64 +/- constant.
+def : Pat<(EZH_adds i32:$a, i32:$b), (ADD_s GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_adds i32:$a, imms12:$b), (ADD_IMM_s GPR:$a, imms12:$b, 0)>;
+def : Pat<(EZH_subs i32:$a, i32:$b), (SUB_s GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_subs i32:$a, imms12:$b), (SUB_IMM_s GPR:$a, imms12:$b, 0)>;
+def : Pat<(EZH_adc i32:$a, i32:$b), (ADC GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_adc i32:$a, imms12:$b), (ADC_IMM GPR:$a, imms12:$b, 0)>;
+def : Pat<(EZH_sbc i32:$a, i32:$b), (SBC GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_sbc i32:$a, imms12:$b), (SBC_IMM GPR:$a, imms12:$b, 0)>;
 
 // Memory Patterns (Words and Bytes)
 // 16-bit access is handled by the Legalizer's Expand mechanism into bytes.

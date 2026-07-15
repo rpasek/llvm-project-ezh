@@ -69,6 +69,11 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   setTargetDAGCombine(ISD::MUL);
 
   setOperationAction(ISD::LOAD, MVT::i64, Expand);
+
+  // 64-bit add/sub expand to a native adds/adc (subs/sbc) carry chain in
+  // ReplaceNodeResults instead of the generic boolean carry expansion.
+  setOperationAction(ISD::ADD, MVT::i64, Custom);
+  setOperationAction(ISD::SUB, MVT::i64, Custom);
   setOperationAction(ISD::STORE, MVT::i64, Expand);
 
   setOperationAction(ISD::CTLZ, MVT::i32, Custom);
@@ -573,7 +578,41 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
 
 void EZHTargetLowering::ReplaceNodeResults(SDNode *N,
                                            SmallVectorImpl<SDValue> &Results,
-                                           SelectionDAG &DAG) const {}
+                                           SelectionDAG &DAG) const {
+  switch (N->getOpcode()) {
+  default:
+    return;
+  case ISD::ADD:
+  case ISD::SUB: {
+    // 64-bit add/sub as a native carry chain -- two instructions instead
+    // of the generic boolean expansion's nine-plus:
+    //
+    //     adds lo, a_lo, b_lo        subs lo, a_lo, b_lo
+    //     adc  hi, a_hi, b_hi        sbc  hi, a_hi, b_hi
+    //
+    // The carry travels as glue, which keeps each pair adjacent through
+    // scheduling; register allocation can only insert loads, stores and
+    // plain moves between them, none of which touch the flags, and there
+    // is no post-RA scheduler on this target.
+    if (N->getValueType(0) != MVT::i64)
+      return;
+    SDLoc DL(N);
+    SDValue LHSLo, LHSHi, RHSLo, RHSHi;
+    std::tie(LHSLo, LHSHi) =
+        DAG.SplitScalar(N->getOperand(0), DL, MVT::i32, MVT::i32);
+    std::tie(RHSLo, RHSHi) =
+        DAG.SplitScalar(N->getOperand(1), DL, MVT::i32, MVT::i32);
+    bool IsAdd = N->getOpcode() == ISD::ADD;
+    SDValue Lo =
+        DAG.getNode(IsAdd ? EZHISD::ADDS : EZHISD::SUBS, DL,
+                    DAG.getVTList(MVT::i32, MVT::Glue), LHSLo, RHSLo);
+    SDValue Hi = DAG.getNode(IsAdd ? EZHISD::ADC : EZHISD::SBC, DL, MVT::i32,
+                             LHSHi, RHSHi, Lo.getValue(1));
+    Results.push_back(DAG.getNode(ISD::BUILD_PAIR, DL, MVT::i64, Lo, Hi));
+    return;
+  }
+  }
+}
 static EZHCC::CondCode IntCCToEZHCC(ISD::CondCode CC);
 
 // Master helper function to preprocess a 32-bit comparison.
@@ -1560,6 +1599,14 @@ const char *EZHTargetLowering::getTargetNodeName(unsigned Opcode) const {
     return "EZHISD::TC_RETURN";
   case EZHISD::CMP:
     return "EZHISD::CMP";
+  case EZHISD::ADDS:
+    return "EZHISD::ADDS";
+  case EZHISD::SUBS:
+    return "EZHISD::SUBS";
+  case EZHISD::ADC:
+    return "EZHISD::ADC";
+  case EZHISD::SBC:
+    return "EZHISD::SBC";
   case EZHISD::BR_CC:
     return "EZHISD::BR_CC";
   case EZHISD::SELECT_CC:

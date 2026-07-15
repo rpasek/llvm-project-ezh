@@ -5,7 +5,7 @@ corpus and the firmware demos (every entry was independently reproduced
 with the built compiler before ranking; rank = payoff/effort, 10 best).
 Items already implemented are marked DONE with their commit.
 
-## [9] [DONE] Post-increment addressing not used when the loop also wants the index value: LSR shares one induction variable and pays mov + reg-offset load per iteration instead of ldrb_post
+## [9] Post-increment addressing not used when the loop also wants the index value: LSR shares one induction variable and pays mov + reg-offset load per iteration instead of ldrb_post
 
 Estimated win: 1-2 instructions per loop *iteration* (runtime win in exactly the byte-pump loops EZH exists for); 4->5 instructions is a 25% hot-loop penalty in the strlen shape; ~150 affected loops in the corpus.
 
@@ -46,7 +46,7 @@ int intmax(void) { return 0x7FFFFFFF; }
 
 Fix: EZHISelLowering.cpp LowerConstant (line 898): after the existing LOAD_SIMM check (isInt<11>(SVal>>TZ), line 911), run the identical check on ~UVal and emit DAG.getMachineNode(EZH::LOAD_SIMMN, DL, MVT::i32, {HiOfNot, ShiftOfNot, Pred}). Also teach the RecoverConstant lambda in the signed-compare bias combine (EZHISelLowering.cpp:649) to recover values from LOAD_SIMMN nodes so the C^0x80000000 fold keeps applying. Side fix while there: AsmParser cvtShiftedImm (EZHAsmParser.cpp:247) silently truncates unencodable values (`load_simmn r0, 65535` assembles to imm=-1,sh=0 = wrong value) - add a post-split isInt<11> range check. Validate the LOAD_SIMMN encoding once against ezhdis since only the SIMM form is silicon-proven.
 
-## [9] i64 add/sub/neg (and unsigned-overflow checks) re-derive the carry with subs+mov_ca instead of using adds/adc -- the adde/sube patterns in the td are dead code
+## [9] [DONE 17dae33d] i64 add/sub/neg re-derive the carry with subs+mov_ca instead of using adds/adc -- the adde/sube patterns in the td are dead code
 
 Estimated win: 28-44 bytes and ~10 cycles per i64 add/sub (9-13 insns -> 2-3), plus 2 callee-saved registers freed per site on an 8-register machine (kills the pushd/popd pairs and spill pressure around them).
 

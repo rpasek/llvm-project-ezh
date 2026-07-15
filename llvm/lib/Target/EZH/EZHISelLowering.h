@@ -42,6 +42,13 @@ enum NodeType : unsigned {
   CALL,
   TC_RETURN,
   CMP,
+  // 64-bit carry chain: ADDS/SUBS set the carry (glue out), ADC/SBC
+  // consume it (glue in). The glue keeps each pair adjacent, and nothing
+  // that can be scheduled between them touches the flags.
+  ADDS,
+  SUBS,
+  ADC,
+  SBC,
   BR_CC,
   SELECT_CC,
   BTOG,
