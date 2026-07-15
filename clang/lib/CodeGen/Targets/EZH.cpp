@@ -59,11 +59,14 @@ RValue EZHABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
     return Slot.asRValue();
 
   CharUnits TySize = getContext().getTypeSizeInChars(Ty);
-  CharUnits TyAlignForABI = getContext().getTypeUnadjustedAlignInChars(Ty);
 
-  // Bound the type's ABI alignment.
-  TyAlignForABI = std::max(TyAlignForABI, CharUnits::fromQuantity(4));
-  TyAlignForABI = std::min(TyAlignForABI, CharUnits::fromQuantity(8));
+  // The EZH stack is only 4-byte aligned (datalayout S32) and CC_EZH packs
+  // byval arguments at 4 (CCPassByVal<4, 4>), so no vararg slot can be
+  // assumed more aligned than 4 regardless of the type's declared
+  // alignment: rounding ap up to 8 would skip a real argument word
+  // whenever the caller's stack pointer happened to sit at 4 mod 8, which
+  // depends on nothing more stable than the caller's register pressure.
+  CharUnits TyAlignForABI = CharUnits::fromQuantity(4);
 
   TypeInfoChars TyInfo(TySize, TyAlignForABI, AlignRequirementKind::None);
   return emitVoidPtrVAArg(CGF, VAListAddr, Ty, /*IsIndirect=*/false, TyInfo,

@@ -52,6 +52,7 @@ TESTS = [
     "clang/test/CodeGen/EZH/builtins-event.c",
     "clang/test/CodeGen/EZH/builtins-gpio.c",
     "clang/test/Sema/builtins-ezh.c",
+    "clang/test/CodeGen/EZH/vaarg-align.c",
 ]
 
 
