@@ -148,6 +148,8 @@ bool EZHCompareFusion::isDeadAfter(Register Reg,
   for (MachineBasicBlock::const_iterator I = std::next(From.getIterator()),
                                          E = MBB.end();
        I != E; ++I) {
+    if (I->isDebugInstr())
+      continue; // A DBG_VALUE use must not make the register look live.
     if (I->readsRegister(Reg, /*TRI=*/nullptr))
       return false;
     if (I->definesRegister(Reg, /*TRI=*/nullptr))
@@ -181,14 +183,17 @@ bool EZHCompareFusion::tryFuse(MachineBasicBlock &MBB, MachineInstr &Cmp) {
   // consumers.
   MachineInstr *Producer = nullptr;
   MachineBasicBlock::iterator P = Cmp.getIterator();
-  for (unsigned Steps = 0; P != MBB.begin() && Steps < 8; ++Steps) {
+  for (unsigned Steps = 0; P != MBB.begin() && Steps < 8;) {
     --P;
+    if (P->isDebugInstr())
+      continue; // Must not count against the window: -g cannot change code.
     if (P->modifiesRegister(Tested, /*TRI=*/nullptr)) {
       Producer = &*P;
       break;
     }
     if (isFlagBarrier(*P))
       return false;
+    ++Steps;
   }
   if (!Producer)
     return false;
@@ -213,6 +218,10 @@ bool EZHCompareFusion::tryFuse(MachineBasicBlock &MBB, MachineInstr &Cmp) {
   for (MachineBasicBlock::iterator I = std::next(Cmp.getIterator()),
                                    E = MBB.end();
        I != E; ++I) {
+    if (I->isDebugInstr())
+      continue;
+    if (I->isCall() || I->isInlineAsm())
+      return false; // Same opacity rule as the backward walk.
     StringRef Name = TII->getName(I->getOpcode());
     if (Name.starts_with("ADC") || Name.starts_with("SBC"))
       return false;
@@ -230,6 +239,9 @@ bool EZHCompareFusion::tryFuse(MachineBasicBlock &MBB, MachineInstr &Cmp) {
 }
 
 bool EZHCompareFusion::runOnMachineFunction(MachineFunction &MF) {
+  if (skipFunction(MF.getFunction()))
+    return false;
+
   TII = MF.getSubtarget().getInstrInfo();
 
   bool Changed = false;
