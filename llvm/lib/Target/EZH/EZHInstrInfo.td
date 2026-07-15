@@ -1074,8 +1074,6 @@ def : Pat<(EZHbtog i32:$Rs, (i32 imm:$Bit)), (BTOG_IMM GPR:$Rs, imm:$Bit, 0)>;
 
 // Memory Patterns (Words and Bytes)
 // 16-bit access is handled by the Legalizer's Expand mechanism into bytes.
-// Memory Patterns (Words and Bytes)
-// 16-bit access is handled by the Legalizer's Expand mechanism into bytes.
 def : Pat<(i32 (load GPR:$Rn)), (LDR GPR:$Rn, 0, 0)>;
 def : Pat<(store i32:$Rd, GPR:$Rn), (STR GPR:$Rd, GPR:$Rn, 0, 0)>;
 
@@ -1086,6 +1084,26 @@ def : Pat<(truncstorei8 GPR:$Rd, GPR:$Rn), (STRB GPR:$Rd, GPR:$Rn, 0, 0)>;
 
 def : Pat<(i32 (extloadi1 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
 def : Pat<(i32 (zextloadi1 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
+
+// Stack-object addressing: fold a FrameIndex (plus optional constant
+// offset) straight into the memory operand instead of materializing the
+// address with a separate add_imm. eliminateFrameIndex range-checks the
+// final SP-relative offset and scavenges when it does not fit, exactly as
+// it already does for spill slots. AddedComplexity beats the plain-GPR and
+// (add Rn, imm) patterns, which would otherwise select the materialized
+// address.
+def frameaddr : ComplexPattern<iPTR, 2, "SelectFrameAddr", [frameindex, add], []>;
+
+let AddedComplexity = 9 in {
+def : Pat<(i32 (load frameaddr:$addr)), (LDR frameaddr:$addr, 0)>;
+def : Pat<(store i32:$Rd, frameaddr:$addr), (STR GPR:$Rd, frameaddr:$addr, 0)>;
+def : Pat<(i32 (zextloadi8 frameaddr:$addr)), (LDRB frameaddr:$addr, 0)>;
+def : Pat<(i32 (sextloadi8 frameaddr:$addr)), (LDRBS frameaddr:$addr, 0)>;
+def : Pat<(i32 (extloadi8 frameaddr:$addr)), (LDRB frameaddr:$addr, 0)>;
+def : Pat<(truncstorei8 i32:$Rd, frameaddr:$addr), (STRB GPR:$Rd, frameaddr:$addr, 0)>;
+def : Pat<(i32 (extloadi1 frameaddr:$addr)), (LDRB frameaddr:$addr, 0)>;
+def : Pat<(i32 (zextloadi1 frameaddr:$addr)), (LDRB frameaddr:$addr, 0)>;
+}
 
 //===----------------------------------------------------------------------===//
 // Instruction Selection Patterns (ISel lowering)

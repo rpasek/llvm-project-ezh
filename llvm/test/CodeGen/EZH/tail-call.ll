@@ -66,11 +66,12 @@ declare i32 @vf(i32, ...)
 
 ; musttail with a stack argument: matching prototypes make the caller's
 ; incoming slot the callee's incoming slot, so the fifth argument is
-; stored in place and the goto happens with SP back at the entry value.
+; rewritten in place (SP-relative, no separate address materialization)
+; and the goto happens with SP back at the entry value.
 define i32 @musttail_stack(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) {
 ; CHECK-LABEL: musttail_stack:
-; CHECK:       ldr r{{[0-9]}}, r{{[0-9]}}, 0
-; CHECK:       str r{{[0-9]}}, r{{[0-9]}}, 0
+; CHECK:       ldr r{{[0-9]}}, sp, {{[0-9]+}}
+; CHECK:       str sp, r{{[0-9]}}, {{[0-9]+}}
 ; CHECK:       goto g5
 ; CHECK-NOT:   gosub
   %e2 = add i32 %e, 1

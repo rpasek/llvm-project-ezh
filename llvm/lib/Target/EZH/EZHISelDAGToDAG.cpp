@@ -57,6 +57,7 @@ private:
                                     InlineAsm::ConstraintCode ConstraintID,
                                     std::vector<SDValue> &OutOps) override;
   void selectFrameIndex(SDNode *N);
+  bool SelectFrameAddr(SDValue Addr, SDValue &Base, SDValue &Offset);
   bool tryIndexedLoadStore(SDNode *Node);
 };
 
@@ -312,6 +313,32 @@ void EZHDAGToDAGISel::Select(SDNode *Node) {
   }
 
   SelectCode(Node);
+}
+
+// Match a stack-object address -- a FrameIndex, optionally plus a constant
+// offset -- as a (base, offset) memory operand pair, so loads and stores of
+// stack objects need no separate address materialization.
+// eliminateFrameIndex range-checks the final SP-relative offset and
+// scavenges when it does not fit, as it already does for spill slots.
+bool EZHDAGToDAGISel::SelectFrameAddr(SDValue Addr, SDValue &Base,
+                                      SDValue &Offset) {
+  if (auto *FIN = dyn_cast<FrameIndexSDNode>(Addr)) {
+    Base = CurDAG->getTargetFrameIndex(FIN->getIndex(), Addr.getValueType());
+    Offset = CurDAG->getTargetConstant(0, SDLoc(Addr), MVT::i32);
+    return true;
+  }
+  if (CurDAG->isBaseWithConstantOffset(Addr)) {
+    if (auto *FIN = dyn_cast<FrameIndexSDNode>(Addr.getOperand(0))) {
+      int64_t Off = cast<ConstantSDNode>(Addr.getOperand(1))->getSExtValue();
+      if (isInt<16>(Off)) {
+        Base =
+            CurDAG->getTargetFrameIndex(FIN->getIndex(), Addr.getValueType());
+        Offset = CurDAG->getTargetConstant(Off, SDLoc(Addr), MVT::i32);
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 void EZHDAGToDAGISel::selectFrameIndex(SDNode *Node) {
