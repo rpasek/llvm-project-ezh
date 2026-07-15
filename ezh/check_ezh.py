@@ -32,6 +32,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # tests; we execute their RUN lines rather than relying on a configured lit.
 TESTS = [
     "llvm/test/MC/EZH/instructions.s",
+    "llvm/test/MC/EZH/reg-class-errors.s",
     "llvm/test/CodeGen/EZH/event-intrinsics.ll",
     "llvm/test/CodeGen/EZH/gpio-intrinsics.ll",
     "llvm/test/CodeGen/EZH/reg-offset.ll",
@@ -84,6 +85,7 @@ def run_lines(path, B, tmp):
         (r"%S", os.path.dirname(path)),
         (r"%t", tmp),
         (r"\bllvm-mc\b", f'"{B}/llvm-mc"'),
+        (r"^not\b|(?<=[|;&] )not\b", f'"{B}/not"'),
         (r"\bllc\b", f'"{B}/llc"'),
         (r"\bopt\b", f'"{B}/opt"'),
         (r"\bFileCheck\b", f'"{B}/FileCheck"'),
@@ -100,7 +102,7 @@ def run_lines(path, B, tmp):
 
 def main():
     B = find_bin()
-    for tool in ("clang", "llc", "llvm-mc", "FileCheck"):
+    for tool in ("clang", "llc", "llvm-mc", "FileCheck", "not"):
         if not os.path.exists(os.path.join(B, tool)):
             sys.exit(f"error: {tool} not found in {B}")
     print(f"EZH compiler tests (host-only) -- binaries: {B}\n")

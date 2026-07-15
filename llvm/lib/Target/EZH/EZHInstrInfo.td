@@ -533,7 +533,10 @@ multiclass BitOps<bits<2> op_type, bit s_bit, string opc_str, string sf_suffix> 
 }
 
 multiclass AndOrOps<string sf_suffix> {
-  defvar ins_andor_pred = (ins GPR:$Rs1, GPR:$Rs2, GPR:$Rs3, pred:$Cond);
+  // Rs3 (the rotate amount, bits[27:24]) accepts only R0-R7 on silicon --
+  // NXP-confirmed, same restriction family as the 0x19 rshift and the 0x1D
+  // index register.
+  defvar ins_andor_pred = (ins GPR:$Rs1, GPR:$Rs2, GPR3Bit:$Rs3, pred:$Cond);
 
   def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
     : EZHInstAndOr<(outs GPR:$Rd), ins_andor_pred,
@@ -661,15 +664,20 @@ def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Con
 // instruction; they sit below the immediate-offset LDR/STR above, so a constant
 // in-range offset still prefers ldr/str. The pred:$Cond operand is auto-filled
 // with the "always" predicate for these unconditional patterns.
-def LDR_REG : EZHInstMemReg<OP_MEM_REG, 0, 1, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_reg$Cond $Rd, $Rn, $Rm",
+// The index register Rm (bits[27:24]) accepts only R0-R7 on silicon --
+// NXP-confirmed operand restriction (same field carries the same restriction
+// on the 0x19 register-shift rshift and the 0x16 andor ror operand). GPR3Bit
+// makes the assembler reject specials instead of silently mis-encoding them;
+// codegen was already safe (the specials are reserved from allocation).
+def LDR_REG : EZHInstMemReg<OP_MEM_REG, 0, 1, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "ldr_reg$Cond $Rd, $Rn, $Rm",
                             [(set i32:$Rd, (load (add i32:$Rn, i32:$Rm)))]>;
-def LDR_REGB : EZHInstMemReg<OP_MEM_REG, 0, 0, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regb$Cond $Rd, $Rn, $Rm",
+def LDR_REGB : EZHInstMemReg<OP_MEM_REG, 0, 0, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "ldr_regb$Cond $Rd, $Rn, $Rm",
                              [(set i32:$Rd, (zextloadi8 (add i32:$Rn, i32:$Rm)))]>;
-def LDR_REGBS : EZHInstMemReg<OP_MEM_REG, 0, 0, 1, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regbs$Cond $Rd, $Rn, $Rm",
+def LDR_REGBS : EZHInstMemReg<OP_MEM_REG, 0, 0, 1, (outs GPR:$Rd), (ins GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "ldr_regbs$Cond $Rd, $Rn, $Rm",
                               [(set i32:$Rd, (sextloadi8 (add i32:$Rn, i32:$Rm)))]>;
-def STR_REG : EZHInstMemReg<OP_MEM_REG, 1, 1, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_reg$Cond $Rn, $Rd, $Rm",
+def STR_REG : EZHInstMemReg<OP_MEM_REG, 1, 1, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "str_reg$Cond $Rn, $Rd, $Rm",
                             [(store i32:$Rd, (add i32:$Rn, i32:$Rm))]>;
-def STR_REGB : EZHInstMemReg<OP_MEM_REG, 1, 0, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_regb$Cond $Rn, $Rd, $Rm",
+def STR_REGB : EZHInstMemReg<OP_MEM_REG, 1, 0, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "str_regb$Cond $Rn, $Rd, $Rm",
                              [(truncstorei8 i32:$Rd, (add i32:$Rn, i32:$Rm))]>;
 
 // Push / Pop (Upward Stack)

@@ -38,7 +38,7 @@ RUN cmake -S llvm -B build -G Ninja \
       -DLLVM_TARGETS_TO_BUILD="X86;AArch64" \
       -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="EZH" \
       -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-    && ninja -C build clang llc llvm-mc FileCheck
+    && ninja -C build clang llc llvm-mc FileCheck not
 
 # Final layer: the 12 host-only compiler tests. Fails the build on any failure.
 RUN python3 ezh/check_ezh.py build/bin
