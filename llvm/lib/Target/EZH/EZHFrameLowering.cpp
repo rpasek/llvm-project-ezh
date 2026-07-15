@@ -554,12 +554,22 @@ void EZHFrameLowering::determineCalleeSaves(MachineFunction &MF,
 
   MachineFrameInfo &MFI = MF.getFrameInfo();
   if (RS) {
-    const TargetRegisterClass &RC = EZH::GPRRegClass;
-    unsigned Size = STI.getRegisterInfo()->getSpillSize(RC);
-    Align Alignment = STI.getRegisterInfo()->getSpillAlign(RC);
+    // The scavenging slot is only needed when eliminateFrameIndex may face an
+    // offset outside the memory-op immediate ranges (word [-512,508], byte
+    // [-128,127]) and must materialize the address in a scratch register.
+    // Small frames -- the common case on a 32KB-SRAM part -- can never need
+    // it; skipping the slot lets zero-local leaf functions drop their frame
+    // entirely. 32 bytes of headroom covers the callee-saved spills that are
+    // not yet part of the estimate; the 120 threshold keeps the worst case
+    // safely inside the tightest (byte) range.
+    if (MFI.estimateStackSize(MF) + 32 >= 120 || MFI.hasVarSizedObjects()) {
+      const TargetRegisterClass &RC = EZH::GPRRegClass;
+      unsigned Size = STI.getRegisterInfo()->getSpillSize(RC);
+      Align Alignment = STI.getRegisterInfo()->getSpillAlign(RC);
 
-    int FI = MFI.CreateSpillStackObject(Size, Alignment);
-    RS->addScavengingFrameIndex(FI);
+      int FI = MFI.CreateSpillStackObject(Size, Alignment);
+      RS->addScavengingFrameIndex(FI);
+    }
   }
 }
 

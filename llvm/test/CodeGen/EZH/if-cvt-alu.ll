@@ -2,11 +2,9 @@
 
 define i32 @test_select_add(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_add:
-; CHECK:       sub_imm sp, sp, 4
 ; CHECK:       sub_imms r0, r0, 0
 ; CHECK:       add_ze r1, r1, r2
 ; CHECK:       mov r0, r1
-; CHECK:       add_imm sp, sp, 4
 ; CHECK:       mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
@@ -23,11 +21,9 @@ if.end:
 
 define i32 @test_select_sub(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_sub:
-; CHECK:       sub_imm sp, sp, 4
 ; CHECK:       sub_imms r0, r0, 0
 ; CHECK:       sub_ze r1, r1, r2
 ; CHECK:       mov r0, r1
-; CHECK:       add_imm sp, sp, 4
 ; CHECK:       mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
@@ -44,11 +40,9 @@ if.end:
 
 define i32 @test_select_and(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_and:
-; CHECK:       sub_imm sp, sp, 4
 ; CHECK:       sub_imms r0, r0, 0
 ; CHECK:       and_ze r1, r1, r2
 ; CHECK:       mov r0, r1
-; CHECK:       add_imm sp, sp, 4
 ; CHECK:       mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
@@ -65,11 +59,9 @@ if.end:
 
 define i32 @test_select_or(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_or:
-; CHECK:       sub_imm sp, sp, 4
 ; CHECK:       sub_imms r0, r0, 0
 ; CHECK:       or_ze r1, r1, r2
 ; CHECK:       mov r0, r1
-; CHECK:       add_imm sp, sp, 4
 ; CHECK:       mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
@@ -86,11 +78,9 @@ if.end:
 
 define i32 @test_select_xor(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_xor:
-; CHECK:       sub_imm sp, sp, 4
 ; CHECK:       sub_imms r0, r0, 0
 ; CHECK:       xor_ze r1, r1, r2
 ; CHECK:       mov r0, r1
-; CHECK:       add_imm sp, sp, 4
 ; CHECK:       mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
@@ -107,11 +97,9 @@ if.end:
 
 define i32 @test_select_shl(i32 %cond, i32 %a) {
 ; CHECK-LABEL: test_select_shl:
-; CHECK:       sub_imm sp, sp, 4
 ; CHECK:       sub_imms r0, r0, 0
 ; CHECK:       lsl_ze r1, r1, 2
 ; CHECK:       mov r0, r1
-; CHECK:       add_imm sp, sp, 4
 ; CHECK:       mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
