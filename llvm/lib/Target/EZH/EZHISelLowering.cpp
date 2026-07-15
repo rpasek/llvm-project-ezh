@@ -59,6 +59,11 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   computeRegisterProperties(STI.getRegisterInfo());
   setStackPointerRegisterToSaveRestore(EZH::SP);
 
+  // Comparisons materialize as exactly 0 or 1 (SETCC expands to a
+  // select_cc of the constants 1 and 0), so downstream code never needs to
+  // re-mask a boolean with and_imm 1.
+  setBooleanContents(ZeroOrOneBooleanContent);
+
   setOperationAction(ISD::LOAD, MVT::i64, Expand);
   setOperationAction(ISD::STORE, MVT::i64, Expand);
 
@@ -626,10 +631,42 @@ static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
     if (!IsSafe16Bit) {
       // Toggle the sign bit (bit 31) of both operands to shift the signed range
       // monotonically into the unsigned range, enabling unsigned comparison.
-      LHS = DAG.getNode(EZHISD::BTOG, dl, MVT::i32, LHS,
-                        DAG.getConstant(31, dl, MVT::i32));
-      RHS = DAG.getNode(EZHISD::BTOG, dl, MVT::i32, RHS,
-                        DAG.getConstant(31, dl, MVT::i32));
+      // A constant operand absorbs the toggle at compile time: materializing
+      // C ^ 0x80000000 costs no more than materializing C, saving the
+      // btog_imm. ISD::Constant is custom-lowered and operands legalize
+      // before their users, so the constant may already be a LOAD_SIMM or
+      // LOAD_CONSTANT machine node here; recover the value from those too.
+      auto RecoverConstant = [](SDValue Op, uint32_t &Val) {
+        if (auto *C = dyn_cast<ConstantSDNode>(Op)) {
+          Val = static_cast<uint32_t>(C->getZExtValue());
+          return true;
+        }
+        if (Op->isMachineOpcode()) {
+          if (Op->getMachineOpcode() == EZH::LOAD_SIMM &&
+              Op->getConstantOperandVal(2) == EZHCC::ICC_EU) {
+            Val = static_cast<uint32_t>(Op->getConstantOperandVal(0))
+                  << Op->getConstantOperandVal(1);
+            return true;
+          }
+          if (Op->getMachineOpcode() == EZH::LOAD_CONSTANT)
+            if (auto *CP = dyn_cast<ConstantPoolSDNode>(Op->getOperand(0)))
+              if (!CP->isMachineConstantPoolEntry())
+                if (auto *CI = dyn_cast<ConstantInt>(CP->getConstVal())) {
+                  Val = static_cast<uint32_t>(CI->getZExtValue());
+                  return true;
+                }
+        }
+        return false;
+      };
+      auto BiasOperand = [&](SDValue Op) {
+        uint32_t Val;
+        if (RecoverConstant(Op, Val))
+          return DAG.getConstant(Val ^ 0x80000000u, dl, MVT::i32);
+        return DAG.getNode(EZHISD::BTOG, dl, MVT::i32, Op,
+                           DAG.getConstant(31, dl, MVT::i32));
+      };
+      LHS = BiasOperand(LHS);
+      RHS = BiasOperand(RHS);
 
       // Map the signed condition codes to their unsigned counterparts
       switch (CC) {
