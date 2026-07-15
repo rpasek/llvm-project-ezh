@@ -48,13 +48,59 @@ define i32 @stack_args(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) {
   ret i32 %r
 }
 
-; Negative: only direct symbols are goto-reachable; an indirect tail call
-; stays a real call.
+; An indirect tail call becomes goto_reg (no RA write); the address lives
+; in a register that survives the epilogue (GPRTC = r0-r3).
 define i32 @indirect(ptr %fp, i32 %x) {
 ; CHECK-LABEL: indirect:
-; CHECK:       goto_regl
-; CHECK:       popd pc
+; CHECK-NOT:   pushd
+; CHECK:       goto_reg r{{[0-3]}}
+; CHECK-NOT:   goto_regl
+; CHECK-NOT:   popd
   %r = tail call i32 %fp(i32 %x)
+  ret i32 %r
+}
+
+declare i32 @g5(i32, i32, i32, i32, i32)
+declare i32 @g6(i32, i32, i32, i32, i32, i32)
+declare i32 @vf(i32, ...)
+
+; musttail with a stack argument: matching prototypes make the caller's
+; incoming slot the callee's incoming slot, so the fifth argument is
+; stored in place and the goto happens with SP back at the entry value.
+define i32 @musttail_stack(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) {
+; CHECK-LABEL: musttail_stack:
+; CHECK:       ldr r{{[0-9]}}, r{{[0-9]}}, 0
+; CHECK:       str r{{[0-9]}}, r{{[0-9]}}, 0
+; CHECK:       goto g5
+; CHECK-NOT:   gosub
+  %e2 = add i32 %e, 1
+  %r = musttail call i32 @g5(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e2)
+  ret i32 %r
+}
+
+; Swapping two stack arguments: both old values must be loaded before
+; either slot is overwritten (getStackArgumentTokenFactor ordering).
+define i32 @musttail_swap(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f) {
+; CHECK-LABEL: musttail_swap:
+; CHECK:       ldr
+; CHECK:       ldr
+; CHECK:       str
+; CHECK:       str
+; CHECK:       goto g6
+  %r = musttail call i32 @g6(i32 %a, i32 %b, i32 %c, i32 %d, i32 %f, i32 %e)
+  ret i32 %r
+}
+
+; musttail in a vararg pair forwards the ellipsis: the unnamed argument
+; registers are re-presented to the callee (here they coalesce to no code)
+; and the register save area is deallocated before the goto.
+define i32 @musttail_vararg(i32 %x, ...) {
+; CHECK-LABEL: musttail_vararg:
+; CHECK:       add_imm r0, r0, 7
+; CHECK:       add_imm sp, sp, 12
+; CHECK-NEXT:  goto vf
+  %x2 = add i32 %x, 7
+  %r = musttail call i32 (i32, ...) @vf(i32 %x2, ...)
   ret i32 %r
 }
 

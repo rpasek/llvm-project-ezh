@@ -1032,6 +1032,12 @@ let isCall = 1, isReturn = 1, isTerminator = 1, isBarrier = 1,
                              "goto$Cond $addr", [(EZH_tcret tglobaladdr:$addr)]>;
   def TCRETURNExt : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),
                                 "goto$Cond $addr", [(EZH_tcret texternalsym:$addr)]>;
+  // Indirect form (function-pointer tail calls, e.g. interpreter dispatch).
+  // The address register is restricted to GPRTC because the epilogue's pops
+  // execute before the goto_reg.
+  def TCRETURN_REG : EZHInstGotoReg<0, (outs), (ins GPRTC:$raddr, pred:$Cond),
+                                    "goto_reg$Cond $raddr",
+                                    [(EZH_tcret i32:$raddr)]>;
 }
 
 let isCall = 1, Defs = [R0, R1, R2, R3, RA] in {

@@ -1047,6 +1047,13 @@ SDValue EZHTargetLowering::LowerFormalArguments(
     int VarArgsFI;
     SmallVector<SDValue, 4> MemOps;
 
+    // In a function containing a musttail call, the tail call forwards the
+    // ellipsis: capture the entry values of the unnamed argument registers
+    // so LowerCall can reload them into the same registers at the goto.
+    SmallVectorImpl<ForwardedRegister> *Forwards = nullptr;
+    if (MF.getFrameInfo().hasMustTailInVarArgFunc())
+      Forwards = &FuncInfo->getForwardedMustTailRegParms();
+
     if (NumSpillBytes > 0) {
       FuncInfo->setVarArgsSaveSize(NumSpillBytes);
       int VaArgOffset = -static_cast<int>(NumSpillBytes);
@@ -1061,6 +1068,8 @@ SDValue EZHTargetLowering::LowerFormalArguments(
         Register VReg = RegInfo.createVirtualRegister(&EZH::GPRRegClass);
         RegInfo.addLiveIn(ArgRegs[i], VReg);
         SDValue Arg = DAG.getCopyFromReg(Chain, DL, VReg, MVT::i32);
+        if (Forwards)
+          Forwards->push_back(ForwardedRegister(VReg, ArgRegs[i], MVT::i32));
 
         unsigned StoreOffset = (i - Idx) * 4;
         SDValue Addr = DAG.getNode(ISD::ADD, DL, MVT::i32, FIN,
@@ -1093,8 +1102,6 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   CallingConv::ID CallConv = CLI.CallConv;
   bool IsVarArg = CLI.IsVarArg;
 
-  bool IsDirect = isa<GlobalAddressSDNode>(Callee) ||
-                  isa<ExternalSymbolSDNode>(Callee);
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
     Callee = DAG.getTargetGlobalAddress(G->getGlobal(), DL,
                                         getPointerTy(DAG.getDataLayout()));
@@ -1107,27 +1114,46 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
                  *DAG.getContext());
   CCInfo.AnalyzeCallOperands(Outs, CC_EZH);
 
-  // A tail call becomes a plain goto in return position, so nothing may
-  // live on the stack across it: every argument must fit in registers (no
-  // stack or byval arguments), the callee must be a direct symbol reachable
-  // by a goto, both sides must use the one supported calling convention,
-  // and varargs (with their caller-side register save area) are out.
+  // A tail call becomes a plain goto (or goto_reg) in return position.
+  // For an ordinary tail call nothing may live on the stack across it:
+  // every argument must fit in registers (no stack or byval arguments),
+  // both sides must use the one supported calling convention, and varargs
+  // (with their caller-side register save area) are out. A musttail call
+  // is guaranteed matching prototypes and calling conventions by the IR
+  // verifier, which makes those shapes mechanically forwardable: stack
+  // arguments are stored into the caller's own incoming argument slots
+  // (identical offsets from the entry SP, which the epilogue restores) and
+  // the ellipsis of a vararg pair is forwarded through the entry-captured
+  // unnamed argument registers. Only byval remains unimplemented.
+  bool IsMustTail = CLI.CB && CLI.CB->isMustTailCall();
+  bool HasByVal = false;
+  for (const ISD::OutputArg &Out : Outs)
+    HasByVal |= Out.Flags.isByVal();
   if (CLI.IsTailCall) {
     const Function &Caller = DAG.getMachineFunction().getFunction();
-    bool HasStackArgs = CCInfo.getStackSize() != 0;
-    for (const ISD::OutputArg &Out : Outs)
-      HasStackArgs |= Out.Flags.isByVal();
-    CLI.IsTailCall = IsDirect && !HasStackArgs && !IsVarArg &&
-                     !Caller.isVarArg() && CallConv == CallingConv::C &&
-                     Caller.getCallingConv() == CallingConv::C;
-    if (!CLI.IsTailCall && CLI.CB && CLI.CB->isMustTailCall())
-      report_fatal_error("failed to perform required tail call");
+    if (IsMustTail) {
+      CLI.IsTailCall = !HasByVal;
+      if (!CLI.IsTailCall)
+        report_fatal_error(
+            "musttail with a byval argument is not supported on EZH");
+    } else {
+      CLI.IsTailCall = CCInfo.getStackSize() == 0 && !HasByVal && !IsVarArg &&
+                       !Caller.isVarArg() && CallConv == CallingConv::C &&
+                       Caller.getCallingConv() == CallingConv::C;
+    }
   }
   bool IsTailCall = CLI.IsTailCall;
 
   unsigned NumBytes = CCInfo.getStackSize();
   if (!IsTailCall)
     Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
+
+  // A musttail call with stack arguments overwrites the caller's own
+  // incoming argument area. Order those stores after every pending load
+  // from that area, so swapped or shuffled arguments read their old values
+  // first.
+  if (IsTailCall && NumBytes != 0)
+    Chain = DAG.getStackArgumentTokenFactor(Chain);
 
   SmallVector<std::pair<unsigned, SDValue>, 4> RegsToPass;
   SmallVector<SDValue, 8> MemOpChains;
@@ -1161,6 +1187,19 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
     if (VA.isRegLoc()) {
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), Arg));
+    } else if (IsTailCall) {
+      // musttail: forward into the caller's own incoming argument slot,
+      // which sits at the same offset from the entry SP that the epilogue
+      // restores before the goto (matching prototypes guarantee the slot
+      // exists and lines up).
+      MachineFunction &MF = DAG.getMachineFunction();
+      int FI = MF.getFrameInfo().CreateFixedObject(
+          VA.getLocVT().getSizeInBits() / 8, VA.getLocMemOffset(),
+          /*IsImmutable=*/false);
+      SDValue FIN = DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
+      MemOpChains.push_back(
+          DAG.getStore(Chain, DL, Arg, FIN,
+                       MachinePointerInfo::getFixedStack(MF, FI)));
     } else {
       // Store to stack
       int32_t Offset = VA.getLocMemOffset();
@@ -1175,6 +1214,19 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   if (!MemOpChains.empty())
     Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, MemOpChains);
+
+  // A musttail call in a vararg function forwards the ellipsis: reload the
+  // entry values of the unnamed argument registers (captured by
+  // LowerFormalArguments) into the same registers for the callee, which
+  // re-spills them into its own save area.
+  if (IsTailCall && IsVarArg) {
+    const EZHMachineFunctionInfo *FuncInfo =
+        DAG.getMachineFunction().getInfo<EZHMachineFunctionInfo>();
+    for (const ForwardedRegister &F :
+         FuncInfo->getForwardedMustTailRegParms())
+      RegsToPass.push_back(std::make_pair(
+          F.PReg, DAG.getCopyFromReg(Chain, DL, F.VReg, F.VT)));
+  }
 
   SDValue InGlue;
   for (auto &Reg : RegsToPass) {

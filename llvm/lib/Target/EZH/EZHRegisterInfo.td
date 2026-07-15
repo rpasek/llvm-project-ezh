@@ -59,6 +59,11 @@ def GPRPair : RegisterClass<"EZH", [i64], 64, (add R0_R1, R2_R3, R4_R5, R6_R7)>;
 
 def GPRNoFPBP : RegisterClass<"EZH", [i32], 32, (add R0, R1, R2, R3, R4, R5)>;
 
+// Registers that survive a tail-calling epilogue: everything else is either
+// popped as a callee save (r4-r7) or holds the restored return address (RA)
+// by the time the terminating goto_reg executes.
+def GPRTC : RegisterClass<"EZH", [i32], 32, (add R0, R1, R2, R3)>;
+
 def GPR3Bit : RegisterClass<"EZH", [i32], 32, (add
   R0, R1, R2, R3, R4, R5, R6, R7
 )>;

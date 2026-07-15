@@ -26,6 +26,8 @@
 
 #include "EZHRegisterInfo.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/Allocator.h"
@@ -51,6 +53,11 @@ class EZHMachineFunctionInfo : public MachineFunctionInfo {
   // VarArgsRegIdx - The first register index that is spilled for varargs.
   unsigned VarArgsRegIdx;
 
+  // ForwardedMustTailRegParms - In a vararg function containing a musttail
+  // call, the entry values of the unnamed argument registers, captured so
+  // the tail call can forward the ellipsis.
+  SmallVector<ForwardedRegister, 4> ForwardedMustTailRegParms;
+
 public:
   EZHMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI)
       : VarArgsFrameIndex(0), VarArgsSaveSize(0), VarArgsRegIdx(0) {}
@@ -70,6 +77,13 @@ public:
 
   unsigned getVarArgsRegIdx() const { return VarArgsRegIdx; }
   void setVarArgsRegIdx(unsigned Idx) { VarArgsRegIdx = Idx; }
+
+  SmallVectorImpl<ForwardedRegister> &getForwardedMustTailRegParms() {
+    return ForwardedMustTailRegParms;
+  }
+  const SmallVectorImpl<ForwardedRegister> &getForwardedMustTailRegParms() const {
+    return ForwardedMustTailRegParms;
+  }
 };
 
 } // namespace llvm
