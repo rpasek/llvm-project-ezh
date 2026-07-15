@@ -47,6 +47,8 @@ TESTS = [
     "llvm/test/CodeGen/EZH/tail-call.ll",
     "llvm/test/CodeGen/EZH/predicated-pop.ll",
     "llvm/test/CodeGen/EZH/stack-addr-fold.ll",
+    "llvm/test/CodeGen/EZH/cmp-zero-canon.ll",
+    "llvm/test/CodeGen/EZH/const-materialize.ll",
     "clang/test/CodeGen/EZH/builtins-event.c",
     "clang/test/CodeGen/EZH/builtins-gpio.c",
     "clang/test/Sema/builtins-ezh.c",

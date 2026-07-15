@@ -601,6 +601,31 @@ static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
   if (CC == ISD::SETGT || CC == ISD::SETGE || CC == ISD::SETLT ||
       CC == ISD::SETLE) {
 
+    // Canonicalize toward compare-with-zero, the shape a plain sub_imms
+    // handles with the sign-derived conditions (PO/NE/AZ/ZB) and no
+    // bias sequence: put a constant on the right, then fold +/-1 bounds
+    // into the zero bound.
+    if (isa<ConstantSDNode>(LHS) && !isa<ConstantSDNode>(RHS)) {
+      std::swap(LHS, RHS);
+      CC = ISD::getSetCCSwappedOperands(CC);
+    }
+    if (auto *C = dyn_cast<ConstantSDNode>(RHS)) {
+      int64_t V = C->getSExtValue();
+      if (V == 1 && CC == ISD::SETLT) { // x < 1  ->  x <= 0
+        RHS = DAG.getConstant(0, dl, MVT::i32);
+        CC = ISD::SETLE;
+      } else if (V == 1 && CC == ISD::SETGE) { // x >= 1  ->  x > 0
+        RHS = DAG.getConstant(0, dl, MVT::i32);
+        CC = ISD::SETGT;
+      } else if (V == -1 && CC == ISD::SETGT) { // x > -1  ->  x >= 0
+        RHS = DAG.getConstant(0, dl, MVT::i32);
+        CC = ISD::SETGE;
+      } else if (V == -1 && CC == ISD::SETLE) { // x <= -1  ->  x < 0
+        RHS = DAG.getConstant(0, dl, MVT::i32);
+        CC = ISD::SETLT;
+      }
+    }
+
     // Determine if both operands are guaranteed to fit in the signed 16-bit
     // range
     bool LHSExt = (LHS.getOpcode() == ISD::SIGN_EXTEND_INREG ||
@@ -632,6 +657,15 @@ static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
     bool IsSafe16Bit = (LHSExt && RHSExt) || (LHSExt && RHSConst) ||
                        (RHSExt && LHSConst) || (LHSConst && RHSConst);
 
+    // Comparing against zero subtracts zero: the result IS the left
+    // operand, so no overflow is possible and the sign-derived conditions
+    // are exact. This kills the whole bias sequence for the most common
+    // signed compares (x < 0, x >= 0, and the +/-1 forms canonicalized
+    // above), and the resulting sub_imms x, 0 is exactly the shape the
+    // compare-fusion pass folds into an ALU producer's S-twin.
+    if (auto *C = dyn_cast<ConstantSDNode>(RHS))
+      IsSafe16Bit |= C->isZero();
+
     if (!IsSafe16Bit) {
       // Toggle the sign bit (bit 31) of both operands to shift the signed range
       // monotonically into the unsigned range, enabling unsigned comparison.
@@ -646,10 +680,13 @@ static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
           return true;
         }
         if (Op->isMachineOpcode()) {
-          if (Op->getMachineOpcode() == EZH::LOAD_SIMM &&
+          if ((Op->getMachineOpcode() == EZH::LOAD_SIMM ||
+               Op->getMachineOpcode() == EZH::LOAD_SIMMN) &&
               Op->getConstantOperandVal(2) == EZHCC::ICC_EU) {
             Val = static_cast<uint32_t>(Op->getConstantOperandVal(0))
                   << Op->getConstantOperandVal(1);
+            if (Op->getMachineOpcode() == EZH::LOAD_SIMMN)
+              Val = ~Val;
             return true;
           }
           if (Op->getMachineOpcode() == EZH::LOAD_CONSTANT)
@@ -919,6 +956,21 @@ SDValue EZHTargetLowering::LowerConstant(SDValue Op, SelectionDAG &DAG) const {
     return HiNode;
   }
 
+  // The inverted form covers what load_simm cannot: low-ones masks and
+  // near-INT_MAX values (0xFFFF = ~(-1 << 16), 0x7FFFFFFF = ~(-1 << 31)),
+  // which otherwise all pay a constant-pool slot and a pc-relative load.
+  uint32_t NUVal = ~UVal;
+  unsigned NTZ = llvm::countr_zero(NUVal);
+  int32_t NMovedVal = static_cast<int32_t>(NUVal) >> NTZ;
+  if (isInt<11>(NMovedVal)) {
+    SDValue Hi =
+        DAG.getTargetConstant(static_cast<uint32_t>(NMovedVal), DL, MVT::i32);
+    SDValue Shift = DAG.getTargetConstant(NTZ, DL, MVT::i32);
+    SDValue Pred = DAG.getTargetConstant(EZHCC::ICC_EU, DL, MVT::i32);
+    return SDValue(
+        DAG.getMachineNode(EZH::LOAD_SIMMN, DL, MVT::i32, Hi, Shift, Pred), 0);
+  }
+
   // For large constants, use an inline literal pool (LOAD_CONSTANT)
   SDValue CPIdx = DAG.getTargetConstantPool(
       ConstantInt::get(Type::getInt32Ty(*DAG.getContext()), UVal),
@@ -934,20 +986,31 @@ SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
   SDLoc DL(Op);
 
   if (auto *GV = dyn_cast<GlobalAddressSDNode>(Op)) {
+    // A small offset is added to the pooled base address instead of minting
+    // one pool entry per (global, offset): the bare-global load CSEs across
+    // every field/element access of the same object, and the add usually
+    // folds straight into a load/store offset or an add_imm. Only offsets
+    // outside the add_imm immediate range still pool the combined value.
+    int64_t Offset = GV->getOffset();
     SDValue CPIdx;
-    if (GV->getOffset() != 0) {
+    if (Offset != 0 && !isInt<11>(Offset)) {
       EZHConstantPoolValue *CPV =
-          new EZHConstantPoolValue(GV->getGlobal(), GV->getOffset(),
+          new EZHConstantPoolValue(GV->getGlobal(), Offset,
                                    Type::getInt32Ty(*DAG.getContext()));
       CPIdx = DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
+      Offset = 0;
     } else {
       CPIdx = DAG.getTargetConstantPool(GV->getGlobal(),
                                         getPointerTy(DAG.getDataLayout()));
     }
     SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-    return SDValue(
+    SDValue Base = SDValue(
         DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops),
         0);
+    if (Offset != 0)
+      Base = DAG.getNode(ISD::ADD, DL, MVT::i32, Base,
+                         DAG.getConstant(Offset, DL, MVT::i32));
+    return Base;
   }
 
   if (auto *S = dyn_cast<ExternalSymbolSDNode>(Op)) {
@@ -1440,6 +1503,14 @@ SDValue EZHTargetLowering::PerformDAGCombine(SDNode *N,
     return Chain;
   }
   return SDValue();
+}
+
+// Let CodeGenPrepare duplicate returns into predecessors so conditionally
+// reached calls in tail position become sibling calls; without this a
+// function whose tail call sits behind a branch keeps its gosub and the
+// otherwise-unnecessary RA save.
+bool EZHTargetLowering::mayBeEmittedAsTailCall(const CallInst *CI) const {
+  return CI->isTailCall();
 }
 
 bool EZHTargetLowering::decomposeMulByConstant(LLVMContext &Context, EVT VT,

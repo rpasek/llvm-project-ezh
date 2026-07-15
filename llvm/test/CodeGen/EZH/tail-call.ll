@@ -145,3 +145,19 @@ define i32 @mixed(i32 %x) {
   %r = tail call i32 @g(i32 %x)
   ret i32 %r
 }
+
+; A conditionally reached tail call: mayBeEmittedAsTailCall lets
+; CodeGenPrepare duplicate the return, and the if-converter then predicates
+; the whole sibling call -- a conditional goto straight to the callee.
+define i32 @cond_tail(i32 %x) {
+; CHECK-LABEL: cond_tail:
+; CHECK:       goto_nc g
+; CHECK-NOT:   gosub
+  %c = icmp sgt i32 %x, 5
+  br i1 %c, label %call, label %exit
+call:
+  %r = tail call i32 @g(i32 %x)
+  ret i32 %r
+exit:
+  ret i32 %x
+}
