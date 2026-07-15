@@ -105,7 +105,8 @@ bool EZHFrameLowering::spillCalleeSavedRegisters(
 
   CFIInstBuilder CFI(MBB, MI, MachineInstr::FrameSetup);
   EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
-  int64_t CFAOffset = FuncInfo->getVarArgsSaveSize();
+  int64_t CFAOffset =
+      FuncInfo->getVarArgsSaveSize() + FuncInfo->getTailCallSlotSize();
 
   for (const CalleeSavedInfo &CS : CSI) {
     unsigned Reg = CS.getReg();
@@ -149,7 +150,8 @@ bool EZHFrameLowering::restoreCalleeSavedRegisters(
 
     if (Reg == EZH::RA && &Info == FirstCSI && MI != MBB.end() &&
         MI->isReturn() && !MI->isCall() &&
-        !MF.getInfo<EZHMachineFunctionInfo>()->getVarArgsSaveSize()) {
+        !MF.getInfo<EZHMachineFunctionInfo>()->getVarArgsSaveSize() &&
+        !MF.getInfo<EZHMachineFunctionInfo>()->getTailCallSlotSize()) {
       // Pop directly into PC to return in a single instruction!
       MachineInstrBuilder MIB =
           BuildMI(MBB, MI, DL, TII.get(EZH::LDR_POST), EZH::PC)
@@ -195,7 +197,11 @@ void EZHFrameLowering::emitPrologue(MachineFunction &MF,
   DebugLoc DL;
 
   EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
-  unsigned VarArgsSaveSize = FuncInfo->getVarArgsSaveSize();
+  // The frame's top block: the vararg save area plus the pinned
+  // memory-form tail-call slot, allocated before the CSR pushes so both
+  // keep small constant offsets from the entry SP.
+  unsigned VarArgsSaveSize =
+      FuncInfo->getVarArgsSaveSize() + FuncInfo->getTailCallSlotSize();
   const std::vector<CalleeSavedInfo> &CSI = MFI.getCalleeSavedInfo();
   unsigned CSRSize = CSI.size() * 4;
 
@@ -320,7 +326,10 @@ void EZHFrameLowering::emitEpilogue(MachineFunction &MF,
   unsigned CSRSize = CSI.size() * 4;
 
   EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
-  unsigned VarArgsSaveSize = FuncInfo->getVarArgsSaveSize();
+  // Includes the pinned memory-form tail-call slot: deallocated together
+  // with the vararg save area, after the CSR pops.
+  unsigned VarArgsSaveSize =
+      FuncInfo->getVarArgsSaveSize() + FuncInfo->getTailCallSlotSize();
 
   unsigned StackSize = MFI.getStackSize();
   unsigned LocalSize = StackSize - VarArgsSaveSize - CSRSize;
@@ -511,7 +520,8 @@ bool EZHFrameLowering::assignCalleeSavedSpillSlots(
   EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
   const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
 
-  unsigned VarArgsSaveSize = FuncInfo->getVarArgsSaveSize();
+  unsigned VarArgsSaveSize =
+      FuncInfo->getVarArgsSaveSize() + FuncInfo->getTailCallSlotSize();
   unsigned CSRSize = CSI.size() * 4;
 
   MFI.setStackSize(MFI.getStackSize() + CSRSize + VarArgsSaveSize);

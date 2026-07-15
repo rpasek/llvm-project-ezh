@@ -25,7 +25,7 @@
  * interrupts on, so every tail call also exercises the
  * poll-before-epilogue placement. Runner: run_musttail.sh.
  */
-volatile unsigned r1, r2, r3, r4, r5, r6;
+volatile unsigned r1, r2, r3, r4, r5, r6, r7;
 
 static int __attribute__((noinline)) g5(int a, int b, int c, int d, int e) {
   return a + 2*b + 3*c + 4*d + 5*e;
@@ -69,6 +69,15 @@ static int __attribute__((noinline)) must4(int a, int b, int c, int d) {
   __attribute__((musttail)) return fp4(a, b, c, d);
 }
 
+/* memory-form musttail from a large frame: the target slot is pinned at
+ * the top of the frame, so the post-teardown load stays in range even
+ * with 600 bytes of locals */
+static int __attribute__((noinline)) must4_large(int a, int b, int c, int d) {
+  volatile char buf[600];
+  buf[599] = 1;
+  __attribute__((musttail)) return fp4(a + buf[599], b, c, d);
+}
+
 /* deep sibling chain: also exercises the poll-before-epilogue path */
 static int __attribute__((noinline)) c3(int x) { return x + 100; }
 static int __attribute__((noinline)) c2(int x) { return c3(x + 10); }
@@ -83,5 +92,6 @@ int main(void) {
   r4 = (unsigned)(dispatch(table[0], in7) + dispatch(table[1], in7)); /* 10+14 = 24 */
   r5 = (unsigned)c1(inx);                    /* 116 */
   r6 = (unsigned)must4(in1, in2, in3, in4);  /* 1+4+9+16 = 30 */
-  return (r1 == 60 && r2 == 90 && r3 == 60 && r4 == 24 && r5 == 116 && r6 == 30) ? 0 : 1;
+  r7 = (unsigned)must4_large(in1, in2, in3, in4); /* sum4(2,2,3,4) = 2+4+9+16 = 31 */
+  return (r1 == 60 && r2 == 90 && r3 == 60 && r4 == 24 && r5 == 116 && r6 == 30 && r7 == 31) ? 0 : 1;
 }

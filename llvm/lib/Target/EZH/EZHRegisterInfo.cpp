@@ -105,9 +105,10 @@ bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // frame down: SP is back at its entry value, so the slot sits at its raw
   // (negative) object offset from SP -- just below the final stack pointer.
   // The callee's own pushes land on that memory only after this load has
-  // consumed it. No register is free at this point, so an out-of-range
-  // offset cannot be materialized; frames anywhere near that size cannot
-  // arise from the four-register-argument musttail shape this serves.
+  // consumed it. The slot is a fixed object pinned at the top of the frame
+  // (LowerCall places it just below the vararg save area), so this offset
+  // is a small constant regardless of the size of the locals; the range
+  // check is a safety net that cannot fire for compiler-generated frames.
   if (MI.getOpcode() == EZH::TCRETURN_MEM) {
     int PostOffset = MF.getFrameInfo().getObjectOffset(FrameIndex) + Offset;
     if (PostOffset < -512 || PostOffset > 508 || (PostOffset & 3) != 0)

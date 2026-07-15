@@ -58,6 +58,13 @@ class EZHMachineFunctionInfo : public MachineFunctionInfo {
   // the tail call can forward the ellipsis.
   SmallVector<ForwardedRegister, 4> ForwardedMustTailRegParms;
 
+  // TailCallSlot - Frame index and size of the memory-form tail-call target
+  // slot: a fixed object pinned at the very top of the frame (just below
+  // the vararg save area), so its offset from the restored entry SP is
+  // small and constant no matter how large the locals are.
+  int TailCallSlotFI = 0;
+  unsigned TailCallSlotSize = 0;
+
 public:
   EZHMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI)
       : VarArgsFrameIndex(0), VarArgsSaveSize(0), VarArgsRegIdx(0) {}
@@ -83,6 +90,13 @@ public:
   }
   const SmallVectorImpl<ForwardedRegister> &getForwardedMustTailRegParms() const {
     return ForwardedMustTailRegParms;
+  }
+
+  int getTailCallSlotFI() const { return TailCallSlotFI; }
+  unsigned getTailCallSlotSize() const { return TailCallSlotSize; }
+  void setTailCallSlot(int FI, unsigned Size) {
+    TailCallSlotFI = FI;
+    TailCallSlotSize = Size;
   }
 };
 

@@ -58,7 +58,7 @@ RE = os.environ["EZH_READELF"]
 syms = {}
 for L in subprocess.check_output([RE, "-s", ELF]).decode().splitlines():
     f = L.split()
-    if len(f) >= 8 and f[7] in ("exc_signal","r1","r2","r3","r4","r5","r6"):
+    if len(f) >= 8 and f[7] in ("exc_signal","r1","r2","r3","r4","r5","r6","r7"):
         syms[f[7]] = int(f[1], 16)
 def rd(o, x):
     for _ in range(6):
@@ -75,10 +75,10 @@ o.cmd("load_image %s" % ELF, settle=0.7)
 o.cmd("mww 0x40027024 0xC0DE0010"); o.cmd("mww 0x40027020 0x24100000"); o.cmd("mww 0x40027024 0xC0DE0011")
 time.sleep(1.5)
 exc = rd(o, syms["exc_signal"])
-vals = {k: rd(o, syms[k]) for k in ("r1","r2","r3","r4","r5","r6")}
-exp = {"r1":60,"r2":90,"r3":60,"r4":24,"r5":116,"r6":30}
+vals = {k: rd(o, syms[k]) for k in ("r1","r2","r3","r4","r5","r6","r7")}
+exp = {"r1":60,"r2":90,"r3":60,"r4":24,"r5":116,"r6":30,"r7":31}
 print("exc_signal = 0x%08X" % exc)
-for k in ("r1","r2","r3","r4","r5","r6"):
+for k in ("r1","r2","r3","r4","r5","r6","r7"):
     print("  %s = %d (expect %d)" % (k, vals[k], exp[k]))
 ok = exc == 0xCAFEBABE and all(vals[k] == exp[k] for k in exp)
 print("\n>>> MUSTTAIL SELF-TEST %s <<<" % ("PASSED" if ok else "FAILED"))

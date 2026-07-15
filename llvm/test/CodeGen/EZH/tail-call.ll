@@ -161,3 +161,18 @@ call:
 exit:
   ret i32 %x
 }
+
+; The memory-form slot is pinned at the top of the frame, so its offset
+; from the restored entry SP stays a small constant even when the locals
+; are far larger than the ldr immediate range.
+define i32 @musttail_indirect_large_frame(i32 %a, i32 %b, i32 %c, i32 %d) {
+; CHECK-LABEL: musttail_indirect_large_frame:
+; CHECK:       ldr pc, sp, -4
+entry:
+  %buf = alloca [600 x i8], align 4
+  %p = getelementptr [600 x i8], ptr %buf, i32 0, i32 599
+  store volatile i8 1, ptr %p
+  %fp = load ptr, ptr @fptr
+  %r = musttail call i32 %fp(i32 %a, i32 %b, i32 %c, i32 %d)
+  ret i32 %r
+}

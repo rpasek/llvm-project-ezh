@@ -1296,11 +1296,22 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   // Memory-form musttail: no register can carry the target across the
   // epilogue, so park it in a stack slot; the terminator loads it straight
-  // into PC after the frame teardown (see TCRETURN_MEM). Handing the
+  // into PC after the frame teardown (see TCRETURN_MEM). The slot is a
+  // fixed object pinned at the very top of the frame, just below the
+  // vararg save area, so its offset from the restored entry SP stays a
+  // small constant no matter how large the locals are (the frame lowering
+  // allocates and deallocates it alongside the vararg area). Handing the
   // FrameIndex over as the callee makes ISel pick that form.
   if (IsTailCall && NeedsMemForm) {
     MachineFunction &MF = DAG.getMachineFunction();
-    int FI = MF.getFrameInfo().CreateStackObject(4, Align(4), false);
+    EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
+    if (!FuncInfo->getTailCallSlotSize())
+      FuncInfo->setTailCallSlot(
+          MF.getFrameInfo().CreateFixedObject(
+              4, -(int64_t)FuncInfo->getVarArgsSaveSize() - 4,
+              /*IsImmutable=*/false),
+          4);
+    int FI = FuncInfo->getTailCallSlotFI();
     SDValue Slot = DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
     Chain = DAG.getStore(Chain, DL, Callee, Slot,
                          MachinePointerInfo::getFixedStack(MF, FI));
