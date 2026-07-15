@@ -44,6 +44,7 @@ TESTS = [
     "llvm/test/CodeGen/EZH/cmp-fusion.ll",
     "llvm/test/CodeGen/EZH/mul-const.ll",
     "llvm/test/CodeGen/EZH/signed-cmp-bias.ll",
+    "llvm/test/CodeGen/EZH/tail-call.ll",
     "clang/test/CodeGen/EZH/builtins-event.c",
     "clang/test/CodeGen/EZH/builtins-gpio.c",
     "clang/test/Sema/builtins-ezh.c",

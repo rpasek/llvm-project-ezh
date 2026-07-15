@@ -40,6 +40,7 @@ enum NodeType : unsigned {
   PER_WRITE,
   RET_GLUE_INTERNAL,
   CALL,
+  TC_RETURN,
   CMP,
   BR_CC,
   SELECT_CC,

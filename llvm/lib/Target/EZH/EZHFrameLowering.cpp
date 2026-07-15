@@ -148,7 +148,7 @@ bool EZHFrameLowering::restoreCalleeSavedRegisters(
     unsigned Reg = Info.getReg();
 
     if (Reg == EZH::RA && &Info == FirstCSI && MI != MBB.end() &&
-        MI->isReturn() &&
+        MI->isReturn() && !MI->isCall() &&
         !MF.getInfo<EZHMachineFunctionInfo>()->getVarArgsSaveSize()) {
       // Pop directly into PC to return in a single instruction!
       MachineInstrBuilder MIB =

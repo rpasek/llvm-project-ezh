@@ -58,6 +58,14 @@ public:
 
         bool IsBranchOrCall = MI.isBranch() || MI.isCall();
 
+        // Never inject before a tail call: the epilogue has just restored
+        // the live return address into RA, and gotol_bs writes RA. The
+        // window closes when the callee's prologue saves RA again, before
+        // any of its own injection points.
+        if (MI.getOpcode() == EZH::TCRETURN ||
+            MI.getOpcode() == EZH::TCRETURNExt)
+          continue;
+
         if (IsBranchOrCall) {
           BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(EZH::GOTOL))
               .addExternalSymbol("bitslice_handler")

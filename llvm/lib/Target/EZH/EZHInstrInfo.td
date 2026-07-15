@@ -34,6 +34,7 @@ def SDT_EZHCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 def SDT_EZHCallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 def SDT_EZHCall : SDTypeProfile<0, -1, [SDTCisVT<0, i32>]>;
 def EZH_call : SDNode<"EZHISD::CALL", SDT_EZHCall, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+def EZH_tcret : SDNode<"EZHISD::TC_RETURN", SDT_EZHCall, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 def EZH_adjcallstackdown : SDNode<"ISD::CALLSEQ_START", SDT_EZHCallSeqStart, [SDNPHasChain, SDNPOutGlue]>;
 def EZH_adjcallstackup : SDNode<"ISD::CALLSEQ_END", SDT_EZHCallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def EZH_ret_glue_node : SDNode<"EZHISD::RET_GLUE_INTERNAL", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
@@ -65,6 +66,15 @@ def calltarget : Operand<i32>, ImmLeaf<i32, [{ return (Imm & 3) == 0; }]> {
 }
 
 def brtarget : Operand<OtherVT> {
+  let PrintMethod = "printBranchTarget";
+  let EncoderMethod = "getBranchTargetOpValue";
+  let DecoderMethod = "decodeSimm21";
+}
+
+// Symbol target in a goto's 21-bit address field (tail calls): same
+// encoding and fixup as brtarget, but i32-typed so it can match
+// tglobaladdr/texternalsym in patterns.
+def tcalltarget : Operand<i32> {
   let PrintMethod = "printBranchTarget";
   let EncoderMethod = "getBranchTargetOpValue";
   let DecoderMethod = "decodeSimm21";
@@ -1010,6 +1020,19 @@ def SYNCH_ALL_TO_BEAT : EZHInstSingle<OP_NOP, (outs), (ins imm1:$Imm), "synch_al
 }
 
 // Call instructions
+// Tail call: a plain goto (no RA write) in return position, so the callee
+// returns directly to this function's caller. Same 21-bit encoding and
+// fixup as any direct goto. EZHBitSliceInjection deliberately skips these:
+// with bitslice interrupts the epilogue has just restored the live return
+// address into RA, and an injected gotol_bs would clobber it.
+let isCall = 1, isReturn = 1, isTerminator = 1, isBarrier = 1,
+    isCodeGenOnly = 1, Uses = [SP] in {
+  def TCRETURN : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),
+                             "goto$Cond $addr", [(EZH_tcret tglobaladdr:$addr)]>;
+  def TCRETURNExt : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),
+                                "goto$Cond $addr", [(EZH_tcret texternalsym:$addr)]>;
+}
+
 let isCall = 1, Defs = [R0, R1, R2, R3, RA] in {
   def CALL : EZHInstCall<OP_GOSUB, (outs), (ins calltarget:$addr), "gosub $addr", [(EZH_call tglobaladdr:$addr)]>;
   let isCodeGenOnly = 1 in

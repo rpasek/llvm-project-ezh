@@ -1089,8 +1089,8 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   CallingConv::ID CallConv = CLI.CallConv;
   bool IsVarArg = CLI.IsVarArg;
 
-  CLI.IsTailCall = false;
-
+  bool IsDirect = isa<GlobalAddressSDNode>(Callee) ||
+                  isa<ExternalSymbolSDNode>(Callee);
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
     Callee = DAG.getTargetGlobalAddress(G->getGlobal(), DL,
                                         getPointerTy(DAG.getDataLayout()));
@@ -1103,8 +1103,27 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
                  *DAG.getContext());
   CCInfo.AnalyzeCallOperands(Outs, CC_EZH);
 
+  // A tail call becomes a plain goto in return position, so nothing may
+  // live on the stack across it: every argument must fit in registers (no
+  // stack or byval arguments), the callee must be a direct symbol reachable
+  // by a goto, both sides must use the one supported calling convention,
+  // and varargs (with their caller-side register save area) are out.
+  if (CLI.IsTailCall) {
+    const Function &Caller = DAG.getMachineFunction().getFunction();
+    bool HasStackArgs = CCInfo.getStackSize() != 0;
+    for (const ISD::OutputArg &Out : Outs)
+      HasStackArgs |= Out.Flags.isByVal();
+    CLI.IsTailCall = IsDirect && !HasStackArgs && !IsVarArg &&
+                     !Caller.isVarArg() && CallConv == CallingConv::C &&
+                     Caller.getCallingConv() == CallingConv::C;
+    if (!CLI.IsTailCall && CLI.CB && CLI.CB->isMustTailCall())
+      report_fatal_error("failed to perform required tail call");
+  }
+  bool IsTailCall = CLI.IsTailCall;
+
   unsigned NumBytes = CCInfo.getStackSize();
-  Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
+  if (!IsTailCall)
+    Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
 
   SmallVector<std::pair<unsigned, SDValue>, 4> RegsToPass;
   SmallVector<SDValue, 8> MemOpChains;
@@ -1170,6 +1189,11 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   if (InGlue.getNode())
     Ops.push_back(InGlue);
+
+  // A tail call is the terminator: the callee returns to our caller, so
+  // there is no result to receive and no call sequence to tear down.
+  if (IsTailCall)
+    return DAG.getNode(EZHISD::TC_RETURN, DL, MVT::Other, Ops);
 
   Chain =
       DAG.getNode(EZHISD::CALL, DL, DAG.getVTList(MVT::Other, MVT::Glue), Ops);
@@ -1269,6 +1293,8 @@ const char *EZHTargetLowering::getTargetNodeName(unsigned Opcode) const {
     return "EZHISD::RET_GLUE_INTERNAL";
   case EZHISD::CALL:
     return "EZHISD::CALL";
+  case EZHISD::TC_RETURN:
+    return "EZHISD::TC_RETURN";
   case EZHISD::CMP:
     return "EZHISD::CMP";
   case EZHISD::BR_CC:
