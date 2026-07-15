@@ -101,6 +101,23 @@ bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
   int Offset = MI.getOperand(FIOperandNum + 1).getImm();
 
+  // The memory-form tail call executes after the epilogue has torn the
+  // frame down: SP is back at its entry value, so the slot sits at its raw
+  // (negative) object offset from SP -- just below the final stack pointer.
+  // The callee's own pushes land on that memory only after this load has
+  // consumed it. No register is free at this point, so an out-of-range
+  // offset cannot be materialized; frames anywhere near that size cannot
+  // arise from the four-register-argument musttail shape this serves.
+  if (MI.getOpcode() == EZH::TCRETURN_MEM) {
+    int PostOffset = MF.getFrameInfo().getObjectOffset(FrameIndex) + Offset;
+    if (PostOffset < -512 || PostOffset > 508 || (PostOffset & 3) != 0)
+      report_fatal_error(
+          "EZH musttail: tail-call target slot out of load range");
+    MI.getOperand(FIOperandNum).ChangeToRegister(EZH::SP, false);
+    MI.getOperand(FIOperandNum + 1).ChangeToImmediate(PostOffset);
+    return false;
+  }
+
   const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
   Register FrameReg = EZH::SP;
 

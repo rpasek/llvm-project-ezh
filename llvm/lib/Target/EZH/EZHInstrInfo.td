@@ -1038,6 +1038,18 @@ let isCall = 1, isReturn = 1, isTerminator = 1, isBarrier = 1,
   def TCRETURN_REG : EZHInstGotoReg<0, (outs), (ins GPRTC:$raddr, pred:$Cond),
                                     "goto_reg$Cond $raddr",
                                     [(EZH_tcret i32:$raddr)]>;
+  // Memory form, for a musttail indirect call whose arguments occupy all
+  // four GPRTC registers: the target is parked in a stack slot before the
+  // epilogue and loaded straight into PC after the frame is gone -- the
+  // same load-into-PC mechanism the jump-table dispatch uses -- so it
+  // needs no register at all. eliminateFrameIndex resolves the slot
+  // against the restored entry SP (a small negative offset); selected
+  // manually in EZHISelDAGToDAG when TC_RETURN's target is a FrameIndex.
+  let mayLoad = 1 in
+  def TCRETURN_MEM : EZHInstMem<OP_LDR, 0, 1, 0, 0, 0, (outs),
+                                (ins GPR:$Rd, GPR:$Rn,
+                                     imms8_word_offset:$Offset, pred:$Cond),
+                                "ldr$Cond $Rd, $Rn, $Offset", []>;
 }
 
 let isCall = 1, Defs = [R0, R1, R2, R3, RA] in {

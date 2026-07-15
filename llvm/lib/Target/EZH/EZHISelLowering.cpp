@@ -1102,6 +1102,8 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   CallingConv::ID CallConv = CLI.CallConv;
   bool IsVarArg = CLI.IsVarArg;
 
+  bool IsDirect = isa<GlobalAddressSDNode>(Callee) ||
+                  isa<ExternalSymbolSDNode>(Callee);
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
     Callee = DAG.getTargetGlobalAddress(G->getGlobal(), DL,
                                         getPointerTy(DAG.getDataLayout()));
@@ -1129,6 +1131,19 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   bool HasByVal = false;
   for (const ISD::OutputArg &Out : Outs)
     HasByVal |= Out.Flags.isByVal();
+  unsigned NumRegArgs = 0;
+  for (const CCValAssign &VA : ArgLocs)
+    NumRegArgs += VA.isRegLoc();
+  if (IsVarArg)
+    NumRegArgs += DAG.getMachineFunction()
+                      .getInfo<EZHMachineFunctionInfo>()
+                      ->getForwardedMustTailRegParms()
+                      .size();
+  // The register form of an indirect tail call needs one epilogue-surviving
+  // register (GPRTC = r0-r3) free for the target. When the arguments occupy
+  // all four, an ordinary tail call simply falls back to a real call, and a
+  // musttail call takes the memory form below.
+  bool NeedsMemForm = !IsDirect && NumRegArgs >= 4;
   if (CLI.IsTailCall) {
     const Function &Caller = DAG.getMachineFunction().getFunction();
     if (IsMustTail) {
@@ -1138,7 +1153,8 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
             "musttail with a byval argument is not supported on EZH");
     } else {
       CLI.IsTailCall = CCInfo.getStackSize() == 0 && !HasByVal && !IsVarArg &&
-                       !Caller.isVarArg() && CallConv == CallingConv::C &&
+                       !Caller.isVarArg() && !NeedsMemForm &&
+                       CallConv == CallingConv::C &&
                        Caller.getCallingConv() == CallingConv::C;
     }
   }
@@ -1214,6 +1230,19 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   if (!MemOpChains.empty())
     Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, MemOpChains);
+
+  // Memory-form musttail: no register can carry the target across the
+  // epilogue, so park it in a stack slot; the terminator loads it straight
+  // into PC after the frame teardown (see TCRETURN_MEM). Handing the
+  // FrameIndex over as the callee makes ISel pick that form.
+  if (IsTailCall && NeedsMemForm) {
+    MachineFunction &MF = DAG.getMachineFunction();
+    int FI = MF.getFrameInfo().CreateStackObject(4, Align(4), false);
+    SDValue Slot = DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
+    Chain = DAG.getStore(Chain, DL, Callee, Slot,
+                         MachinePointerInfo::getFixedStack(MF, FI));
+    Callee = Slot;
+  }
 
   // A musttail call in a vararg function forwards the ellipsis: reload the
   // entry values of the unnamed argument registers (captured by

@@ -271,6 +271,37 @@ void EZHDAGToDAGISel::Select(SDNode *Node) {
   case ISD::FrameIndex:
     selectFrameIndex(Node);
     return;
+  case EZHISD::TC_RETURN: {
+    // The memory form of a musttail indirect call carries its target as a
+    // FrameIndex (see LowerCall): select it manually to TCRETURN_MEM. A
+    // pattern would materialize the slot address into a register, which is
+    // exactly what this form exists to avoid. Register and direct targets
+    // fall through to the patterns.
+    auto *FIN = dyn_cast<FrameIndexSDNode>(Node->getOperand(1));
+    if (!FIN)
+      break;
+    SDLoc DL(Node);
+    unsigned NumOps = Node->getNumOperands();
+    SDValue Glue;
+    if (Node->getOperand(NumOps - 1).getValueType() == MVT::Glue)
+      Glue = Node->getOperand(--NumOps);
+    SmallVector<SDValue, 8> Ops;
+    Ops.push_back(CurDAG->getRegister(EZH::PC, MVT::i32));
+    Ops.push_back(CurDAG->getTargetFrameIndex(FIN->getIndex(),
+                                              TLI->getPointerTy(
+                                                  CurDAG->getDataLayout())));
+    Ops.push_back(CurDAG->getTargetConstant(0, DL, MVT::i32));
+    Ops.push_back(CurDAG->getTargetConstant(EZHCC::ICC_EU, DL, MVT::i32));
+    for (unsigned i = 2; i < NumOps; ++i)
+      Ops.push_back(Node->getOperand(i)); // argument-register uses
+    Ops.push_back(Node->getOperand(0));   // chain
+    if (Glue)
+      Ops.push_back(Glue);
+    MachineSDNode *Res =
+        CurDAG->getMachineNode(EZH::TCRETURN_MEM, DL, MVT::Other, Ops);
+    ReplaceNode(Node, Res);
+    return;
+  }
   case ISD::LOAD:
   case ISD::STORE:
     if (tryIndexedLoadStore(Node))

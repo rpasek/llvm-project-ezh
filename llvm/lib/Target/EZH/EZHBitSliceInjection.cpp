@@ -69,7 +69,8 @@ public:
         // slot always exists.
         if (MI.getOpcode() == EZH::TCRETURN ||
             MI.getOpcode() == EZH::TCRETURNExt ||
-            MI.getOpcode() == EZH::TCRETURN_REG) {
+            MI.getOpcode() == EZH::TCRETURN_REG ||
+            MI.getOpcode() == EZH::TCRETURN_MEM) {
           MachineBasicBlock::iterator InsertPt = MI.getIterator();
           while (InsertPt != MBB.begin() &&
                  std::prev(InsertPt)->getFlag(MachineInstr::FrameDestroy))

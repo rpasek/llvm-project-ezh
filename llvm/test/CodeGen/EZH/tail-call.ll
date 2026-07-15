@@ -104,6 +104,34 @@ define i32 @musttail_vararg(i32 %x, ...) {
   ret i32 %r
 }
 
+@fptr = external global ptr
+
+; With all four argument registers occupied, no epilogue-surviving register
+; can carry an indirect target, so an ordinary tail call falls back to a
+; real call rather than failing register allocation.
+define i32 @indirect_4args_fallback(i32 %a, i32 %b, i32 %c, i32 %d) {
+; CHECK-LABEL: indirect_4args_fallback:
+; CHECK:       goto_regl
+; CHECK:       popd pc
+  %fp = load ptr, ptr @fptr
+  %r = tail call i32 %fp(i32 %a, i32 %b, i32 %c, i32 %d)
+  ret i32 %r
+}
+
+; The same shape as musttail must still be honored: the target is parked in
+; a stack slot before the epilogue and loaded straight into PC after the
+; frame teardown (a small negative offset from the restored entry SP), so
+; it needs no register at all.
+define i32 @musttail_indirect_4args(i32 %a, i32 %b, i32 %c, i32 %d) {
+; CHECK-LABEL: musttail_indirect_4args:
+; CHECK:       str
+; CHECK-NOT:   goto_reg
+; CHECK:       ldr pc, sp, -{{[0-9]+}}
+  %fp = load ptr, ptr @fptr
+  %r = musttail call i32 %fp(i32 %a, i32 %b, i32 %c, i32 %d)
+  ret i32 %r
+}
+
 ; With bitslice interrupts, a function that mixes a real call with a tail
 ; call keeps the RA save and restores RA (not PC) before the final goto.
 define i32 @mixed(i32 %x) {
