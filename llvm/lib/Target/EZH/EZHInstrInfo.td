@@ -1022,9 +1022,10 @@ def SYNCH_ALL_TO_BEAT : EZHInstSingle<OP_NOP, (outs), (ins imm1:$Imm), "synch_al
 // Call instructions
 // Tail call: a plain goto (no RA write) in return position, so the callee
 // returns directly to this function's caller. Same 21-bit encoding and
-// fixup as any direct goto. EZHBitSliceInjection deliberately skips these:
-// with bitslice interrupts the epilogue has just restored the live return
-// address into RA, and an injected gotol_bs would clobber it.
+// fixup as any direct goto. EZHBitSliceInjection places the tail call's
+// interrupt poll BEFORE the epilogue rather than before the goto itself:
+// by the goto, the epilogue has restored the live return address into RA,
+// which the injected gotol_bs would clobber.
 let isCall = 1, isReturn = 1, isTerminator = 1, isBarrier = 1,
     isCodeGenOnly = 1, Uses = [SP] in {
   def TCRETURN : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),

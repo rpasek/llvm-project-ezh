@@ -6,9 +6,11 @@ declare void @h()
 declare i32 @many(i32, i32, i32, i32, i32)
 
 ; A sibling call is a plain goto: no RA save, no gosub, no return.
-; With bitslice interrupts (BS) the result is identical here: the function
-; has no injection points (the injector skips tail-call terminators), so
-; even the normally forced RA save is elided.
+; With bitslice interrupts (BS) the tail call keeps its interrupt poll --
+; a cycle of unconditional tail calls must not starve the handler -- but
+; the poll sits BEFORE the epilogue, where RA's live value is still in its
+; stack slot; after popd ra nothing may clobber RA until the callee saves
+; it again.
 define i32 @sibcall(i32 %x) {
 ; CHECK-LABEL: sibcall:
 ; CHECK-NOT:   pushd
@@ -18,9 +20,10 @@ define i32 @sibcall(i32 %x) {
 ; CHECK-NOT:   popd
 
 ; BS-LABEL: sibcall:
-; BS-NOT:   pushd
-; BS-NOT:   gotol_bs
+; BS:       pushd ra
 ; BS:       add_imm r0, r0, 1
+; BS-NEXT:  gotol_bs bitslice_handler
+; BS-NEXT:  popd ra
 ; BS-NEXT:  goto g
   %y = add i32 %x, 1
   %r = tail call i32 @g(i32 %y)

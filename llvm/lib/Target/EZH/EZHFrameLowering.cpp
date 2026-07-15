@@ -544,20 +544,18 @@ void EZHFrameLowering::determineCalleeSaves(MachineFunction &MF,
 
   // RA must survive real calls (gosub writes it) and, with bitslice
   // interrupts, any injected gotol_bs (which also writes it). The injector
-  // only fires before branches and calls and deliberately skips tail-call
-  // terminators, so a single-block function containing no branch or call
-  // other than a possible tail-call exit has no injection points at all:
-  // RA is never clobbered and need not be saved even in bitslice mode.
-  // Single-block only, because later layout passes may add branches to
-  // multi-block functions after this decision is made.
+  // fires before every branch and call -- including tail calls, whose poll
+  // lands before the epilogue and therefore needs RA's stack slot to
+  // exist -- so only a single-block function containing no branch or call
+  // whatsoever has no injection points: there RA is never clobbered and
+  // need not be saved even in bitslice mode. Single-block only, because
+  // later layout passes may add branches to multi-block functions after
+  // this decision is made.
   bool NeedsRASave = MF.getFrameInfo().hasCalls();
   if (!NeedsRASave && STI.hasBitSliceInterrupts()) {
     bool NoInjectionPoints =
-        MF.size() == 1 && llvm::all_of(MF.front(), [](const MachineInstr &MI) {
-          if (!MI.isBranch() && !MI.isCall())
-            return true;
-          return MI.getOpcode() == EZH::TCRETURN ||
-                 MI.getOpcode() == EZH::TCRETURNExt;
+        MF.size() == 1 && llvm::none_of(MF.front(), [](const MachineInstr &MI) {
+          return MI.isBranch() || MI.isCall();
         });
     NeedsRASave = !NoInjectionPoints;
   }

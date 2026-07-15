@@ -58,13 +58,27 @@ public:
 
         bool IsBranchOrCall = MI.isBranch() || MI.isCall();
 
-        // Never inject before a tail call: the epilogue has just restored
-        // the live return address into RA, and gotol_bs writes RA. The
-        // window closes when the callee's prologue saves RA again, before
-        // any of its own injection points.
+        // A tail call still needs its poll -- a cycle of unconditional
+        // tail calls would otherwise never enter the handler -- but the
+        // injection cannot go directly before it: the epilogue has already
+        // restored the live return address into RA and gotol_bs writes RA.
+        // Instead, inject before the epilogue (the contiguous FrameDestroy
+        // run ending at the tail call), where RA's value still sits safely
+        // in its stack slot. determineCalleeSaves guarantees that a
+        // bitslice-mode function containing a tail call saves RA, so that
+        // slot always exists.
         if (MI.getOpcode() == EZH::TCRETURN ||
-            MI.getOpcode() == EZH::TCRETURNExt)
+            MI.getOpcode() == EZH::TCRETURNExt) {
+          MachineBasicBlock::iterator InsertPt = MI.getIterator();
+          while (InsertPt != MBB.begin() &&
+                 std::prev(InsertPt)->getFlag(MachineInstr::FrameDestroy))
+            --InsertPt;
+          BuildMI(MBB, InsertPt, MI.getDebugLoc(), TII->get(EZH::GOTOL))
+              .addExternalSymbol("bitslice_handler")
+              .addImm(EZHCC::ICC_BS);
+          Changed = true;
           continue;
+        }
 
         if (IsBranchOrCall) {
           BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(EZH::GOTOL))
