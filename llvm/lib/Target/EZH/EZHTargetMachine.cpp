@@ -125,7 +125,10 @@ void EZHPassConfig::addPreSched2() {
     addPass(&IfConverterID);
 }
 
-void EZHPassConfig::addPreEmitPass() {}
+void EZHPassConfig::addPreEmitPass() {
+  if (getOptLevel() != CodeGenOptLevel::None)
+    addPass(createEZHCompareFusionPass());
+}
 
 void EZHPassConfig::addPreEmitPass2() {
   addPass(createEZHBitSliceInjectionPass());

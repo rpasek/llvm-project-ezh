@@ -38,6 +38,7 @@ add_llvm_target(EZHCodeGen
   EZHAsmPrinter.cpp
   EZHBasicBlockInfo.cpp
   EZHBitSliceInjection.cpp
+  EZHCompareFusion.cpp
   EZHConstantIslandPass.cpp
   EZHFrameLowering.cpp
   EZHInstrInfo.cpp

@@ -34,6 +34,7 @@ FunctionPass *createEZHISelDag(EZHTargetMachine &TM);
 
 FunctionPass *createEZHConstantIslandPass();
 FunctionPass *createEZHBitSliceInjectionPass();
+FunctionPass *createEZHCompareFusionPass();
 
 void initializeEZHAsmPrinterPass(PassRegistry &);
 void initializeEZHDAGToDAGISelLegacyPass(PassRegistry &);
