@@ -203,7 +203,7 @@ unsigned long long shlv(unsigned long long x, unsigned n) { return x << n; }   /
 
 Fix: EZHISelLowering.cpp:301-303 sets SHL_PARTS/SRA_PARTS/SRL_PARTS to Expand, which makes the type legalizer fall back to the runtime call. Change to Custom and implement LowerShiftLeftParts/LowerShiftRightParts (clone ARM's, using EZH predicated moves instead of branches). Optionally keep the libcall at MinSize since the call site is 3 insns; the win is -O2 speed.
 
-## [8] GlobalMerge pass not in pipeline: every small global costs its own pool entry + pc-relative load per function
+## [8] [DONE 4cd99235] GlobalMerge pass not in pipeline: every small global costs its own pool entry + pc-relative load per function
 
 Estimated win: 8 bytes per merged global per function (4B pool entry + 4B pc-load); ~14KB / ~4% over the 361KB corpus; near-trivial effort since GlobalMerge is a stock pass
 
