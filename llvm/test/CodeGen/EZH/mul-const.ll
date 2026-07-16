@@ -55,10 +55,12 @@ define i32 @mul365(i32 %a) {
   ret i32 %r
 }
 
-; No chain of at most three instructions exists: stays a libcall.
+; No chain of at most three instructions exists: stays a libcall, and as
+; the sole use feeds the return it tail-calls the helper.
 define i32 @mul1234567(i32 %a) {
 ; CHECK-LABEL: mul1234567:
-; CHECK:       gosub __mulsi3
+; CHECK:       goto __mulsi3
+; CHECK-NOT:   gosub
   %r = mul i32 %a, 1234567
   ret i32 %r
 }

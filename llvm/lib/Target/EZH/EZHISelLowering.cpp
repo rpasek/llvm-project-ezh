@@ -1673,6 +1673,38 @@ bool EZHTargetLowering::mayBeEmittedAsTailCall(const CallInst *CI) const {
   return CI->isTailCall();
 }
 
+// A single-result call whose value flows only into the function's return is
+// in tail position -- notably a return-position libcall (return a / b), which
+// otherwise pays a gosub plus an RA save and pop. Enabling this lets those
+// forward straight to the helper (goto __divsi3). Only the single-value case
+// is handled; i64 returns (a register pair) fall back to a normal call.
+bool EZHTargetLowering::isUsedByReturnOnly(SDNode *N, SDValue &Chain) const {
+  if (N->getNumValues() != 1)
+    return false;
+  if (!N->hasNUsesOfValue(1, 0))
+    return false;
+
+  SDNode *Copy = *N->user_begin();
+  if (Copy->getOpcode() != ISD::CopyToReg)
+    return false;
+  // A glue operand on the copy means it is not safe to tail-call.
+  if (Copy->getOperand(Copy->getNumOperands() - 1).getValueType() == MVT::Glue)
+    return false;
+
+  // The copied value must feed only the return, nothing else.
+  bool HasRet = false;
+  for (SDNode *U : Copy->users()) {
+    if (U->getOpcode() != EZHISD::RET_GLUE_INTERNAL)
+      return false;
+    HasRet = true;
+  }
+  if (!HasRet)
+    return false;
+
+  Chain = Copy->getOperand(0);
+  return true;
+}
+
 // The truth about EZH addressing, so LSR and friends cost formulas
 // honestly: base register plus an immediate (word [-512, 508], byte
 // [-128, 127]), or base plus an unscaled index register with no offset
