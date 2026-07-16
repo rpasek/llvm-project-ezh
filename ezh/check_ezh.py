@@ -54,6 +54,7 @@ TESTS = [
     "llvm/test/CodeGen/EZH/pool-remat.ll",
     "llvm/test/CodeGen/EZH/select-const.ll",
     "llvm/test/CodeGen/EZH/global-merge.ll",
+    "llvm/test/CodeGen/EZH/i64-shift.ll",
     "clang/test/CodeGen/EZH/builtins-event.c",
     "clang/test/CodeGen/EZH/builtins-gpio.c",
     "clang/test/Sema/builtins-ezh.c",

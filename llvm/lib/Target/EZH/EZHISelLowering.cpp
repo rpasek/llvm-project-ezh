@@ -303,9 +303,14 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
     setIndexedStoreAction(ISD::PRE_DEC, VT, Legal);
   }
 
-  setOperationAction(ISD::SHL_PARTS, MVT::i32, Expand);
-  setOperationAction(ISD::SRA_PARTS, MVT::i32, Expand);
-  setOperationAction(ISD::SRL_PARTS, MVT::i32, Expand);
+  // Variable 64-bit shifts inline as the branchless two-word sequence
+  // (~12 instructions with predicated selects) instead of the
+  // __ashldi3/__lshrdi3/__ashrdi3 libcalls and their RA save: about five
+  // times fewer cycles per shift. Constant-amount i64 shifts never came
+  // through here (the type legalizer resolves them directly).
+  setOperationAction(ISD::SHL_PARTS, MVT::i32, Custom);
+  setOperationAction(ISD::SRA_PARTS, MVT::i32, Custom);
+  setOperationAction(ISD::SRL_PARTS, MVT::i32, Custom);
 }
 
 bool EZHTargetLowering::getIndexedAddressParts(SDNode *N, SDValue Ptr,
@@ -537,6 +542,13 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::GlobalTLSAddress:
   case ISD::ExternalSymbol:
     return LowerGlobalAddress(Op, DAG);
+  case ISD::SHL_PARTS:
+  case ISD::SRA_PARTS:
+  case ISD::SRL_PARTS: {
+    SDValue Lo, Hi;
+    expandShiftParts(Op.getNode(), Lo, Hi, DAG);
+    return DAG.getMergeValues({Lo, Hi}, SDLoc(Op));
+  }
   case ISD::SELECT_CC:
     return LowerSELECT_CC(Op, DAG);
   case ISD::VASTART:

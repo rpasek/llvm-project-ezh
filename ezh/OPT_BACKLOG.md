@@ -344,3 +344,23 @@ unsigned udiv10(unsigned x) { return x / 10; }   // also x/3, x%10 etc., -O2
 
 Fix: Custom-lower ISD::UDIV/UREM (and SDIV via sign-fixup) for constant divisors from a small table of shift-add reciprocal recipes in EZHISelLowering.cpp (or a DAGCombine before the LibCall action triggers), gated on OptForSpeed / divisor in table. UREM as x - d*(x/d) reuses the existing mul-by-constant chain (EZHISelLowering.cpp:1421). Lower priority / more work than findings 1-3, but the only path to non-pow2 constant division without a hardware multiply.
 
+
+## [KNOWN ISSUE] Predicated GOTO carries a static isBarrier, so -verify-machineinstrs fails on any conditional branch
+
+External review: "MBB exits via conditional branch/fall-through but ends with a
+barrier instruction". GOTO is one opcode whose predicate is an operand, but
+isBarrier is a static MCID flag: every predicated (conditional) goto can fall
+through, contradicting the flag. Semantics are correct today -- analyzeBranch
+and friends are predicate-aware -- but the machine verifier cannot run clean,
+which blocks using it as a routine safety net.
+
+Fix: split the opcode into an unconditional GOTO (isBarrier = 1, no predicate)
+and a conditional GOTO_CC (isBarrier = 0, predicate operand), updating
+analyzeBranch / insertBranch / removeBranch / PredicateInstruction /
+EZHCompareFusion / EZHBitSliceInjection / EZHConstantIslandPass, plus the
+predicated-tail-call selection (TCRETURN carries the same pattern).
+
+Warning from project history: a bare flip of GOTO's isBarrier to 0 was tried in
+an earlier session and MISCOMPILED the C++ SjLj exception dispatch (reverted;
+generic passes rely on barrier-ness of unconditional branches). The split is
+the only sound shape for this fix -- do not retry the flip.
