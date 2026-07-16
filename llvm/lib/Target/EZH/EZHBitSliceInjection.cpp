@@ -67,13 +67,14 @@ public:
         // so only the unconditional TCRETURN* forms (handled below) appear
         // here. Enforce it unconditionally (not just an assert): a violation
         // would otherwise silently inject a gotol_bs that clobbers the live
-        // RA -- a wrong-return-address miscompile -- and the check is four
-        // integer compares on branch/call instructions only. report_fatal_error
-        // keeps release compilers loud too.
-        if (MI.getOpcode() == EZH::TCRETURN_CC ||
-            MI.getOpcode() == EZH::TCRETURNExt_CC ||
-            MI.getOpcode() == EZH::TCRETURN_REG_CC ||
-            MI.getOpcode() == EZH::TCRETURN_MEM_CC)
+        // RA -- a wrong-return-address miscompile. The IsBranchOrCall gate
+        // keeps the four compares off ordinary instructions without losing
+        // coverage (every _CC twin is isCall). report_fatal_error keeps
+        // release compilers loud too.
+        if (IsBranchOrCall && (MI.getOpcode() == EZH::TCRETURN_CC ||
+                               MI.getOpcode() == EZH::TCRETURNExt_CC ||
+                               MI.getOpcode() == EZH::TCRETURN_REG_CC ||
+                               MI.getOpcode() == EZH::TCRETURN_MEM_CC))
           report_fatal_error(
               "EZH: predicated tail call in a bitslice-interrupt function");
 

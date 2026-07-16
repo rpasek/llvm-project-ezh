@@ -582,14 +582,18 @@ multiclass AndOrOps<string sf_suffix> {
 //===----------------------------------------------------------------------===//
 // Pseudo Instructions
 //===----------------------------------------------------------------------===//
-let mayLoad = 1, hasSideEffects = 0 in {
-  // Reading the constant pool is invariant (the lowering attaches an
-  // invariant MMO), so the load can be rematerialized instead of spilled
-  // and CSEd across blocks.
-  let isReMaterializable = 1 in
-  def LOAD_CONSTANT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm), "", []>;
-  def LOAD_CONSTANT_COND : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm, pred:$Cond), "", []>;
-}
+// Reading the constant pool is invariant (the lowering attaches an
+// invariant MMO), so the unconditional load can be rematerialized instead
+// of spilled and CSEd across blocks.
+let mayLoad = 1, hasSideEffects = 0, isReMaterializable = 1 in
+def LOAD_CONSTANT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm), "", []>;
+// The predicated form reads the unmodelled condition flags, so like every
+// other *_CC twin it must carry hasSideEffects=1 (and not be remat/CSE
+// fodder). It is only ever created by the constant-island pass's
+// conditional-branch fixup (post-RA, after all instruction motion), so this
+// is descriptor honesty rather than an active-bug fix.
+let mayLoad = 1, hasSideEffects = 1 in
+def LOAD_CONSTANT_COND : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm, pred:$Cond), "", []>;
 // Not isBarrier: this pseudo is emitted as data at the end of the function, so
 // the block that holds it "falls off the end" and -verify-machineinstrs rejects
 // a barrier as the last instruction of a fall-through block (ARM's equivalent is

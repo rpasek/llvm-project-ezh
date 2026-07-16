@@ -435,9 +435,13 @@ with hasSideEffects = 1, and PredicateInstruction switching opcode instead of
 rewriting an operand.
 
 CLOSING STATUS (2026-07-16): the split shipped for every opcode whose base
-descriptor is movable (the four materializers, b87fb16; LOAD_CONSTANT was
-already split; the GOTO and TCRETURN barrier splits are the sibling item
-above). The general predicated ALU ops keep their shared opcodes by DESIGN,
+descriptor is movable (the four materializers, b87fb16; the GOTO and TCRETURN
+barrier splits are the sibling item above). LOAD_CONSTANT was already a
+separate opcode pair, but external review caught that LOAD_CONSTANT_COND
+inherited hasSideEffects=0 from the shared let block -- a predicated
+flag-reader wearing the movable flag. Corrected to hasSideEffects=1
+(behavior-neutral: it is only created by the constant-island pass's
+conditional-branch fixup, post-RA, after all instruction motion). The general predicated ALU ops keep their shared opcodes by DESIGN,
 not omission: their shared descriptor (hasSideEffects=1) is already correct
 for the predicated instances and merely conservative for the unpredicated
 ones, so there is no dishonesty left to fix and a uniform ALU _CC split would

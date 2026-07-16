@@ -54,3 +54,15 @@ define i32 @mask_or_val(i32 %c, i32 %y) {
   %r = select i1 %t, i32 %y, i32 65535
   ret i32 %r
 }
+
+; Shifted (non-inverted) materializations fold too, covering the fourth twin.
+define i32 @shifted_val(i32 %c, i32 %y) {
+; CHECK-LABEL: shifted_val:
+; CHECK:       load_simm_nz r{{[0-9]}}, 65536
+; MIR-LABEL: name: shifted_val
+; MIR-NOT: LOAD_SIMM 1
+; MIR: LOAD_SIMM_CC 1, 16, 2
+  %t = icmp eq i32 %c, 0
+  %r = select i1 %t, i32 %y, i32 65536
+  ret i32 %r
+}
