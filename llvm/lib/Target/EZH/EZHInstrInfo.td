@@ -511,13 +511,13 @@ multiclass LoadImmOps<string opc_str, string sf_suffix, bit is_immn = 0> {
   // The plain (non-flag-setting) form is safely rematerializable: pure
   // immediate, flag-transparent. hasSideEffects must be 0 for that to
   // work: LiveRangeEdit gates remat on MachineInstr::isSafeToMove, which
-  // rejects unmodelled side effects with no target override. The
-  // descriptor is shared with the predicated encodings (the predicate is
-  // an operand), which DO read unmodelled flags; today nothing moves
-  // machine instructions after the if-converter creates them, and
-  // EZHSubtarget pins that invariant by keeping the post-RA scheduler
-  // off. The architecturally complete fix is a predicated/unpredicated
-  // opcode split -- see OPT_BACKLOG.md.
+  // rejects unmodelled side effects with no target override. This movable
+  // descriptor is valid because the base opcode only ever carries the
+  // unconditional (EU) form: predicating one rewrites it to its codegen-only
+  // *_CC twin (defined after this foreach loop; hasSideEffects=1, not
+  // rematerializable) via EZHInstrInfo::PredicateInstruction, so no
+  // predicated instance -- which reads the unmodelled condition flags --
+  // ever wears this descriptor.
   let isReMaterializable = !empty(sf_suffix),
       isAsCheapAsAMove = !empty(sf_suffix),
       hasSideEffects = !if(!empty(sf_suffix), 0, 1) in

@@ -384,7 +384,7 @@ an earlier session and MISCOMPILED the C++ SjLj exception dispatch (reverted;
 generic passes rely on barrier-ness of unconditional branches). The split is
 the only sound shape for this fix -- do not retry the flip.
 
-## [KNOWN ISSUE] [DONE b87fb16 for the materializers] Predicated and unpredicated encodings share opcodes and descriptors
+## [KNOWN ISSUE] [RESOLVED: b87fb16 split + 7c4ec21 investigation] Predicated and unpredicated encodings share opcodes and descriptors
 
 DONE 2026-07-16 (b87fb16382a5) for the IMMEDIATE MATERIALIZERS -- the load-bearing
 case this item is about (load_imm / load_simm want honest movable descriptors so
@@ -417,26 +417,31 @@ the post-RA scheduler hoists loads to hide the load-use latency -- a separate,
 silicon-validated effort of modest expected value on a simple in-order core.
 Until then the pin stays (cheap, and now redundant-for-safety anyway).
 
-Sibling of the GOTO isBarrier issue above, surfaced by external review of the
+ORIGINAL ANALYSIS (retained for context; the prescription in its last sentence
+is exactly what b87fb16 implemented for every opcode that needed it): sibling of
+the GOTO isBarrier issue above, surfaced by external review of the
 immediate-remat change: the predicate is an operand, so static MCID flags
 cannot distinguish a pure unpredicated load_imm (safe to move, remat, CSE)
 from a predicated load_imm_cc (reads unmodelled flags, must not move). The
 descriptor dilemma is unsolvable per-instance: LiveRangeEdit gates remat on
 MachineInstr::isSafeToMove, which rejects unmodelled side effects with no
 target override, so hasSideEffects = 1 kills remat and hasSideEffects = 0
-under-describes the predicated instances. Today the pipeline is safe by
-construction (predicated instances only exist after the if-converter, and the
-post-RA scheduler is pinned off via targetSchedulesPostRAScheduling), but the
-complete fix is an opcode split: unpredicated opcodes with honest movable
-descriptors, predicated *_CC opcodes with hasSideEffects = 1, and
-PredicateInstruction switching opcode instead of rewriting an operand.
+under-describes the predicated instances. The complete fix is an opcode split:
+unpredicated opcodes with honest movable descriptors, predicated *_CC opcodes
+with hasSideEffects = 1, and PredicateInstruction switching opcode instead of
+rewriting an operand.
 
-STILL OPEN (2026-07-16): this is the remaining half of the predication-modeling
-overhaul. The GOTO/GOTO_CC branch split shipped on its own in 725f496 (see the
-item above), which is what unblocked -verify-machineinstrs; this general
-materializer split (load_imm / load_imm_cc etc.) was NOT part of that commit and
-is a modeling-purity item, not a correctness blocker -- the verifier runs clean
-today because the pipeline is safe by construction.
+CLOSING STATUS (2026-07-16): the split shipped for every opcode whose base
+descriptor is movable (the four materializers, b87fb16; LOAD_CONSTANT was
+already split; the GOTO and TCRETURN barrier splits are the sibling item
+above). The general predicated ALU ops keep their shared opcodes by DESIGN,
+not omission: their shared descriptor (hasSideEffects=1) is already correct
+for the predicated instances and merely conservative for the unpredicated
+ones, so there is no dishonesty left to fix and a uniform ALU _CC split would
+be codegen-neutral churn. If post-RA scheduling is ever wanted (SchedModel +
+pin drop, see the investigation note above), it is already safe without any
+further split. MIR regression tests (select-const.ll, tail-call.ll,
+-stop-after=if-converter) pin the PredicateInstruction opcode rewrite.
 
 ## [DEFERRED - unsafe minimal fixes] Jump-table dispatch clobbers RA as scratch, forcing pushd ra in leaf switch functions
 

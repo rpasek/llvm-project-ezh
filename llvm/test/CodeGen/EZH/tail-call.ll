@@ -1,5 +1,14 @@
 ; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 ; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -O3 < %s | FileCheck %s --check-prefix=BS
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 -stop-after=if-converter < %s | FileCheck %s --check-prefix=MIR
+
+; The MIR prefix pins the internal conditional-tail-call opcode split: when the
+; if-converter predicates a tail-call return it must switch it to its *_CC twin
+; (isBarrier/isReturn cleared -- the block keeps a fall-through successor),
+; never leave a non-EU predicate on the base TCRETURN whose descriptor is a
+; barrier. The emitted asm is identical either way (the twins share the
+; encoding), so only a -stop-after=if-converter check can catch a regression in
+; PredicateInstruction's opcode rewrite.
 
 declare i32 @g(i32)
 declare void @h()
@@ -18,6 +27,10 @@ define i32 @sibcall(i32 %x) {
 ; CHECK-NEXT:  goto g
 ; CHECK-NOT:   gosub
 ; CHECK-NOT:   popd
+
+; An unconditional tail call stays on the base (barrier) TCRETURN opcode.
+; MIR-LABEL: name: sibcall
+; MIR: TCRETURN @g, 0
 
 ; BS-LABEL: sibcall:
 ; BS:       pushd ra
@@ -153,6 +166,11 @@ define i32 @cond_tail(i32 %x) {
 ; CHECK-LABEL: cond_tail:
 ; CHECK:       goto_nc g
 ; CHECK-NOT:   gosub
+; The predicated tail call must be the TCRETURN_CC twin (not a barrier, keeps
+; its fall-through successor), never a base TCRETURN with a non-EU predicate.
+; MIR-LABEL: name: cond_tail
+; MIR-NOT: TCRETURN @g
+; MIR: TCRETURN_CC @g, 8
   %c = icmp sgt i32 %x, 5
   br i1 %c, label %call, label %exit
 call:
