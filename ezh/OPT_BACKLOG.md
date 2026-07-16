@@ -394,13 +394,28 @@ PredicateInstruction rewrites the base opcode to its _CC twin instead of just
 setting the predicate operand, exactly the fix prescribed below. Byte-identical
 codegen (0/244 gcc-torture at -O2, bitslice on and off); 3078/3078 silicon O0+Os.
 The isReMaterializableImpl isPredicated guard is now defensive, not load-bearing.
-REMAINING (lower value, kept OPEN): the GENERAL predicated ALU ops (add_ze,
-sub_nz, mov_cc, ...) still share opcodes and still rely on the no-post-RA-
-scheduling pin. Splitting all of them would let targetSchedulesPostRAScheduling
-be dropped and a post-RA scheduler run -- but those ops are not remat/CSE
-candidates and an in-order core gains little from post-RA scheduling, so the pin
-is cheap to keep. Split them only if a concrete need for post-RA scheduling
-appears.
+GENERAL ALU ops -- investigated 2026-07-16, NO split needed. The general
+predicated ALU ops (add_ze, sub_nz, mov_cc, ...) share opcodes with their
+unpredicated forms, but unlike the materializers they are NOT dishonest: the
+EZHInstALU/Shifted formats give every ALU op hasSideEffects=1, which is correct
+for a predicated instance (it reads flags) and merely conservative for an
+unpredicated one. A survey confirmed the ONLY movable (hasSideEffects=0 /
+isReMaterializable) descriptors in the whole backend are the materializers and
+LOAD_CONSTANT -- all already split. So a general ALU _CC split would be pure
+codegen-neutral churn with no honesty fix.
+
+The pin (targetSchedulesPostRAScheduling=true) was investigated as the real
+lever. Finding: it is now SAFELY DROPPABLE -- with every predicated instance at
+hasSideEffects=1, the generic post-RA scheduler keeps each S-form producer
+adjacent to its predicated consumer (verified: enabling it kept `subs` directly
+before `mov_ca`, -verify-machineinstrs clean, 11/244 corpus files changed, all
+benign load reshuffles). BUT dropping it yields NO benefit: the active model is
+NoSchedModel, so the scheduler has no latencies to hide and only reshuffles
+loads unprincipledly. The genuine optimization is to wire up a real SchedModel
+(an unused EZHSchedModel with LoadLatency=2 already exists) AND drop the pin, so
+the post-RA scheduler hoists loads to hide the load-use latency -- a separate,
+silicon-validated effort of modest expected value on a simple in-order core.
+Until then the pin stays (cheap, and now redundant-for-safety anyway).
 
 Sibling of the GOTO isBarrier issue above, surfaced by external review of the
 immediate-remat change: the predicate is an operand, so static MCID flags

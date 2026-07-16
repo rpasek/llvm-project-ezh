@@ -71,12 +71,25 @@ public:
   // schedule nothing: this is the hook that keeps the generic pipeline
   // from ever inserting a post-RA scheduler, including through the
   // -post-RA-scheduler and -misched-postra options (a subtarget
-  // enablePostRAScheduler override is bypassable by both). No instruction
-  // motion may run after the if-converter: predicated instructions read
-  // the unmodelled condition flags, and several opcodes (the immediate
-  // materializers among them) share descriptors between predicated and
-  // unpredicated encodings. The complete fix is a predicated/unpredicated
-  // opcode split (see ezh/OPT_BACKLOG.md).
+  // enablePostRAScheduler override is bypassable by both). Predicated
+  // instructions read the unmodelled condition flags, so no pass may move a
+  // predicated consumer away from its flag-setting (S-form) producer.
+  //
+  // The descriptor-sharing hazard that once compounded this (the immediate
+  // materializers were rematerializable/hasSideEffects=0 yet shared their
+  // opcode with the predicated encodings) is now gone: the materializer and
+  // GOTO/TCRETURN opcode splits mean every predicated instance carries
+  // hasSideEffects=1. An experiment (2026-07-16) confirmed that with that in
+  // place the generic post-RA scheduler DOES preserve the S-form/predicated
+  // adjacency -- hasSideEffects=1 orders every flag-setter and flag-reader
+  // relative to each other (verified: subs stays immediately before its
+  // mov_ca; -verify-machineinstrs clean). So the pin is retained not for
+  // safety but for value: the active model is NoSchedModel, so post-RA
+  // scheduling has no latencies to hide and only reshuffles loads without
+  // benefit on this in-order core. Dropping it is worthwhile only together
+  // with a real SchedModel (an unused EZHSchedModel with LoadLatency=2 exists)
+  // to actually hide the load-use latency -- a separate, silicon-validated
+  // effort. See ezh/OPT_BACKLOG.md.
   bool targetSchedulesPostRAScheduling() const override { return true; }
 
   TargetLoweringObjectFile *getObjFileLowering() const override {
