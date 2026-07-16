@@ -39,15 +39,16 @@ build() { # $1 = tag, $2... = extra flags
 build on
 build off -mllvm -enable-machine-outliner=never
 
-NOUT=$($B/llvm-objdump --triple=ezh -d self_on.elf | grep -c "OUTLINED_FUNCTION" || true)
+NOUT=$($B/llvm-objdump --triple=ezh -d self_on.elf | grep -cE "<OUTLINED_FUNCTION_[0-9]+>:" || true)
+NCALL=$($B/llvm-objdump --triple=ezh -d self_on.elf | grep -cE "gosub.*OUTLINED_FUNCTION" || true)
 if [ "$NOUT" -eq 0 ]; then echo "FAIL: outliner did not fire in the ON build"; exit 1; fi
 # Every outlined body: only whitelisted opcodes + one trailing return; no
 # branch/call/_s/predicated/adc/sbc/ra-write/pc-relative-load.
 BAD=$($B/llvm-objdump --triple=ezh -d self_on.elf \
   | awk '/<OUTLINED_FUNCTION_[0-9]+>:/{o=1;next} o&&/^[0-9a-f]+ <[A-Za-z_]/{o=0} o&&/mov[ \t]+pc, ra/{o=0;next} o{print}' \
-  | grep -viE "add |sub |and |or |xor |mov |lsl|lsr|asr|ror|andor|load_imm|load_simm|gotol_bs" || true)
+  | grep -viE "add |sub |and |or |xor |mov |lsl|lsr|asr|ror|andor|load_imm|load_simm" || true)
 if [ -n "$BAD" ]; then echo "FAIL: non-whitelisted op in an outlined body:"; echo "$BAD"; exit 1; fi
-echo "outliner fired: $NOUT outlined functions, bodies clean"
+echo "outliner fired: $NOUT outlined helper(s), $NCALL call sites, bodies clean (no branch/call/pc-load/flag op)"
 cd ..
 
 if ! nc -z 127.0.0.1 4444 2>/dev/null; then
@@ -91,16 +92,40 @@ def run(elf):
     del o
     return exc, res
 
+M = 0xFFFFFFFF
+def mix(a, b, c, d):
+    x = (a ^ b) & M
+    x = ((x & c) | d) & M
+    x = (((x << 3) & M) ^ (x >> 5)) & M
+    x = (x + a - b) & M
+    x = ((x | c) & d) & M
+    x = (((x << 7) & M) | (x >> 9)) & M
+    x = ((x ^ a) + ((c << 2) & M)) & M
+    x = (((x - d) & M) ^ ((b << 1) & M)) & M
+    return x & M
+def golden():
+    s = 0x1234; g = []
+    for i in range(24):
+        g.append(mix((s + i) & M, (s ^ (i * 7)) & M, ((i << 3) + 5) & M, (~i) & M))
+    for (a, b, c, d) in ((0xAAAA, 0x5555, 0x0F0F, 0xF0F0), (1, 2, 3, 4)):
+        g.append((mix(a, b, c, d) + a - b + c - d) & M)
+    return g
+GOLD = golden()
+
 exc_on, res_on = run("out_outliner/self_on.elf")
 time.sleep(0.3)
 exc_off, res_off = run("out_outliner/self_off.elf")
 print("ON  exc=0x%08X" % exc_on)
 print("OFF exc=0x%08X" % exc_off)
-ok = (exc_on == 0xCAFEBABE and exc_off == 0xCAFEBABE and res_on == res_off)
-if res_on != res_off:
-    for i,(a,b) in enumerate(zip(res_on,res_off)):
-        if a != b: print("  MISMATCH [%d] on=0x%08x off=0x%08x" % (i,a,b))
-print("\n>>> OUTLINER DIFFERENTIAL %s (%d results identical) <<<" %
-      ("PASSED" if ok else "FAILED", sum(1 for a,b in zip(res_on,res_off) if a==b)))
+ok = (exc_on == 0xCAFEBABE and exc_off == 0xCAFEBABE and
+      res_on == res_off and res_on == GOLD)
+for i in range(len(GOLD)):
+    if res_on[i] != GOLD[i]:
+        print("  GOLDEN MISMATCH [%d] on=0x%08x golden=0x%08x" % (i, res_on[i], GOLD[i]))
+    elif res_on[i] != res_off[i]:
+        print("  ON/OFF MISMATCH [%d] on=0x%08x off=0x%08x" % (i, res_on[i], res_off[i]))
+print("\n>>> OUTLINER DIFFERENTIAL %s (%d/%d match ON, OFF, and host golden) <<<" %
+      ("PASSED" if ok else "FAILED",
+       sum(1 for i in range(len(GOLD)) if res_on[i]==res_off[i]==GOLD[i]), len(GOLD)))
 sys.exit(0 if ok else 1)
 PY

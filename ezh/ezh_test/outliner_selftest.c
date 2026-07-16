@@ -17,11 +17,13 @@
 /*
  * On-board differential self-test for the MachineOutliner. run_outliner.sh
  * builds this twice -- outliner ON and OFF -- and checks that the result
- * table is byte-identical and matches a host-computed golden. Any
+ * table is byte-identical between the two builds AND matches a golden set
+ * of values recomputed on the host from the same MIX kernel. Any
  * divergence means an outlined sequence changed behavior (a whitelist
  * miscompile). The MIX kernel is a long run of pure register ALU shared
- * across many framed functions, so the outliner fires; the probes plant
- * live values around the shared kernel where a bad clobber would show.
+ * across 24 framed functions (extracted into one outlined helper), so the
+ * outliner fires; the probes plant live values around the shared kernel
+ * where a bad clobber would show.
  */
 
 volatile unsigned g_results[40];
