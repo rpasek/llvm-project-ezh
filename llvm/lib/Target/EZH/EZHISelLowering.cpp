@@ -1941,7 +1941,10 @@ EZHTargetLowering::emitEHSjLjSetJmp(MachineInstr &MI,
       .addImm(EZHCC::ICC_EU);
   MainMBB->addSuccessor(SinkMBB);
 
-  // RestoreMBB returns 1 on builtin longjmp return
+  // RestoreMBB returns 1 on builtin longjmp return. The abnormal entry
+  // provides no register contents: clobber everything first so no value
+  // can live through this block in a register (see SJLJ_RECEIVER_CLOBBER).
+  BuildMI(RestoreMBB, DL, TII->get(EZH::SJLJ_RECEIVER_CLOBBER));
   Register RestoreValReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
   BuildMI(RestoreMBB, DL, TII->get(EZH::LOAD_IMM), RestoreValReg)
       .addImm(1)
@@ -2188,6 +2191,11 @@ EZHTargetLowering::emitSjLjDispatchBlock(MachineInstr &MI,
       .addFrameIndex(FI)
       .addImm(44) // Offset 44 is jbuf[3]
       .addImm(EZHCC::ICC_EU);
+
+  // DispatchBB is entered abnormally (the SjLj personality longjmps into
+  // it): no register survives, so clobber everything before anything else
+  // (see SJLJ_RECEIVER_CLOBBER).
+  BuildMI(DispatchBB, DL, TII->get(EZH::SJLJ_RECEIVER_CLOBBER));
 
   // In DispatchBB, load the call_site value.
   Register CSReg = MRI.createVirtualRegister(&EZH::GPRRegClass);

@@ -125,7 +125,14 @@ void EZHInstrInfo::loadRegFromStackSlot(
       .setMIFlags(Flags);
 }
 
-bool EZHInstrInfo::expandPostRAPseudo(MachineInstr &MI) const { return false; }
+bool EZHInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
+  // The receiver clobber has done its job once registers are allocated.
+  if (MI.getOpcode() == EZH::SJLJ_RECEIVER_CLOBBER) {
+    MI.eraseFromParent();
+    return true;
+  }
+  return false;
+}
 
 bool EZHInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
                                  MachineBasicBlock *&TrueBlock,

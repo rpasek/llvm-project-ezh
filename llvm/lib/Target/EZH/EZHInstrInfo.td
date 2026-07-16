@@ -618,6 +618,16 @@ let isPseudo = 1, hasSideEffects = 1 in {
     "",
     [(EZH_adjcallstackup timm:$amt1, timm:$amt2)]>;
 
+  // Materializes the register state at a setjmp / exception receiver: an
+  // abnormal entry (longjmp, SjLj dispatch) provides no register contents
+  // beyond what the receiver code itself restores, so every allocatable
+  // register is clobbered here -- without this, a value CSEd or scheduled
+  // to live in a register across the receiver reads garbage on the
+  // abnormal path. Zero size; erased after register allocation.
+  let hasSideEffects = 1,
+      Defs = [R0, R1, R2, R3, R4, R5, R6, R7, RA] in
+  def SJLJ_RECEIVER_CLOBBER : EZHPseudo<(outs), (ins), "", []>;
+
   let usesCustomInserter = 1 in {
     let Defs = [R0, R1, R2, R3, R4, R5, R6, R7, RA], isBarrier = 1 in {
       def EH_SjLj_SetJmp : EZHPseudo<(outs GPR:$dst), (ins GPR:$buf), "",
