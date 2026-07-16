@@ -380,7 +380,23 @@ an earlier session and MISCOMPILED the C++ SjLj exception dispatch (reverted;
 generic passes rely on barrier-ness of unconditional branches). The split is
 the only sound shape for this fix -- do not retry the flip.
 
-## [KNOWN ISSUE] Predicated and unpredicated encodings share opcodes and descriptors
+## [KNOWN ISSUE] [DONE b87fb16 for the materializers] Predicated and unpredicated encodings share opcodes and descriptors
+
+DONE 2026-07-16 (b87fb16382a5) for the IMMEDIATE MATERIALIZERS -- the load-bearing
+case this item is about (load_imm / load_simm want honest movable descriptors so
+they rematerialize). LOAD_IMM/IMMN/SIMM/SIMMN now each have a codegen-only *_CC
+twin (hasSideEffects=1, not rematerializable, same encoding + asm), and
+PredicateInstruction rewrites the base opcode to its _CC twin instead of just
+setting the predicate operand, exactly the fix prescribed below. Byte-identical
+codegen (0/244 gcc-torture at -O2, bitslice on and off); 3078/3078 silicon O0+Os.
+The isReMaterializableImpl isPredicated guard is now defensive, not load-bearing.
+REMAINING (lower value, kept OPEN): the GENERAL predicated ALU ops (add_ze,
+sub_nz, mov_cc, ...) still share opcodes and still rely on the no-post-RA-
+scheduling pin. Splitting all of them would let targetSchedulesPostRAScheduling
+be dropped and a post-RA scheduler run -- but those ops are not remat/CSE
+candidates and an in-order core gains little from post-RA scheduling, so the pin
+is cheap to keep. Split them only if a concrete need for post-RA scheduling
+appears.
 
 Sibling of the GOTO isBarrier issue above, surfaced by external review of the
 immediate-remat change: the predicate is an operand, so static MCID flags
