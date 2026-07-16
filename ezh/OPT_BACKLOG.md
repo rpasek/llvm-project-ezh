@@ -264,7 +264,7 @@ void dispatch(int op, int *p) { switch (op) { case 1: p[0]=1; break; case 2: p[1
 
 Fix: (a) llvm/lib/Target/EZH/EZHConstantIslandPass.cpp:347-365: build LSL_ADD into the (always-killed, freshly materialized) TableReg instead of EZH::RA and drop 'Defs = [RA]' from PseudoBR_JT in EZHInstrInfo.td:574 (or give the pseudo an explicit earlyclobber scratch operand for the allocator). (b) EZHISelLowering constructor: setMinimumJumpTableEntries(6) (measure 6 vs 8; the 7-insn + pool + table fixed overhead and the 2-slot-scheduled ldr-pc argue for the higher value at -Os).
 
-## [7] i64 ordered compares and branches expand to a 13-17 insn select chain with 3 callee-saved regs instead of the subs/sbcs carry idiom (SETCCCARRY unimplemented)
+## [7] [DONE cb42ac92] i64 ordered compares and branches expand to a 13-17 insn select chain with 3 callee-saved regs instead of the subs/sbcs carry idiom (SETCCCARRY unimplemented)
 
 Estimated win: ~12-15 insns (48-60 bytes) and 3 callee-saved push/pop pairs saved per i64 ordered compare; branches drop from ~16 insns to 3.
 
