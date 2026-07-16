@@ -308,6 +308,16 @@ bool EZHInstrInfo::isPredicated(const MachineInstr &MI) const {
   return (MCID.TSFlags & EZHII::IsPredicated) != 0;
 }
 
+// The rematerializable materialization instructions (load_imm/load_simm
+// families, LOAD_CONSTANT) carry their predicate as an operand and share
+// their opcode with the predicated encodings; only the unpredicated form
+// may be re-executed at an arbitrary program point.
+bool EZHInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
+  if (isPredicated(MI))
+    return false;
+  return TargetInstrInfo::isReMaterializableImpl(MI);
+}
+
 bool EZHInstrInfo::isPredicable(const MachineInstr &MI) const {
   return (MI.getDesc().TSFlags & EZHII::IsPredicable) != 0;
 }

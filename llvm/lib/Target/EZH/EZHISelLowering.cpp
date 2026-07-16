@@ -864,6 +864,22 @@ SDValue EZHTargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
   return DAG.getMergeValues({ArgVal, ArgVal.getValue(1)}, dl);
 }
 
+// Build a LOAD_CONSTANT machine node with an invariant constant-pool MMO:
+// the MMO is what makes the load eligible for rematerialization and for
+// MachineCSE across blocks (a load without one is conservatively treated
+// as reading mutable memory).
+static SDValue getPoolLoad(SelectionDAG &DAG, const SDLoc &DL, SDValue CPIdx) {
+  MachineFunction &MF = DAG.getMachineFunction();
+  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
+  MachineSDNode *N =
+      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops);
+  MachineMemOperand *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getConstantPool(MF),
+      MachineMemOperand::MOLoad | MachineMemOperand::MOInvariant, 4, Align(4));
+  DAG.setNodeMemRefs(N, {MMO});
+  return SDValue(N, 0);
+}
+
 SDValue EZHTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   auto *JT = cast<JumpTableSDNode>(Op);
@@ -882,9 +898,7 @@ SDValue EZHTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
       JT->getIndex(), Type::getInt32Ty(*DAG.getContext()));
   SDValue CPIdx =
       DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
-  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-  return SDValue(
-      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+  return getPoolLoad(DAG, DL, CPIdx);
 }
 
 SDValue EZHTargetLowering::LowerBR_JT(SDValue Op, SelectionDAG &DAG) const {
@@ -915,9 +929,7 @@ SDValue EZHTargetLowering::LowerBlockAddress(SDValue Op,
       BA->getBlockAddress(), Type::getInt32Ty(*DAG.getContext()));
   SDValue CPIdx =
       DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
-  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-  return SDValue(
-      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+  return getPoolLoad(DAG, DL, CPIdx);
 }
 
 #define GET_REGISTER_MATCHER
@@ -966,9 +978,7 @@ SDValue EZHTargetLowering::LowerConstantPool(SDValue Op,
       CPV, getPointerTy(DAG.getDataLayout()), CP->getAlign(), CP->getOffset(),
       CP->getTargetFlags());
 
-  SDValue Ops[] = {TargetCP, DAG.getEntryNode()};
-  return SDValue(
-      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+  return getPoolLoad(DAG, DL, TargetCP);
 }
 
 SDValue EZHTargetLowering::LowerConstant(SDValue Op, SelectionDAG &DAG) const {
@@ -1015,9 +1025,7 @@ SDValue EZHTargetLowering::LowerConstant(SDValue Op, SelectionDAG &DAG) const {
       ConstantInt::get(Type::getInt32Ty(*DAG.getContext()), UVal),
       getPointerTy(DAG.getDataLayout()));
 
-  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-  return SDValue(
-      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+  return getPoolLoad(DAG, DL, CPIdx);
 }
 
 SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
@@ -1042,10 +1050,7 @@ SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
       CPIdx = DAG.getTargetConstantPool(GV->getGlobal(),
                                         getPointerTy(DAG.getDataLayout()));
     }
-    SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-    SDValue Base = SDValue(
-        DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops),
-        0);
+    SDValue Base = getPoolLoad(DAG, DL, CPIdx);
     if (Offset != 0)
       Base = DAG.getNode(ISD::ADD, DL, MVT::i32, Base,
                          DAG.getConstant(Offset, DL, MVT::i32));
@@ -1057,10 +1062,7 @@ SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
         S->getSymbol(), Type::getInt32Ty(*DAG.getContext()));
     SDValue CPIdx =
         DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
-    SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-    return SDValue(
-        DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops),
-        0);
+    return getPoolLoad(DAG, DL, CPIdx);
   }
 
   llvm_unreachable("Unhandled global address type");
@@ -2081,10 +2083,7 @@ SDValue EZHTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
     SDValue CPAddr = DAG.getTargetConstantPool(CPV, VT, Align(4));
 
     // Load the address of the exception table from the constant pool
-    SDValue Ops[] = {CPAddr, DAG.getEntryNode()};
-    return SDValue(
-        DAG.getMachineNode(EZH::LOAD_CONSTANT, dl, MVT::i32, MVT::Other, Ops),
-        0);
+    return getPoolLoad(DAG, dl, CPAddr);
   }
   }
 }

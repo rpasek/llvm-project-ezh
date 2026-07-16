@@ -85,6 +85,8 @@ public:
   bool
   reverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const override;
   bool isPredicated(const MachineInstr &MI) const override;
+
+  bool isReMaterializableImpl(const MachineInstr &MI) const override;
   bool isPredicable(const MachineInstr &MI) const override;
   bool canPredicatePredicatedInstr(const MachineInstr &MI) const override;
   bool PredicateInstruction(MachineInstr &MI,

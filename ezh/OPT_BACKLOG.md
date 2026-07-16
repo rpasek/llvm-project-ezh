@@ -5,7 +5,7 @@ corpus and the firmware demos (every entry was independently reproduced
 with the built compiler before ranking; rank = payoff/effort, 10 best).
 Items already implemented are marked DONE with their commit.
 
-## [9] Post-increment addressing not used when the loop also wants the index value: LSR shares one induction variable and pays mov + reg-offset load per iteration instead of ldrb_post
+## [9] [DONE 5dfec349] Post-increment addressing not used when the loop also wants the index value: LSR shares one induction variable and pays mov + reg-offset load per iteration instead of ldrb_post
 
 Estimated win: 1-2 instructions per loop *iteration* (runtime win in exactly the byte-pump loops EZH exists for); 4->5 instructions is a 25% hot-loop penalty in the strlen shape; ~150 affected loops in the corpus.
 
@@ -70,7 +70,7 @@ void t(void) { s.y = s.x; s.z = a; }
 
 Fix: EZHISelLowering.cpp LowerGlobalAddress (line ~932): when GV->getOffset() != 0 and isInt<11>(Offset), emit LOAD_CONSTANT of the bare GV and wrap it in DAG.getNode(ISD::ADD, ..., getConstant(Offset)). SelectionDAG CSEs the bare-GV node across all offsets in a block, and the existing MemOps patterns (EZHInstrInfo.td:813-831, (load (add i32:$Rn, imms8_word:$Offset))) fold the add into the ldr/str offset; non-memory uses select ADD_IMM (imms11). Keep the pooled GV+off form only as fallback for offsets outside imm range.
 
-## [9] LOAD_CONSTANT has no MMO and is not rematerializable, so MachineCSE never merges cross-block reloads of the same pool entry
+## [9] [DONE 33aaea40] LOAD_CONSTANT has no MMO and is not rematerializable, so MachineCSE never merges cross-block reloads of the same pool entry
 
 Estimated win: 4 bytes per eliminated reload; up to 16KB corpus (35% of all pool loads), ~1.4KB across the 24 firmware demos; small targeted change
 
@@ -124,7 +124,7 @@ void touch(void) { g.a = 1; g.b = 2; g.c = 3; g.d = 4; g.e = 5; }
 
 Fix: /Users/foxy/Downloads/llvm-ezh-port/llvm/lib/Target/EZH/EZHISelLowering.cpp LowerGlobalAddress (line ~932): when GV->getOffset() != 0, emit the pool entry for the bare GlobalValue and wrap the LOAD_CONSTANT in an ISD::ADD of the offset; SelectionDAG CSE then shares one base load and the existing (load/store (add Rn, imms8_word)) patterns in EZHInstrInfo.td fold the offset into the memory instruction (verified working: pointer-based p->b already emits ldr rD, rN, 4). Also override TargetLowering::isOffsetFoldingLegal to return false so DAGCombiner stops re-merging (add GA, C) into GA+C. Keep the pooled sym+off form only for offsets outside add_imm's imms12 range.
 
-## [8] LOAD_CONSTANT / LOAD_IMM / LOAD_SIMM / ADD_IMM are not marked isReMaterializable, so register pressure spills freshly materialized addresses and constants to the stack instead of recomputing them
+## [8] [DONE 33aaea40, except ADD_IMM] LOAD_CONSTANT / LOAD_IMM / LOAD_SIMM / ADD_IMM are not marked isReMaterializable, so register pressure spills freshly materialized addresses and constants to the stack instead of recomputing them
 
 Estimated win: Eliminates the spill store (4 bytes code + 1 SRAM store + 4 bytes frame) per occurrence and converts the reload into a cycle-equivalent pool load; >=536 adjacent occurrences in the corpus, 10 in the one-function repro alone.
 

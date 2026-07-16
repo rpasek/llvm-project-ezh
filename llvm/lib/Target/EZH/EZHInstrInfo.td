@@ -507,6 +507,11 @@ multiclass UnaryALUOps<bits<5> op, string opc_str, string sf_suffix, bit is_mvn 
 multiclass LoadImmOps<string opc_str, string sf_suffix, bit is_immn = 0> {
   defvar ins_imm_pred = (ins imms11:$Imm, pred:$Cond);
 
+  // The plain (non-flag-setting) form is safely rematerializable: pure
+  // immediate, flag-transparent. EZHInstrInfo restricts remat to the
+  // unpredicated encoding at run time (the predicate is an operand).
+  let isReMaterializable = !empty(sf_suffix),
+      isAsCheapAsAMove = !empty(sf_suffix) in
   def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
     : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd), ins_imm_pred,
                   opc_str#sf_suffix#"$Cond $Rd, $Imm",
@@ -524,6 +529,8 @@ multiclass LoadSimmOps<string opc_str, string sf_suffix, bit invert_val> {
   defvar ins_simm_pred = (ins shifted_imms11:$Imm, imm5:$ShAmt, pred:$Cond);
 
   let AsmMatchConverter = "cvtShiftedImm" in {
+    let isReMaterializable = !empty(sf_suffix),
+        isAsCheapAsAMove = !empty(sf_suffix) in
     def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
       : EZHInstALUIShifted<OP_MOV, invert_val, (outs GPR:$Rd), ins_simm_pred,
                            opc_str#sf_suffix#"$Cond $Rd, $Imm",
@@ -565,7 +572,11 @@ multiclass AndOrOps<string sf_suffix> {
 //===----------------------------------------------------------------------===//
 // Pseudo Instructions
 //===----------------------------------------------------------------------===//
-let mayLoad = 1 in {
+let mayLoad = 1, hasSideEffects = 0 in {
+  // Reading the constant pool is invariant (the lowering attaches an
+  // invariant MMO), so the load can be rematerialized instead of spilled
+  // and CSEd across blocks.
+  let isReMaterializable = 1 in
   def LOAD_CONSTANT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm), "", []>;
   def LOAD_CONSTANT_COND : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm, pred:$Cond), "", []>;
 }
