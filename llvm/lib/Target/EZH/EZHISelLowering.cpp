@@ -1563,6 +1563,26 @@ bool EZHTargetLowering::mayBeEmittedAsTailCall(const CallInst *CI) const {
   return CI->isTailCall();
 }
 
+// The truth about EZH addressing, so LSR and friends cost formulas
+// honestly: base register plus an immediate (word [-512, 508], byte
+// [-128, 127]), or base plus an unscaled index register with no offset
+// (ldr_reg/str_reg). No global-as-base folding, no scaling.
+bool EZHTargetLowering::isLegalAddressingMode(const DataLayout &DL,
+                                              const AddrMode &AM, Type *Ty,
+                                              unsigned AS,
+                                              Instruction *I) const {
+  if (AM.BaseGV)
+    return false;
+  if (AM.Scale != 0) {
+    // reg + reg, unscaled, no immediate on top.
+    return AM.Scale == 1 && AM.HasBaseReg && AM.BaseOffs == 0;
+  }
+  uint64_t Bits = Ty->isSized() ? DL.getTypeSizeInBits(Ty) : 32;
+  if (Bits >= 32)
+    return AM.BaseOffs >= -512 && AM.BaseOffs <= 508 && (AM.BaseOffs & 3) == 0;
+  return AM.BaseOffs >= -128 && AM.BaseOffs <= 127;
+}
+
 bool EZHTargetLowering::decomposeMulByConstant(LLVMContext &Context, EVT VT,
                                                SDValue C) const {
   // EZH multiplies through the __mulsi3 libcall (a software shift-add loop

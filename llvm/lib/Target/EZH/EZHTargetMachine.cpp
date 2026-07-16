@@ -51,6 +51,18 @@ public:
   explicit EZHTTIImpl(const EZHTargetMachine *TM, const Function &F)
       : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
         TLI(ST->getTargetLowering()) {}
+
+  // Bias loop strength reduction toward post-increment addressing: the
+  // ldr_post/str_post forms fold the pointer bump into the access, which
+  // matters most in the byte-pump loops this core exists for. Without the
+  // preference LSR happily shares one induction variable between the
+  // address and a counter, paying a reg-offset access plus a separate
+  // increment every iteration.
+  TTI::AddressingModeKind
+  getPreferredAddressingMode(const Loop *L,
+                             ScalarEvolution *SE) const override {
+    return TTI::AMK_PostIndexed;
+  }
 };
 } // namespace
 

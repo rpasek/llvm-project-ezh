@@ -50,6 +50,7 @@ TESTS = [
     "llvm/test/CodeGen/EZH/cmp-zero-canon.ll",
     "llvm/test/CodeGen/EZH/const-materialize.ll",
     "llvm/test/CodeGen/EZH/i64-carry.ll",
+    "llvm/test/CodeGen/EZH/postinc-pref.ll",
     "clang/test/CodeGen/EZH/builtins-event.c",
     "clang/test/CodeGen/EZH/builtins-gpio.c",
     "clang/test/Sema/builtins-ezh.c",
