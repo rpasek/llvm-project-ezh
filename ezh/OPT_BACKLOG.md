@@ -227,7 +227,7 @@ unsigned f(unsigned a, unsigned b) { return a < b ? a : b; }  // -Os or -O2
 
 Fix: Root cause: PseudoSELECT_CC (EZHISelLowering.cpp:1594) is expanded to a diamond + PHI; phi-elim makes the copy, if-converter (addPreSched2) predicates it — but per llc -debug-pass=Structure the last machine-cp runs BEFORE postrapseudos and if-converter, so nothing ever cleans predicated copies. Fix A (small): pre-emit peephole (next to EZHCompareFusion in EZHTargetMachine.cpp addPreEmitPass) rewriting `mov_cc A,B ; mov B,A` (A dead, adjacent) to `mov_inv(cc) B,A` using the CC pairs ZE/NZ, CA/NC, PO/NE, ZB/AZ (all forms assemble, verified with llvm-mc round-trip). Fix B (structural, ARM-style): replace the diamond expansion with a tied-operand MOVCC pseudo (dst tied to falsev) so the coalescer folds the copy for free. Also worth implementing EZHInstrInfo::isCopyInstrImpl for always-predicated EZH::MOV so any late copy-cleanup pass can see MOVs at all.
 
-## [7] Libcalls are never tail-called: isUsedByReturnOnly not overridden, so every tail-position __mulsi3/__ashldi3/soft-float call keeps a pushd ra / popd pc frame
+## [7] [DONE 8d4c5674] Libcalls are never tail-called: isUsedByReturnOnly not overridden, so every tail-position __mulsi3/__ashldi3/soft-float call keeps a pushd ra / popd pc frame
 
 Estimated win: 2 insns / 8 bytes + 4 SRAM stack ops per site (pushd ra + popd pc + gosub → goto); pure forwarding wrappers shrink 3x
 
