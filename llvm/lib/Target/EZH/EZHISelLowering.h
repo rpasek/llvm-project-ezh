@@ -49,6 +49,7 @@ enum NodeType : unsigned {
   SUBS,
   ADC,
   SBC,
+  SBCS, // subtract with borrow, setting flags (i64 ordered compares)
   BR_CC,
   SELECT_CC,
   BTOG,
@@ -80,6 +81,8 @@ public:
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerUSUBO(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerSETCCCARRY(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVAARG(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
 

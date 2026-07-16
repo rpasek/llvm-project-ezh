@@ -303,6 +303,11 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
     setIndexedStoreAction(ISD::PRE_DEC, VT, Legal);
   }
 
+  // 64-bit ordered compares take the subs/sbcs carry idiom via the
+  // SETCCCARRY expansion path instead of the generic hi/lo select chain.
+  setOperationAction(ISD::USUBO, MVT::i32, Custom);
+  setOperationAction(ISD::SETCCCARRY, MVT::i32, Custom);
+
   // Variable 64-bit shifts inline as the branchless two-word sequence
   // (~12 instructions with predicated selects) instead of the
   // __ashldi3/__lshrdi3/__ashrdi3 libcalls and their RA save: about five
@@ -542,6 +547,10 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::GlobalTLSAddress:
   case ISD::ExternalSymbol:
     return LowerGlobalAddress(Op, DAG);
+  case ISD::USUBO:
+    return LowerUSUBO(Op, DAG);
+  case ISD::SETCCCARRY:
+    return LowerSETCCCARRY(Op, DAG);
   case ISD::SHL_PARTS:
   case ISD::SRA_PARTS:
   case ISD::SRL_PARTS: {
@@ -789,6 +798,93 @@ static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
     CC = ISD::SETUGE;
     std::swap(LHS, RHS);
   }
+}
+
+// Borrow-producing 32-bit subtract for the i64 compare expansion: the
+// difference comes from a flag-setting subtract, and the borrow
+// materializes as a 0/1 through the glued select machinery (CA = borrow
+// after subtraction on EZH).
+SDValue EZHTargetLowering::LowerUSUBO(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Diff =
+      DAG.getNode(EZHISD::SUBS, DL, DAG.getVTList(MVT::i32, MVT::Glue),
+                  Op.getOperand(0), Op.getOperand(1));
+  SDValue Ops[] = {DAG.getConstant(1, DL, MVT::i32),
+                   DAG.getConstant(0, DL, MVT::i32),
+                   DAG.getTargetConstant(ISD::SETULT, DL, MVT::i32),
+                   Diff.getValue(1)};
+  SDValue Borrow = DAG.getNode(EZHISD::SELECT_CC, DL, MVT::i32, Ops);
+  return DAG.getMergeValues({Diff, Borrow}, DL);
+}
+
+// True if V is the borrow materialization LowerUSUBO built: a glued
+// select of 1/0 on the unsigned-borrow condition.
+static bool isBorrowSelect(SDValue V) {
+  return V.getOpcode() == EZHISD::SELECT_CC &&
+         isOneConstant(V.getOperand(0)) && isNullConstant(V.getOperand(1)) &&
+         V.getConstantOperandVal(2) == ISD::SETULT &&
+         V.getOperand(3).getValueType() == MVT::Glue;
+}
+
+// SETCCCARRY(hi_a, hi_b, borrow, lt/ult/ge/uge): the high half of the
+// wide compare, consuming the low half's borrow. Signed conditions bias
+// the sign bit of both high words first (EZH has no overflow flag), then
+// everything reduces to subtract-with-borrow and a carry test:
+//
+//     subs lo_a, lo_b
+//     sbcs hi_a, hi_b
+//     load_imm    r, 0
+//     load_imm_ca r, 1
+SDValue EZHTargetLowering::LowerSETCCCARRY(SDValue Op,
+                                           SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue LHS = Op.getOperand(0);
+  SDValue RHS = Op.getOperand(1);
+  SDValue Carry = Op.getOperand(2);
+  ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(3))->get();
+
+  if (CC == ISD::SETLT || CC == ISD::SETGE) {
+    LHS = DAG.getNode(EZHISD::BTOG, DL, MVT::i32, LHS,
+                      DAG.getConstant(31, DL, MVT::i32));
+    RHS = DAG.getNode(EZHISD::BTOG, DL, MVT::i32, RHS,
+                      DAG.getConstant(31, DL, MVT::i32));
+    CC = CC == ISD::SETLT ? ISD::SETULT : ISD::SETUGE;
+  }
+  assert((CC == ISD::SETULT || CC == ISD::SETUGE) &&
+         "unexpected SETCCCARRY condition");
+
+  // Reach through the borrow to its flags. Depending on legalization
+  // order the carry operand is either the still-unlowered USUBO (reuse
+  // its operands for a direct flag-setting subtract and give its other
+  // users the difference) or the borrow materialization LowerUSUBO built
+  // (take its glue when this is the only user; the select then dies and
+  // the glue keeps one consumer). Otherwise re-derive the flag from the
+  // 0/1 value: adding all-ones carries out exactly when the value is 1.
+  SDValue Glue;
+  if (Carry.getOpcode() == ISD::USUBO && Carry.getResNo() == 1 &&
+      Carry.getNode()->hasNUsesOfValue(1, 1)) {
+    SDValue Sub =
+        DAG.getNode(EZHISD::SUBS, DL, DAG.getVTList(MVT::i32, MVT::Glue),
+                    Carry.getOperand(0), Carry.getOperand(1));
+    DAG.ReplaceAllUsesOfValueWith(SDValue(Carry.getNode(), 0),
+                                  Sub.getValue(0));
+    Glue = Sub.getValue(1);
+  } else if (isBorrowSelect(Carry) && Carry.hasOneUse()) {
+    Glue = Carry.getOperand(3);
+  } else {
+    SDValue Conv =
+        DAG.getNode(EZHISD::ADDS, DL, DAG.getVTList(MVT::i32, MVT::Glue),
+                    Carry, DAG.getSignedConstant(-1, DL, MVT::i32));
+    Glue = Conv.getValue(1);
+  }
+
+  SDValue Sub = DAG.getNode(EZHISD::SBCS, DL,
+                            DAG.getVTList(MVT::i32, MVT::Glue), LHS, RHS,
+                            Glue);
+  SDValue Ops[] = {DAG.getConstant(1, DL, MVT::i32),
+                   DAG.getConstant(0, DL, MVT::i32),
+                   DAG.getTargetConstant(CC, DL, MVT::i32), Sub.getValue(1)};
+  return DAG.getNode(EZHISD::SELECT_CC, DL, MVT::i32, Ops);
 }
 
 SDValue EZHTargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const {
@@ -1641,6 +1737,8 @@ const char *EZHTargetLowering::getTargetNodeName(unsigned Opcode) const {
     return "EZHISD::ADC";
   case EZHISD::SBC:
     return "EZHISD::SBC";
+  case EZHISD::SBCS:
+    return "EZHISD::SBCS";
   case EZHISD::BR_CC:
     return "EZHISD::BR_CC";
   case EZHISD::SELECT_CC:
