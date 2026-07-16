@@ -360,7 +360,11 @@ updated. -verify-machineinstrs is now clean at -O0/-O2 and is enabled on every
 EZH CodeGen test RUN line. Validated 3078/3078 on silicon at -O0 and -Os
 including ezh_eh/ezh_setjmp -- the bare-isBarrier-flip SjLj miscompile did NOT
 recur because the split keeps unconditional dispatch branches as barriers. The
-predicated-tail-call (TCRETURN) path did not need changes.
+predicated-tail-call (TCRETURN) path carries the same unsound shape (a predicated
+tail call keeps a fall-through successor while wearing the barrier/return
+descriptor); it was split the same way in a follow-up (TCRETURN_CC family) --
+byte-identical, since a predicated tail call only arises under
+-mno-ezh-bitslice-interrupts in leaf functions.
 
 External review: "MBB exits via conditional branch/fall-through but ends with a
 barrier instruction". GOTO is one opcode whose predicate is an operand, but
