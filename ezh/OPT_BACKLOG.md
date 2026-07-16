@@ -382,3 +382,30 @@ descriptors, predicated *_CC opcodes with hasSideEffects = 1, and
 PredicateInstruction switching opcode instead of rewriting an operand. Best
 done together with the GOTO/GOTO_CC split as one predication-modeling
 overhaul.
+
+## [DEFERRED - unsafe minimal fixes] Jump-table dispatch clobbers RA as scratch, forcing pushd ra in leaf switch functions
+
+The ConstantIslandPass expands PseudoBR_JT to "lsl_add RA, table, index, 2;
+ldr pc, RA, 0", and the pseudo declares Defs = [RA], so every leaf function
+with a switch saves RA it would not otherwise need. Two tempting minimal fixes
+were tried and BOTH regressed on silicon:
+
+ * Reuse the index register as scratch (lsl_add index, table, index, 2). The
+   index is dead in the dispatch block, but its physical register can be live
+   INTO a case block via another edge (shared/fall-through case code), so the
+   in-place write corrupts a live value: shift64 self-test 21/24 wrong. RA was
+   used originally precisely because it is reserved and never carries a live
+   value across the dispatch.
+
+ * Rewrite dispatch in a vreg at ISel (brind of a folded load) and retire
+   PseudoBR_JT. This also required changing getJumpTableIndex and the C++ SjLj
+   dispatch block; it regressed both ezh_eh and switch-using tests on silicon.
+
+Safe fix (deferred to its own round): compute the entry address into a GPR
+VREG during ISel so the register allocator handles liveness correctly, and
+keep PseudoBR_JT carrying the address register + the JTI operand (so
+getJumpTableIndex and table emission are untouched); the island expansion
+becomes just "ldr pc, addr, 0" with no scratch. The EH DispatchBB must compute
+the same vreg address before the pseudo. Validate ezh_eh and a real
+jump-table switch on silicon before landing -- this path is adjacent to the
+SjLj dispatch that a previous clever change silently miscompiled.

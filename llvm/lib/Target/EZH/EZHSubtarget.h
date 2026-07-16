@@ -81,15 +81,6 @@ public:
     return &TSInfo;
   }
 
-  // Never enable the post-RA scheduler: predicated instructions read the
-  // unmodelled condition flags, and several opcodes (the immediate
-  // materializers among them) share descriptors between predicated and
-  // unpredicated encodings, so nothing in the machine model would stop a
-  // late scheduler from separating a predicated instruction from its flag
-  // writer. The complete fix is a predicated/unpredicated opcode split
-  // (see ezh/OPT_BACKLOG.md).
-  bool enablePostRAScheduler() const override { return false; }
-
   bool hasBitSliceInterrupts() const { return HasBitSliceInterrupts; }
 
 private:

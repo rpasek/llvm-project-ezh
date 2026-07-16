@@ -67,6 +67,18 @@ public:
   // Pass Pipeline Configuration
   TargetPassConfig *createPassConfig(PassManagerBase &pass_manager) override;
 
+  // Claim responsibility for post-RA scheduling and then deliberately
+  // schedule nothing: this is the hook that keeps the generic pipeline
+  // from ever inserting a post-RA scheduler, including through the
+  // -post-RA-scheduler and -misched-postra options (a subtarget
+  // enablePostRAScheduler override is bypassable by both). No instruction
+  // motion may run after the if-converter: predicated instructions read
+  // the unmodelled condition flags, and several opcodes (the immediate
+  // materializers among them) share descriptors between predicated and
+  // unpredicated encodings. The complete fix is a predicated/unpredicated
+  // opcode split (see ezh/OPT_BACKLOG.md).
+  bool targetSchedulesPostRAScheduling() const override { return true; }
+
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();
   }

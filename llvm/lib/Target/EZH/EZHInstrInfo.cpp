@@ -327,11 +327,15 @@ bool EZHInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   case EZH::LOAD_IMMN:
   case EZH::LOAD_SIMM:
   case EZH::LOAD_SIMMN:
-    // Unpredicated immediate materializations are pure value producers.
-    // Their descriptors keep hasSideEffects = 1 (the predicated instances
-    // sharing the opcode read unmodelled flags, and the conservative flag
-    // is what pins them against any future late motion pass), which the
-    // generic check below would reject -- accept them here instead.
+    // Unpredicated immediate materializations are pure value producers;
+    // their descriptors clear hasSideEffects (LiveRangeEdit gates remat on
+    // isSafeToMove, which rejects unmodelled side effects with no target
+    // override, so the flag cannot stay set). The predicated encodings
+    // sharing these opcodes read unmodelled flags and rely on nothing
+    // moving instructions after the if-converter -- an invariant
+    // EZHTargetMachine::targetSchedulesPostRAScheduling enforces. This
+    // explicit accept is then belt-and-braces should the descriptors ever
+    // change; the isPredicated rejection above is the load-bearing part.
     return true;
   default:
     return TargetInstrInfo::isReMaterializableImpl(MI);
