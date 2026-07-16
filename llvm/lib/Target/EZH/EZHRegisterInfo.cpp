@@ -31,6 +31,7 @@
 #include "MCTargetDesc/EZHBaseInfo.h"
 #include "MCTargetDesc/EZHMCTargetDesc.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -212,12 +213,29 @@ bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     assert(FallbackReg != EZH::NoRegister &&
            "Could not find any fallback register!");
     ScratchReg = FallbackReg;
-    PushPopFallback = true;
+
+    // Only preserve the borrowed register if its current value is live past
+    // this instruction. If it is dead, we can clobber it as scratch directly:
+    // pushing/popping a dead register wastes two instructions, and marking the
+    // save as reading an undef value (to satisfy -verify-machineinstrs) instead
+    // lets a later pass delete the save/restore pair entirely -- which silently
+    // corrupts the value when the register is in fact live. Compute liveness at
+    // MI and decide.
+    LivePhysRegs LiveRegs(*this);
+    LiveRegs.addLiveOuts(MBB);
+    for (MachineInstr &Below : llvm::reverse(MBB)) {
+      if (&Below == &MI)
+        break;
+      LiveRegs.stepBackward(Below);
+    }
+    PushPopFallback = LiveRegs.contains(ScratchReg);
   }
 
   if (PushPopFallback) {
     if (FrameReg == EZH::SP)
       Offset += 4; // Compensate for SP decrement due to push when SP is base
+    // ScratchReg is live here, so its value has a reaching definition: read it
+    // normally (no undef) and let the matching pop below restore it.
     BuildMI(MBB, II, DL, TII->get(EZH::STR_PRE), EZH::SP)
         .addReg(ScratchReg)
         .addReg(EZH::SP)

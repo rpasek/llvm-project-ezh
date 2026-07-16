@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; EZH multiplies through the __mulsi3 libcall, so decomposeMulByConstant
 ; accepts every constant shape the DAG combiner can turn into shifts and

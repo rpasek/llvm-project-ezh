@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; 64-bit add/sub expand to the native carry chain (adds/adc, subs/sbc)
 ; instead of the generic boolean expansion: two instructions per

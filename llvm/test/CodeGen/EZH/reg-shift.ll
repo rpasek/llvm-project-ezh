@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; Basic Register Shift (RLSL)
 define i32 @test_rlsl(i32 %a, i32 %b) {

@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; A select of an immediate folds the materialization into the predicated
 ; slot: the if-converter produces load_imm_cc dst, K instead of

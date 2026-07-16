@@ -162,33 +162,27 @@ bool EZHInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
 
     ++NumTerminatorsSeen;
 
-    if (I->getOpcode() == EZH::GOTO) {
+    if (I->getOpcode() == EZH::GOTO_CC) {
       if (!I->getOperand(0).isMBB())
         return true;
-
-      unsigned CC = I->getOperand(1).getImm();
-      if (CC != EZHCC::ICC_EU) {
-        // Conditional Branch
-        if (!Condition.empty())
-          return true; // Only support one conditional branch
-
-        FalseBlock = TrueBlock;
-        TrueBlock = I->getOperand(0).getMBB();
-        Condition.push_back(MachineOperand::CreateImm(CC));
-      } else {
-        // Unconditional Branch
-        if (NumTerminatorsSeen > 1) {
-          // We already saw a branch (which must be conditional, since we scan
-          // upwards and we don't support multiple unconditional branches). If
-          // we see an unconditional branch before a conditional one, it is
-          // invalid CFG.
-          return true;
-        }
-
-        TrueBlock = I->getOperand(0).getMBB();
-        Condition.clear();
-        FalseBlock = nullptr;
+      // Conditional Branch
+      if (!Condition.empty())
+        return true; // Only support one conditional branch
+      FalseBlock = TrueBlock;
+      TrueBlock = I->getOperand(0).getMBB();
+      Condition.push_back(MachineOperand::CreateImm(I->getOperand(1).getImm()));
+    } else if (I->getOpcode() == EZH::GOTO) {
+      if (!I->getOperand(0).isMBB())
+        return true;
+      // Unconditional Branch
+      if (NumTerminatorsSeen > 1) {
+        // We already saw a (conditional) branch; an unconditional branch
+        // before it is invalid CFG.
+        return true;
       }
+      TrueBlock = I->getOperand(0).getMBB();
+      Condition.clear();
+      FalseBlock = nullptr;
     } else {
       // Unrecognized terminator.
       return true;
@@ -196,8 +190,7 @@ bool EZHInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
 
     // Cleanup code - only for unconditional branches that are the last
     // instruction.
-    if (I->getOpcode() == EZH::GOTO &&
-        I->getOperand(1).getImm() == EZHCC::ICC_EU) {
+    if (I->getOpcode() == EZH::GOTO) {
       if (NumTerminatorsSeen > 1) {
         if (AllowModify) {
           MachineBasicBlock::iterator DI = std::next(I);
@@ -233,19 +226,19 @@ unsigned EZHInstrInfo::insertBranch(MachineBasicBlock &MBB,
     *BytesAdded = 0;
 
   if (Condition.empty()) {
-    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(TrueBlock).addImm(EZHCC::ICC_EU);
+    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(TrueBlock);
     if (BytesAdded)
       *BytesAdded += 4;
     return 1;
   }
 
   unsigned CC = Condition[0].getImm();
-  BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(TrueBlock).addImm(CC);
+  BuildMI(&MBB, DL, get(EZH::GOTO_CC)).addMBB(TrueBlock).addImm(CC);
   if (BytesAdded)
     *BytesAdded += 4;
 
   if (FalseBlock) {
-    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(FalseBlock).addImm(EZHCC::ICC_EU);
+    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(FalseBlock);
     if (BytesAdded)
       *BytesAdded += 4;
     return 2;
@@ -356,6 +349,15 @@ bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
                                         ArrayRef<MachineOperand> Pred) const {
   assert(!Pred.empty() && "Empty predicate!");
   EZHCC::CondCode CC = static_cast<EZHCC::CondCode>(Pred[0].getImm());
+
+  // An unconditional GOTO has no predicate operand; predicating it turns it
+  // into the conditional GOTO_CC (which carries the condition and, unlike
+  // GOTO, is not a barrier).
+  if (MI.getOpcode() == EZH::GOTO) {
+    MI.setDesc(get(EZH::GOTO_CC));
+    MI.addOperand(MachineOperand::CreateImm(CC));
+    return true;
+  }
 
   const MCInstrDesc &MCID = MI.getDesc();
   int PIdx = -1;

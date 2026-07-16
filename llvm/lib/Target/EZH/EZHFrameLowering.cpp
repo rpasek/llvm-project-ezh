@@ -110,6 +110,14 @@ bool EZHFrameLowering::spillCalleeSavedRegisters(
 
   for (const CalleeSavedInfo &CS : CSI) {
     unsigned Reg = CS.getReg();
+    // The incoming (caller's) value of every callee-saved register is live into
+    // the entry block -- that is precisely what the spill preserves. Mark it so,
+    // as the default TargetFrameLowering::spillCalleeSavedRegisters does; without
+    // it -verify-machineinstrs reports the spill as using an undefined physreg
+    // for any CSR other than RA (which is already live-in). Skip regs the entry
+    // block already lists to avoid duplicates.
+    if (!MBB.isLiveIn(Reg))
+      MBB.addLiveIn(Reg);
     // Add instruction to push register (STR_PRE with -4 offset)
     BuildMI(MBB, MI, DL, TII.get(EZH::STR_PRE), EZH::SP)
         .addReg(Reg, getKillRegState(true))

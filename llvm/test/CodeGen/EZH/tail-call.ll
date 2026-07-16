@@ -1,5 +1,5 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
-; RUN: llc -mtriple=ezh-none-elf -O3 < %s | FileCheck %s --check-prefix=BS
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -O3 < %s | FileCheck %s --check-prefix=BS
 
 declare i32 @g(i32)
 declare void @h()

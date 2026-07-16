@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; Signed comparisons bias both operands with btog_imm bit 31 to reuse the
 ; unsigned compare. A constant operand absorbs the bias at compile time

@@ -83,6 +83,14 @@ public:
         }
 
         if (IsBranchOrCall) {
+          // A block-ending run of terminators (a conditional GOTO_CC then
+          // the fall-through GOTO) needs only one poll, before the first of
+          // them; injecting before a later branch would wedge the poll (a
+          // non-terminator conditional call) between two terminators. So
+          // skip a branch whose predecessor is already a terminator.
+          if (MI.isBranch() && MI.getIterator() != MBB.begin() &&
+              std::prev(MI.getIterator())->isTerminator())
+            continue;
           BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(EZH::GOTOL))
               .addExternalSymbol("bitslice_handler")
               .addImm(EZHCC::ICC_BS);

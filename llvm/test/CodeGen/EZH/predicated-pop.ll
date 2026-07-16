@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -O3 < %s | FileCheck %s
 
 ; When the if-converter predicates a return block whose return was folded
 ; into a pop-into-PC LDR_POST, the popd alias must keep the condition

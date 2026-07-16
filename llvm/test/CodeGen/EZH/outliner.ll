@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -O2 -enable-machine-outliner=always < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -O2 -enable-machine-outliner=always < %s | FileCheck %s
 
 ; The MachineOutliner extracts the identical MIX kernel shared by the
 ; framed f* functions into OUTLINED_FUNCTION_0 (called via gosub, returning

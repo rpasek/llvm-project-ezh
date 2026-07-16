@@ -1,5 +1,5 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -frame-pointer=all -O3 < %s | FileCheck %s --check-prefix=FP
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -frame-pointer=none -O3 < %s | FileCheck %s --check-prefix=NOFP
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -frame-pointer=all -O3 < %s | FileCheck %s --check-prefix=FP
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -frame-pointer=none -O3 < %s | FileCheck %s --check-prefix=NOFP
 
 ; Leaf function: no locals, no calls -> no frame at all without FP. The
 ; emergency scavenging slot is only created when the estimated stack size

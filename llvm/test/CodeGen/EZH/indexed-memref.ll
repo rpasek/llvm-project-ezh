@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 -stop-after=finalize-isel < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 -stop-after=finalize-isel < %s | FileCheck %s
 ;
 ; The pre/post-indexed loads/stores are selected manually in EZHISelDAGToDAG
 ; (empty tablegen patterns), so they must (a) be marked mayLoad/mayStore and

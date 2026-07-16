@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 ; Debug info must not change the generated code: the pass skips DBG_VALUEs
 ; in its walk-back window and its dead-register scan.
 ; RUN: opt -passes=debugify -S < %s | llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 | FileCheck %s

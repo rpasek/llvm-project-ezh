@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 < %s | FileCheck %s
 ;
 ; Register-offset load/store (opcode 0x1D, address = Rn + Rm as a byte offset):
 ; a runtime-indexed access folds the address add into one instruction instead of

@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; Variable 64-bit shifts inline as the branchless two-word parts sequence
 ; instead of calling __ashldi3 / __lshrdi3 / __ashrdi3.

@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 < %s | FileCheck %s
 ;
 ; The GPIO intrinsics select to single special-register instructions. GPI/GPD
 ; are reserved registers, hardwired into these defs. Hardware-validated on an

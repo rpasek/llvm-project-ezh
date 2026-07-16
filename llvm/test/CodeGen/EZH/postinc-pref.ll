@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; LSR prefers post-increment addressing (getPreferredAddressingMode =
 ; AMK_PostIndexed with an honest isLegalAddressingMode), so a loop that

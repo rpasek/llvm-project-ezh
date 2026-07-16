@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 < %s | FileCheck %s
 ;
 ; The EZH event/control-fabric intrinsics select to their instructions: hold,
 ; int_trigger, the CFM/CFS special-register movs, the beat/heart-rythm timing

@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; Ordered 64-bit compares use the subtract-with-borrow idiom through the
 ; SETCCCARRY expansion (subs lo; sbcs hi; carry test) instead of the

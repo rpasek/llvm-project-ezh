@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 -stop-after=prologepilog < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O2 -stop-after=prologepilog < %s | FileCheck %s
 ;
 ; storeRegToStackSlot/loadRegFromStackSlot must attach a MachineMemOperand to
 ; the spill str / reload ldr so machine AA can disambiguate stack slots.

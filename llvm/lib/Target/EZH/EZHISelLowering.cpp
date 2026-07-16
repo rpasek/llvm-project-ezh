@@ -275,6 +275,9 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   setLoadExtAction(ISD::EXTLOAD, MVT::i32, MVT::i8, Legal);
   setLoadExtAction(ISD::ZEXTLOAD, MVT::i32, MVT::i8, Legal);
   setLoadExtAction(ISD::SEXTLOAD, MVT::i32, MVT::i8, Legal);
+  // A sign-extending i1 load (0/-1 from bit 0) has no native form; expand it
+  // to a zero-extending byte load plus a 1-bit sign fixup.
+  setLoadExtAction(ISD::SEXTLOAD, MVT::i32, MVT::i1, Expand);
   setTruncStoreAction(MVT::i32, MVT::i16, Custom);
   setTruncStoreAction(MVT::i32, MVT::i8, Legal);
 
@@ -1872,14 +1875,12 @@ EZHTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     }
 
     // Emit predicated GOTO (TrueBB)
-    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(TrueBB).addImm(CC);
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO_CC)).addMBB(TrueBB).addImm(CC);
 
     auto NextIT = next_nodbg(MachineBasicBlock::iterator(MI), BB->end());
     if (FalseBB && (NextIT == BB->end() || !NextIT->isBranch())) {
       // Emit unconditional GOTO (FalseBB) with ICC_EU (Always)
-      BuildMI(*BB, MI, DL, TII->get(EZH::GOTO))
-          .addMBB(FalseBB)
-          .addImm(EZHCC::ICC_EU);
+      BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(FalseBB);
     }
     MI.eraseFromParent();
     return BB;
@@ -2000,10 +2001,8 @@ EZHTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
       TrueReg = NewTrue;
     }
 
-    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(TrueBB).addImm(BranchCC);
-    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO))
-        .addMBB(DoneBB)
-        .addImm(EZHCC::ICC_EU);
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO_CC)).addMBB(TrueBB).addImm(BranchCC);
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(DoneBB);
 
     BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(EZH::PHI), DestReg)
         .addReg(TrueReg)
@@ -2128,18 +2127,14 @@ EZHTargetLowering::emitEHSjLjSetJmp(MachineInstr &MI,
       .addImm(EZHCC::ICC_EU);
 
   // Safety Goto from ThisMBB directly into MainMBB
-  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::GOTO))
-      .addMBB(MainMBB)
-      .addImm(EZHCC::ICC_EU);
+  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::GOTO)).addMBB(MainMBB);
 
   // MainMBB returns 0 on initialization
   Register MainValReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
   BuildMI(MainMBB, DL, TII->get(EZH::LOAD_IMM), MainValReg)
       .addImm(0)
       .addImm(EZHCC::ICC_EU);
-  BuildMI(MainMBB, DL, TII->get(EZH::GOTO))
-      .addMBB(SinkMBB)
-      .addImm(EZHCC::ICC_EU);
+  BuildMI(MainMBB, DL, TII->get(EZH::GOTO)).addMBB(SinkMBB);
   MainMBB->addSuccessor(SinkMBB);
 
   // RestoreMBB returns 1 on builtin longjmp return. The abnormal entry
@@ -2150,9 +2145,7 @@ EZHTargetLowering::emitEHSjLjSetJmp(MachineInstr &MI,
   BuildMI(RestoreMBB, DL, TII->get(EZH::LOAD_IMM), RestoreValReg)
       .addImm(1)
       .addImm(EZHCC::ICC_EU);
-  BuildMI(RestoreMBB, DL, TII->get(EZH::GOTO))
-      .addMBB(SinkMBB)
-      .addImm(EZHCC::ICC_EU);
+  BuildMI(RestoreMBB, DL, TII->get(EZH::GOTO)).addMBB(SinkMBB);
   RestoreMBB->addSuccessor(SinkMBB);
 
   // SinkMBB merges return statuses via PHI node
@@ -2366,7 +2359,7 @@ EZHTargetLowering::emitSjLjDispatchBlock(MachineInstr &MI,
   }
 
   // TrapBB just loops forever.
-  BuildMI(TrapBB, DL, TII->get(EZH::GOTO)).addMBB(TrapBB).addImm(EZHCC::ICC_EU);
+  BuildMI(TrapBB, DL, TII->get(EZH::GOTO)).addMBB(TrapBB);
   TrapBB->addSuccessor(TrapBB);
 
   // Load the address of DispatchBB and store it to jbuf[0] (offset 32 of
@@ -2433,7 +2426,7 @@ EZHTargetLowering::emitSjLjDispatchBlock(MachineInstr &MI,
       .addImm(MaxCSNum)
       .addImm(EZHCC::ICC_EU);
 
-  BuildMI(DispatchBB, DL, TII->get(EZH::GOTO))
+  BuildMI(DispatchBB, DL, TII->get(EZH::GOTO_CC))
       .addMBB(TrapBB)
       .addImm(EZHCC::ICC_NC);
   DispatchBB->addSuccessor(TrapBB);

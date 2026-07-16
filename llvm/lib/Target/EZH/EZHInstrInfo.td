@@ -590,8 +590,16 @@ let mayLoad = 1, hasSideEffects = 0 in {
   def LOAD_CONSTANT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm), "", []>;
   def LOAD_CONSTANT_COND : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm, pred:$Cond), "", []>;
 }
-let isNotDuplicable = 1, isBarrier = 1, hasSideEffects = 1 in
-def CONSTPOOL_ENTRY : EZHPseudo<(outs), (ins unknown:$sym, unknown:$val), "$sym:\n\t.long $val", []>;
+// Not isBarrier: this pseudo is emitted as data at the end of the function, so
+// the block that holds it "falls off the end" and -verify-machineinstrs rejects
+// a barrier as the last instruction of a fall-through block (ARM's equivalent is
+// likewise not a barrier). isNotDuplicable/hasSideEffects keep the labeled entry
+// from being cloned or deleted.
+// $size is consumed by the Constant Islands pass for layout (and ignored by the
+// custom emitInstruction lowering); it must still be a declared operand so the
+// three-operand BuildMI does not trip -verify-machineinstrs.
+let isNotDuplicable = 1, hasSideEffects = 1 in
+def CONSTPOOL_ENTRY : EZHPseudo<(outs), (ins unknown:$sym, unknown:$val, i32imm:$size), "$sym:\n\t.long $val", []>;
 
 let isCall = 1, Defs = [R0, R1, R2, R3, RA], isCodeGenOnly = 1 in {
   def CALL_INDIRECT : EZHInstGotoReg<1, (outs), (ins GPRNoFPBP:$raddr), "goto_regl $raddr", [(EZH_call i32:$raddr)]> {
@@ -873,9 +881,31 @@ defm STRB : MemOps<OP_STR, 1, 0, 0, "strb",  imms8,
 // Predicated Branch Instructions
 //===----------------------------------------------------------------------===//
 
+// GOTO is unconditional -- a true block terminator and barrier. GOTO_CC is
+// the conditional form, which can fall through, so it is a terminator but
+// NOT a barrier (the static isBarrier on a shared opcode was what made
+// -verify-machineinstrs reject every conditional branch, and a bare flip
+// on the shared opcode previously miscompiled the SjLj dispatch, which uses
+// only the unconditional form). Same encoding; GOTO_CC is the assembler /
+// disassembler opcode and GOTO is codegen-only for the always case.
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isCodeGenOnly = 1 in
+  def GOTO : EZHInstGoto<0, (outs), (ins brtarget:$addr), "goto $addr",
+                         [(br bb:$addr)]> {
+    let Cond = 0;
+  }
+let isBranch = 1, isTerminator = 1 in
+  def GOTO_CC : EZHInstGoto<0, (outs), (ins brtarget:$addr, pred:$Cond),
+                            "goto$Cond $addr", []>;
+
+// gotol is a conditional goto-and-link: when its predicate holds it calls
+// the target (the bitslice handler) which returns via RA, otherwise it
+// falls through. It is therefore neither a terminator nor a barrier -- it
+// is a conditional subroutine call sitting mid-block (see
+// EZHBitSliceInjection). Defs RA and carries side effects.
+let hasSideEffects = 1, Defs = [RA] in
+  def GOTOL : EZHInstGoto<1, (outs), (ins brtarget:$addr, pred:$Cond), "gotol$Cond $addr", []>;
+
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in {
-  def GOTO : EZHInstGoto<0, (outs), (ins brtarget:$addr, pred:$Cond), "goto$Cond $addr", [(br bb:$addr)]>;
-  def GOTOL : EZHInstGoto<1, (outs), (ins brtarget:$addr, pred:$Cond), "gotol$Cond $addr", []> { let Defs = [RA]; }
   def GOTO_REG : EZHInstGotoReg<0, (outs), (ins GPR:$raddr, pred:$Cond), "goto_reg$Cond $raddr", [(brind i32:$raddr)]>;
   def GOTO_REGL : EZHInstGotoReg<1, (outs), (ins GPR:$raddr, pred:$Cond), "goto_regl$Cond $raddr", []> { let Defs = [RA]; }
 }
@@ -1146,25 +1176,16 @@ def : Pat<(truncstorei8 GPR:$Rd, GPR:$Rn), (STRB GPR:$Rd, GPR:$Rn, 0, 0)>;
 def : Pat<(i32 (extloadi1 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
 def : Pat<(i32 (zextloadi1 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
 
-// Stack-object addressing: fold a FrameIndex (plus optional constant
-// offset) straight into the memory operand instead of materializing the
-// address with a separate add_imm. eliminateFrameIndex range-checks the
-// final SP-relative offset and scavenges when it does not fit, exactly as
-// it already does for spill slots. AddedComplexity beats the plain-GPR and
-// (add Rn, imm) patterns, which would otherwise select the materialized
-// address.
-def frameaddr : ComplexPattern<iPTR, 2, "SelectFrameAddr", [frameindex, add], []>;
-
-let AddedComplexity = 9 in {
-def : Pat<(i32 (load frameaddr:$addr)), (LDR frameaddr:$addr, 0)>;
-def : Pat<(store i32:$Rd, frameaddr:$addr), (STR GPR:$Rd, frameaddr:$addr, 0)>;
-def : Pat<(i32 (zextloadi8 frameaddr:$addr)), (LDRB frameaddr:$addr, 0)>;
-def : Pat<(i32 (sextloadi8 frameaddr:$addr)), (LDRBS frameaddr:$addr, 0)>;
-def : Pat<(i32 (extloadi8 frameaddr:$addr)), (LDRB frameaddr:$addr, 0)>;
-def : Pat<(truncstorei8 i32:$Rd, frameaddr:$addr), (STRB GPR:$Rd, frameaddr:$addr, 0)>;
-def : Pat<(i32 (extloadi1 frameaddr:$addr)), (LDRB frameaddr:$addr, 0)>;
-def : Pat<(i32 (zextloadi1 frameaddr:$addr)), (LDRB frameaddr:$addr, 0)>;
-}
+// Stack-object addressing: a FrameIndex (plus optional constant offset) is
+// folded straight into the memory operand -- instead of materializing the
+// address with a separate add_imm -- by tryFrameLoadStore in EZHISelDAGToDAG.
+// This is done in C++ rather than a ComplexPattern-based Pat because such a
+// pattern fills two separate instruction operands (base register and offset)
+// followed by the defaulted predicate operand, a shape the DAG-ISel emitter
+// miscounts: it appends a phantom second predicate that -verify-machineinstrs
+// rejects ("Extra explicit operand"). eliminateFrameIndex range-checks the
+// final SP-relative offset and scavenges when it does not fit, exactly as it
+// already does for spill slots.
 
 //===----------------------------------------------------------------------===//
 // Instruction Selection Patterns (ISel lowering)

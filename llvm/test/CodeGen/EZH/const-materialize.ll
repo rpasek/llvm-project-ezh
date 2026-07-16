@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
 
 ; Low-ones masks and near-INT_MAX values materialize with the inverted
 ; shifted-immediate form (load_simmn = ~(imm11 << shift)) instead of a

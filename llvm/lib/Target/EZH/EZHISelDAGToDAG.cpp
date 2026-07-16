@@ -57,7 +57,7 @@ private:
                                     InlineAsm::ConstraintCode ConstraintID,
                                     std::vector<SDValue> &OutOps) override;
   void selectFrameIndex(SDNode *N);
-  bool SelectFrameAddr(SDValue Addr, SDValue &Base, SDValue &Offset);
+  bool tryFrameLoadStore(SDNode *Node);
   bool tryIndexedLoadStore(SDNode *Node);
 };
 
@@ -307,6 +307,8 @@ void EZHDAGToDAGISel::Select(SDNode *Node) {
   case ISD::STORE:
     if (tryIndexedLoadStore(Node))
       return;
+    if (tryFrameLoadStore(Node))
+      return;
     break;
   default:
     break;
@@ -315,30 +317,102 @@ void EZHDAGToDAGISel::Select(SDNode *Node) {
   SelectCode(Node);
 }
 
-// Match a stack-object address -- a FrameIndex, optionally plus a constant
-// offset -- as a (base, offset) memory operand pair, so loads and stores of
-// stack objects need no separate address materialization.
-// eliminateFrameIndex range-checks the final SP-relative offset and
-// scavenges when it does not fit, as it already does for spill slots.
-bool EZHDAGToDAGISel::SelectFrameAddr(SDValue Addr, SDValue &Base,
-                                      SDValue &Offset) {
-  if (auto *FIN = dyn_cast<FrameIndexSDNode>(Addr)) {
-    Base = CurDAG->getTargetFrameIndex(FIN->getIndex(), Addr.getValueType());
-    Offset = CurDAG->getTargetConstant(0, SDLoc(Addr), MVT::i32);
-    return true;
+// Fold a stack-object address -- a FrameIndex, optionally plus a constant
+// offset -- straight into an unindexed load or store, so no separate add_imm is
+// needed to materialize the address. eliminateFrameIndex range-checks the final
+// SP-relative offset and scavenges when it does not fit, as it already does for
+// spill slots.
+//
+// This deliberately builds the machine node by hand rather than via a
+// ComplexPattern Pat: a ComplexPattern that fills the base-register and offset
+// operands (two separate instruction operands) ahead of the defaulted predicate
+// operand is miscounted by the DAG-ISel emitter, which appends a phantom second
+// predicate that -verify-machineinstrs rejects. Building the node here yields
+// exactly the four operands the instruction declares.
+bool EZHDAGToDAGISel::tryFrameLoadStore(SDNode *Node) {
+  auto *Mem = cast<MemSDNode>(Node);
+  bool IsLoad = Node->getOpcode() == ISD::LOAD;
+
+  // Only unindexed accesses; the pre/post-indexed forms are selected by
+  // tryIndexedLoadStore.
+  SDValue Ptr;
+  if (IsLoad) {
+    auto *LD = cast<LoadSDNode>(Node);
+    if (LD->getAddressingMode() != ISD::UNINDEXED)
+      return false;
+    Ptr = LD->getBasePtr();
+  } else {
+    auto *ST = cast<StoreSDNode>(Node);
+    if (ST->getAddressingMode() != ISD::UNINDEXED)
+      return false;
+    Ptr = ST->getBasePtr();
   }
-  if (CurDAG->isBaseWithConstantOffset(Addr)) {
-    if (auto *FIN = dyn_cast<FrameIndexSDNode>(Addr.getOperand(0))) {
-      int64_t Off = cast<ConstantSDNode>(Addr.getOperand(1))->getSExtValue();
-      if (isInt<16>(Off)) {
-        Base =
-            CurDAG->getTargetFrameIndex(FIN->getIndex(), Addr.getValueType());
-        Offset = CurDAG->getTargetConstant(Off, SDLoc(Addr), MVT::i32);
-        return true;
-      }
-    }
+
+  // Match FrameIndex, or FrameIndex + constant.
+  SDValue Base;
+  int64_t Off = 0;
+  if (auto *FIN = dyn_cast<FrameIndexSDNode>(Ptr)) {
+    Base = CurDAG->getTargetFrameIndex(FIN->getIndex(), Ptr.getValueType());
+  } else if (CurDAG->isBaseWithConstantOffset(Ptr)) {
+    auto *FIN = dyn_cast<FrameIndexSDNode>(Ptr.getOperand(0));
+    if (!FIN)
+      return false;
+    Off = cast<ConstantSDNode>(Ptr.getOperand(1))->getSExtValue();
+    if (!isInt<16>(Off))
+      return false;
+    Base = CurDAG->getTargetFrameIndex(FIN->getIndex(), Ptr.getValueType());
+  } else {
+    return false;
   }
-  return false;
+
+  EVT MemVT = Mem->getMemoryVT();
+  unsigned Opc;
+  if (IsLoad) {
+    ISD::LoadExtType ExtTy = cast<LoadSDNode>(Node)->getExtensionType();
+    if (MemVT == MVT::i32)
+      Opc = EZH::LDR;
+    else if (MemVT == MVT::i8)
+      Opc = (ExtTy == ISD::SEXTLOAD) ? EZH::LDRBS : EZH::LDRB;
+    else if (MemVT == MVT::i1) {
+      // A zero/any-extending i1 load is just a byte load. A sign-extending i1
+      // load must produce 0/-1 from bit 0, which no single EZH load does
+      // (LDRBS sign-extends from bit 7, not bit 0), so leave it unfolded --
+      // exactly as the old frameaddr Pats did, which had no sextloadi1 fold.
+      // Folding it to LDRB would silently zero-extend (0/1) instead.
+      if (ExtTy == ISD::SEXTLOAD)
+        return false;
+      Opc = EZH::LDRB;
+    } else
+      return false; // i16 has no byte/word load; leave to legalization
+  } else {
+    if (MemVT == MVT::i32)
+      Opc = EZH::STR;
+    else if (MemVT == MVT::i8)
+      Opc = EZH::STRB;
+    else
+      return false; // i1/i16 truncstores are not folded
+  }
+
+  SDLoc DL(Node);
+  SDValue Offset = CurDAG->getTargetConstant(Off, DL, MVT::i32);
+  SDValue Pred = CurDAG->getTargetConstant(EZHCC::ICC_EU, DL, MVT::i32);
+
+  MachineSDNode *Res;
+  if (IsLoad) {
+    SDValue Ops[] = {Base, Offset, Pred, Mem->getChain()};
+    Res = CurDAG->getMachineNode(Opc, DL, MVT::i32, MVT::Other, Ops);
+    CurDAG->setNodeMemRefs(Res, {Mem->getMemOperand()});
+    ReplaceUses(SDValue(Node, 0), SDValue(Res, 0)); // Value
+    ReplaceUses(SDValue(Node, 1), SDValue(Res, 1)); // Chain
+  } else {
+    SDValue Val = cast<StoreSDNode>(Node)->getValue();
+    SDValue Ops[] = {Val, Base, Offset, Pred, Mem->getChain()};
+    Res = CurDAG->getMachineNode(Opc, DL, MVT::Other, Ops);
+    CurDAG->setNodeMemRefs(Res, {Mem->getMemOperand()});
+    ReplaceUses(SDValue(Node, 0), SDValue(Res, 0)); // Chain
+  }
+  CurDAG->RemoveDeadNode(Node);
+  return true;
 }
 
 void EZHDAGToDAGISel::selectFrameIndex(SDNode *Node) {

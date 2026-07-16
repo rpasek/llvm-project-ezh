@@ -442,7 +442,12 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   for (CPUser &User : CPUsers) {
     if (!User.MI || !User.CPEMI) continue;
     MCSymbol *LitSym = User.CPEMI->getOperand(0).getMCSymbol();
-    User.MI->getOperand(1) = MachineOperand::CreateMCSymbol(LitSym);
+    // Mutate the operand in place. Copy-assigning a freshly built operand
+    // (CreateMCSymbol) would overwrite this operand's ParentMI with the
+    // temporary's null parent -- the implicit copy-assignment copies every
+    // field, ParentMI included -- which -verify-machineinstrs flags as
+    // "operand with wrong parent set". ChangeToMCSymbol leaves ParentMI alone.
+    User.MI->getOperand(1).ChangeToMCSymbol(LitSym);
   }
 
   // Clean up redundant branches created by splitting
@@ -666,7 +671,11 @@ void EZHConstantIslands::initializeFunctionInfo(
 
       unsigned Opc = I.getOpcode();
       if (I.isBranch()) {
-        if (Opc != EZH::GOTO)
+        // Both the unconditional GOTO and the conditional GOTO_CC are direct
+        // PC-relative branches that this pass may need to range-fix; the
+        // register-indirect forms are not tracked. isPredicated distinguishes
+        // them (GOTO has no predicate operand, GOTO_CC always carries one).
+        if (Opc != EZH::GOTO && Opc != EZH::GOTO_CC)
           continue;
         bool isCond = TII->isPredicated(I);
         unsigned MaxOffs = 8 * 1024 * 1024;
@@ -767,9 +776,7 @@ MachineBasicBlock *EZHConstantIslands::splitBlockBeforeInstr(MachineInstr *MI) {
         .addImm(EZHCC::ICC_EU);
   }
 
-  BuildMI(OrigBB, DebugLoc(), TII->get(EZH::GOTO))
-      .addMBB(NewBB)
-      .addImm(EZHCC::ICC_EU);
+  BuildMI(OrigBB, DebugLoc(), TII->get(EZH::GOTO)).addMBB(NewBB);
   ++NumSplit;
 
   // Update the CFG.  All succs of OrigBB are now succs of NewBB.
@@ -1114,9 +1121,7 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
       LLVM_DEBUG(dbgs() << "Split at end of " << printMBBReference(*UserMBB)
                         << format(", expected CPE offset %#x\n", CPEOffset));
       NewMBB = &*++UserMBB->getIterator();
-      BuildMI(UserMBB, DebugLoc(), TII->get(EZH::GOTO))
-          .addMBB(NewMBB)
-          .addImm(EZHCC::ICC_EU);
+      BuildMI(UserMBB, DebugLoc(), TII->get(EZH::GOTO)).addMBB(NewMBB);
       unsigned MaxDisp = 8 * 1024 * 1024;
       ImmBranches.push_back(
           ImmBranch(&UserMBB->back(), MaxDisp, false, EZH::GOTO));
