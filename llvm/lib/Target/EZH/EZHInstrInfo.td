@@ -853,6 +853,40 @@ foreach sf = SetFlags in {
   }
 }
 
+// Predicated encodings of the rematerializable immediate materializers. The
+// base opcodes above (plain, non-flag-setting) carry an honest movable
+// descriptor -- hasSideEffects=0, isReMaterializable -- which is only valid for
+// the unconditional (EU) form; a predicated instance reads the unmodelled
+// condition flags. PredicateInstruction therefore rewrites the base opcode to
+// its *_CC twin here (hasSideEffects=1, not rematerializable) rather than only
+// setting the predicate operand, so no generic pass ever sees a predicated
+// materializer wearing the movable descriptor. The twins share the base
+// encoding and asm syntax; isCodeGenOnly keeps the disassembler on the base
+// opcode, so emitted bytes and printed asm are unchanged. (Mirrors the
+// LOAD_CONSTANT / LOAD_CONSTANT_COND split, which is already separate.)
+let hasSideEffects = 1, isPredicable = 0, isCodeGenOnly = 1 in {
+  def LOAD_IMM_CC : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd),
+                                (ins imms11:$Imm, pred:$Cond),
+                                "load_imm$Cond $Rd, $Imm", []> {
+    let Rs1 = 0;
+    let Inst{31} = 0;
+  }
+  def LOAD_IMMN_CC : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd),
+                                 (ins imms11:$Imm, pred:$Cond),
+                                 "load_immn$Cond $Rd, $Imm", []> {
+    let Rs1 = 0;
+    let Inst{31} = 1;
+  }
+  let AsmMatchConverter = "cvtShiftedImm" in {
+    def LOAD_SIMM_CC : EZHInstALUIShifted<OP_MOV, 0, (outs GPR:$Rd),
+                          (ins shifted_imms11:$Imm, imm5:$ShAmt, pred:$Cond),
+                          "load_simm$Cond $Rd, $Imm", []>;
+    def LOAD_SIMMN_CC : EZHInstALUIShifted<OP_MOV, 1, (outs GPR:$Rd),
+                           (ins shifted_imms11:$Imm, imm5:$ShAmt, pred:$Cond),
+                           "load_simmn$Cond $Rd, $Imm", []>;
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Predicated Memory Instructions
 //===----------------------------------------------------------------------===//
@@ -901,8 +935,11 @@ let isBranch = 1, isTerminator = 1 in
 // the target (the bitslice handler) which returns via RA, otherwise it
 // falls through. It is therefore neither a terminator nor a barrier -- it
 // is a conditional subroutine call sitting mid-block (see
-// EZHBitSliceInjection). Defs RA and carries side effects.
-let hasSideEffects = 1, Defs = [RA] in
+// EZHBitSliceInjection). isCall makes that description honest to the
+// descriptor; the handler is register-transparent, so RA is its only
+// modelled clobber (like OUTLINE_CALL). Inserted only after RA, so isCall
+// has no allocation effect.
+let isCall = 1, hasSideEffects = 1, Defs = [RA] in
   def GOTOL : EZHInstGoto<1, (outs), (ins brtarget:$addr, pred:$Cond), "gotol$Cond $addr", []>;
 
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in {

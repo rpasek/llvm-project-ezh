@@ -310,10 +310,12 @@ bool EZHInstrInfo::isPredicated(const MachineInstr &MI) const {
   return (MCID.TSFlags & EZHII::IsPredicated) != 0;
 }
 
-// The rematerializable materialization instructions (load_imm/load_simm
-// families, LOAD_CONSTANT) carry their predicate as an operand and share
-// their opcode with the predicated encodings; only the unpredicated form
-// may be re-executed at an arbitrary program point.
+// The rematerializable immediate materializers (load_imm/load_simm families,
+// LOAD_CONSTANT). Only the unpredicated base opcodes appear here: predicating
+// one rewrites it to its *_CC twin (PredicateInstruction), which carries
+// hasSideEffects=1 and is not in this list, so a predicated instance is never
+// treated as rematerializable. The isPredicated guard is now defensive -- the
+// base opcodes only ever hold the unconditional EU form -- but is kept cheap.
 bool EZHInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   if (isPredicated(MI))
     return false;
@@ -322,15 +324,9 @@ bool EZHInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   case EZH::LOAD_IMMN:
   case EZH::LOAD_SIMM:
   case EZH::LOAD_SIMMN:
-    // Unpredicated immediate materializations are pure value producers;
-    // their descriptors clear hasSideEffects (LiveRangeEdit gates remat on
-    // isSafeToMove, which rejects unmodelled side effects with no target
-    // override, so the flag cannot stay set). The predicated encodings
-    // sharing these opcodes read unmodelled flags and rely on nothing
-    // moving instructions after the if-converter -- an invariant
-    // EZHTargetMachine::targetSchedulesPostRAScheduling enforces. This
-    // explicit accept is then belt-and-braces should the descriptors ever
-    // change; the isPredicated rejection above is the load-bearing part.
+    // Pure, flag-transparent value producers; their descriptors clear
+    // hasSideEffects (LiveRangeEdit gates remat on isSafeToMove, which rejects
+    // unmodelled side effects with no target override).
     return true;
   default:
     return TargetInstrInfo::isReMaterializableImpl(MI);
@@ -357,6 +353,28 @@ bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
     MI.setDesc(get(EZH::GOTO_CC));
     MI.addOperand(MachineOperand::CreateImm(CC));
     return true;
+  }
+
+  // Predicating a rematerializable immediate materializer switches it to its
+  // *_CC twin (hasSideEffects=1, not rematerializable), so its honest movable
+  // descriptor is never carried by a predicated instance. The operand layout
+  // is identical, so the generic predicate rewrite below then fills the
+  // condition and the value-preserving implicit use.
+  switch (MI.getOpcode()) {
+  case EZH::LOAD_IMM:
+    MI.setDesc(get(EZH::LOAD_IMM_CC));
+    break;
+  case EZH::LOAD_IMMN:
+    MI.setDesc(get(EZH::LOAD_IMMN_CC));
+    break;
+  case EZH::LOAD_SIMM:
+    MI.setDesc(get(EZH::LOAD_SIMM_CC));
+    break;
+  case EZH::LOAD_SIMMN:
+    MI.setDesc(get(EZH::LOAD_SIMMN_CC));
+    break;
+  default:
+    break;
   }
 
   const MCInstrDesc &MCID = MI.getDesc();
