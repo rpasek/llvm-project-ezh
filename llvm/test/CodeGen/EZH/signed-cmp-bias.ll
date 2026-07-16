@@ -20,7 +20,7 @@ define i32 @cmp_big_const(i32 %x) {
 define i32 @bool_no_mask(i32 %a, i32 %b) {
 ; CHECK-LABEL: bool_no_mask:
 ; CHECK-NOT:   and_imm
-; CHECK:       mov_ca
+; CHECK:       load_imm_ca r{{[0-9]}}, 1
 ; CHECK-NOT:   and_imm
   %c = icmp ugt i32 %a, %b
   %z = zext i1 %c to i32

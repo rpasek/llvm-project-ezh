@@ -1804,6 +1804,60 @@ EZHTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
       break;
     }
 
+    // Fold a constant materialization into the predicated slot: cloning
+    // the load itself into TrueBB lets the if-converter later produce
+    // "load_imm_cc dst, K" instead of materialize-plus-mov_cc, saving an
+    // instruction and a register. If only the false side is a foldable
+    // materialization, swap the sides and invert the condition.
+    MachineRegisterInfo &MRI = F->getRegInfo();
+    auto FoldableMaterialization = [&](Register R) -> MachineInstr * {
+      MachineInstr *Def = MRI.getVRegDef(R);
+      if (!Def)
+        return nullptr;
+      switch (Def->getOpcode()) {
+      case EZH::LOAD_IMM:
+      case EZH::LOAD_IMMN:
+      case EZH::LOAD_SIMM:
+      case EZH::LOAD_SIMMN:
+        return TII->isPredicated(*Def) ? nullptr : Def;
+      default:
+        return nullptr;
+      }
+    };
+    auto InvertCC = [](EZHCC::CondCode C) -> EZHCC::CondCode {
+      switch (C) {
+      case EZHCC::ICC_ZE: return EZHCC::ICC_NZ;
+      case EZHCC::ICC_NZ: return EZHCC::ICC_ZE;
+      case EZHCC::ICC_PO: return EZHCC::ICC_NE;
+      case EZHCC::ICC_NE: return EZHCC::ICC_PO;
+      case EZHCC::ICC_AZ: return EZHCC::ICC_ZB;
+      case EZHCC::ICC_ZB: return EZHCC::ICC_AZ;
+      case EZHCC::ICC_CA: return EZHCC::ICC_NC;
+      case EZHCC::ICC_NC: return EZHCC::ICC_CA;
+      default: return EZHCC::ICC_EU; // not invertible here
+      }
+    };
+    MachineInstr *FoldDef = FoldableMaterialization(TrueReg);
+    if (!FoldDef) {
+      if (MachineInstr *FalseDef = FoldableMaterialization(FalseReg)) {
+        EZHCC::CondCode Inverted = InvertCC(BranchCC);
+        if (Inverted != EZHCC::ICC_EU) {
+          std::swap(TrueReg, FalseReg);
+          BranchCC = Inverted;
+          FoldDef = FalseDef;
+        }
+      }
+    }
+    Register OrigFoldReg;
+    if (FoldDef) {
+      OrigFoldReg = FoldDef->getOperand(0).getReg();
+      Register NewTrue = MRI.createVirtualRegister(&EZH::GPRRegClass);
+      MachineInstr *Clone = F->CloneMachineInstr(FoldDef);
+      Clone->getOperand(0).setReg(NewTrue);
+      TrueBB->push_back(Clone);
+      TrueReg = NewTrue;
+    }
+
     BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(TrueBB).addImm(BranchCC);
     BuildMI(*BB, MI, DL, TII->get(EZH::GOTO))
         .addMBB(DoneBB)
@@ -1816,6 +1870,11 @@ EZHTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
         .addMBB(BB);
 
     MI.eraseFromParent();
+    // If the select was the folded materialization's only user, it is dead
+    // now; erase it eagerly, since later cleanup passes have already run
+    // for shapes produced by earlier combines.
+    if (FoldDef && MRI.use_nodbg_empty(OrigFoldReg))
+      FoldDef->eraseFromParent();
     return DoneBB;
   }
   case EZH::EH_SjLj_SetJmp:

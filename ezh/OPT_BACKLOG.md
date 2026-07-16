@@ -141,7 +141,7 @@ void f(void) {
 
 Fix: /Users/foxy/Downloads/llvm-ezh-port/llvm/lib/Target/EZH/EZHInstrInfo.td: add isReMaterializable = 1 (and isAsCheapAsAMove for the ALU forms) to the LoadImmOps/LoadSimmOps multiclasses, the LOAD_CONSTANT pseudo (ARM precedent: tLDRpci is isReMaterializable despite mayLoad), and ADD_IMM (covers sp-relative address materialization; RISCV marks ADDI the same way). If the generic isReallyTriviallyReMaterializable check balks at the SP read or the constant-pool MMO, override it in EZHInstrInfo.cpp.
 
-## [8] Select-of-constants materializes both values then conditionally moves: 'load_imm rA,K; mov_cc rD,rA' never folded into the predicated 'load_imm_cc rD,K'
+## [8] [DONE 47a01ced] Select-of-constants materializes both values then conditionally moves: 'load_imm rA,K; mov_cc rD,rA' never folded into the predicated 'load_imm_cc rD,K'
 
 Estimated win: 4 bytes (1 insn) per site, often 8 with the freed register shuffle; ~391 sites / 848 files (~0.5 per file). The select-feeding-add combine saves 12 bytes (3 insns) per counting-loop body.
 
