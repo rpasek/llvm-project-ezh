@@ -110,7 +110,8 @@ bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // (LowerCall places it just below the vararg save area), so this offset
   // is a small constant regardless of the size of the locals; the range
   // check is a safety net that cannot fire for compiler-generated frames.
-  if (MI.getOpcode() == EZH::TCRETURN_MEM) {
+  if (MI.getOpcode() == EZH::TCRETURN_MEM ||
+      MI.getOpcode() == EZH::TCRETURN_MEM_CC) {
     int PostOffset = MF.getFrameInfo().getObjectOffset(FrameIndex) + Offset;
     if (PostOffset < -512 || PostOffset > 508 || (PostOffset & 3) != 0)
       report_fatal_error(

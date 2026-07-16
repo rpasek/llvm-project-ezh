@@ -58,6 +58,20 @@ public:
 
         bool IsBranchOrCall = MI.isBranch() || MI.isCall();
 
+        // A predicated (conditional) tail call must never reach this pass in
+        // bitslice mode: it keeps RA live across a fall-through, so RA has no
+        // safe stack slot for the poll to hide in. The codegen invariant is
+        // that bitslice mode force-saves RA (determineCalleeSaves) and lowers a
+        // conditional tail call to popd_cc pc + an unconditional goto instead,
+        // so only the unconditional TCRETURN* forms (handled below) appear here.
+        // Assert it, so a future change that breaks the invariant trips loudly
+        // rather than silently injecting a gotol_bs that clobbers the live RA.
+        assert(MI.getOpcode() != EZH::TCRETURN_CC &&
+               MI.getOpcode() != EZH::TCRETURNExt_CC &&
+               MI.getOpcode() != EZH::TCRETURN_REG_CC &&
+               MI.getOpcode() != EZH::TCRETURN_MEM_CC &&
+               "predicated tail call in a bitslice-interrupt function");
+
         // A tail call still needs its poll -- a cycle of unconditional
         // tail calls would otherwise never enter the handler -- but the
         // injection cannot go directly before it: the epilogue has already

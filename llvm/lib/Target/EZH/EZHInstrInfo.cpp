@@ -373,6 +373,21 @@ bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
   case EZH::LOAD_SIMMN:
     MI.setDesc(get(EZH::LOAD_SIMMN_CC));
     break;
+  // A predicated tail call keeps a fall-through successor, so switch it to its
+  // _CC twin (not a barrier, not an unconditional return) rather than only
+  // setting the predicate on the barrier descriptor.
+  case EZH::TCRETURN:
+    MI.setDesc(get(EZH::TCRETURN_CC));
+    break;
+  case EZH::TCRETURNExt:
+    MI.setDesc(get(EZH::TCRETURNExt_CC));
+    break;
+  case EZH::TCRETURN_REG:
+    MI.setDesc(get(EZH::TCRETURN_REG_CC));
+    break;
+  case EZH::TCRETURN_MEM:
+    MI.setDesc(get(EZH::TCRETURN_MEM_CC));
+    break;
   default:
     break;
   }

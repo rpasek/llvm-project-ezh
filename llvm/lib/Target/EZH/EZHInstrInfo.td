@@ -1158,6 +1158,33 @@ let isCall = 1, isReturn = 1, isTerminator = 1, isBarrier = 1,
                                 "ldr$Cond $Rd, $Rn, $Offset", []>;
 }
 
+// Conditional (predicated) twins of the tail-call returns. A predicated tail
+// call keeps a fall-through successor (the not-taken path), so -- unlike the
+// unconditional forms above -- it is NOT a barrier and does not unconditionally
+// return (isReturn/isBarrier are cleared). PredicateInstruction rewrites the
+// base opcode to its _CC twin so those flags stay honest, the same split as
+// GOTO / GOTO_CC. These arise only under -mno-ezh-bitslice-interrupts in leaf
+// functions: bitslice mode force-saves RA and emits a predicated return
+// (popd_cc pc) plus an unconditional goto instead, so a predicated tail call
+// never coexists with the bitslice poll. Same encoding and asm as the base
+// (isCodeGenOnly), so emitted bytes are unchanged.
+let isCall = 1, isTerminator = 1, isCodeGenOnly = 1, isPredicable = 0,
+    Uses = [SP] in {
+  def TCRETURN_CC : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),
+                                "goto$Cond $addr", []>;
+  def TCRETURNExt_CC : EZHInstGoto<0, (outs),
+                                   (ins tcalltarget:$addr, pred:$Cond),
+                                   "goto$Cond $addr", []>;
+  def TCRETURN_REG_CC : EZHInstGotoReg<0, (outs),
+                                       (ins GPRTC:$raddr, pred:$Cond),
+                                       "goto_reg$Cond $raddr", []>;
+  let mayLoad = 1 in
+  def TCRETURN_MEM_CC : EZHInstMem<OP_LDR, 0, 1, 0, 0, 0, (outs),
+                                   (ins GPR:$Rd, GPR:$Rn,
+                                        imms8_word_offset:$Offset, pred:$Cond),
+                                   "ldr$Cond $Rd, $Rn, $Offset", []>;
+}
+
 // MachineOutliner call: a gosub whose only modelled def is RA (the
 // hardware gosub writes only the link register). Unlike CALL it must NOT
 // claim R0-R3, so the framework's per-candidate liveness stays the sole
