@@ -405,11 +405,14 @@ LOAD_CONSTANT -- all already split. So a general ALU _CC split would be pure
 codegen-neutral churn with no honesty fix.
 
 The pin (targetSchedulesPostRAScheduling=true) was investigated as the real
-lever. Finding: it is now SAFELY DROPPABLE -- with every predicated instance at
-hasSideEffects=1, the generic post-RA scheduler keeps each S-form producer
-adjacent to its predicated consumer (verified: enabling it kept `subs` directly
-before `mov_ca`, -verify-machineinstrs clean, 11/244 corpus files changed, all
-benign load reshuffles). BUT dropping it yields NO benefit: the active model is
+lever. Finding: it appears droppable -- with every predicated instance at
+hasSideEffects=1, the scheduler treats each flag writer/reader as a global
+scheduling object, so each S-form producer stays adjacent to its predicated
+consumer (observed: enabling it kept `subs` directly before `mov_ca`,
+-verify-machineinstrs clean, 11/244 corpus files changed, all inspected as
+benign load reshuffles). CAVEAT: that is a bounded host experiment (one corpus,
+output inspection), NOT a silicon sweep with scheduling enabled; the adjacency
+argument is structural but an actual pin drop must clear the full silicon bar. BUT dropping it yields NO benefit: the active model is
 NoSchedModel, so the scheduler has no latencies to hide and only reshuffles
 loads unprincipledly. The genuine optimization is to wire up a real SchedModel
 (an unused EZHSchedModel with LoadLatency=2 already exists) AND drop the pin, so

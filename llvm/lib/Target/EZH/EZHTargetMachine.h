@@ -79,17 +79,19 @@ public:
   // materializers were rematerializable/hasSideEffects=0 yet shared their
   // opcode with the predicated encodings) is now gone: the materializer and
   // GOTO/TCRETURN opcode splits mean every predicated instance carries
-  // hasSideEffects=1. An experiment (2026-07-16) confirmed that with that in
-  // place the generic post-RA scheduler DOES preserve the S-form/predicated
-  // adjacency -- hasSideEffects=1 orders every flag-setter and flag-reader
-  // relative to each other (verified: subs stays immediately before its
-  // mov_ca; -verify-machineinstrs clean). So the pin is retained not for
-  // safety but for value: the active model is NoSchedModel, so post-RA
-  // scheduling has no latencies to hide and only reshuffles loads without
-  // benefit on this in-order core. Dropping it is worthwhile only together
-  // with a real SchedModel (an unused EZHSchedModel with LoadLatency=2 exists)
-  // to actually hide the load-use latency -- a separate, silicon-validated
-  // effort. See ezh/OPT_BACKLOG.md.
+  // hasSideEffects=1. A bounded host experiment (2026-07-16; one corpus,
+  // output inspection -- not a silicon sweep with scheduling enabled) showed
+  // the generic post-RA scheduler then preserves the S-form/predicated
+  // adjacency: hasSideEffects=1 makes every flag-setter and flag-reader a
+  // global scheduling object, ordered relative to each other (observed: subs
+  // stays immediately before its mov_ca; -verify-machineinstrs clean). So the
+  // pin is retained mostly for value, with the safety case strong but not
+  // silicon-proven: the active model is NoSchedModel, so post-RA scheduling
+  // has no latencies to hide and only reshuffles loads without benefit on
+  // this in-order core. Dropping it is worthwhile only together with a real
+  // SchedModel (an unused EZHSchedModel with LoadLatency=2 exists) to
+  // actually hide the load-use latency -- a separate effort that must clear
+  // the full silicon bar. See ezh/OPT_BACKLOG.md.
   bool targetSchedulesPostRAScheduling() const override { return true; }
 
   TargetLoweringObjectFile *getObjFileLowering() const override {
