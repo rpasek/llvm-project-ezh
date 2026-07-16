@@ -311,7 +311,7 @@ unsigned long long ticks(unsigned t, unsigned long long acc) { return acc + t * 
 
 Fix: EZHISelLowering.cpp:1421 -- PerformDAGCombine's mul-by-constant chain builder is `VT == MVT::i32` only; extend to MVT::i64 pre-type-legalization (the combiner runs before types are expanded), emitting i64 SHL/ADD/SUB nodes that then legalize to the 3-insn shift funnel + adds/adc. Also EZHISelLowering.cpp:1445 -- decomposeMulByConstant returns true only for i32, so even 2^n+/-1 i64 constants (x*3) skip the generic decomposition; accept i64 too. Cost model: each i64 chain step is ~5 insns (vs 1 for i32), so budget 2 steps at minsize, 3 at -O2. Land after finding 1, which makes the wide adds 2 insns instead of 9.
 
-## [6] MachineOutliner not ported: heavy exact-sequence duplication, especially expanded 16-bit load/store idioms and CSR pop chains
+## [6] [DONE - pending round-22] MachineOutliner not ported: heavy exact-sequence duplication, especially expanded 16-bit load/store idioms and CSR pop chains
 
 Estimated win: ~1 insn per site minus (L+1) shared copy per candidate; measured upper bound 42.8KB+2.7KB (12%) on corpus, 3.6KB in the largest firmware demo; biggest single lever but a real feature port
 

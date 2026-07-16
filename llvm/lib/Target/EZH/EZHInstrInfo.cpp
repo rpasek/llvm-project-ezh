@@ -34,8 +34,10 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "EZHSubtarget.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
+#include "llvm/CodeGen/MachineOutliner.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/Alignment.h"
@@ -426,4 +428,184 @@ int EZHInstrInfo::getJumpTableIndex(const MachineInstr &MI) const {
     }
   }
   return -1;
+}
+
+//===----------------------------------------------------------------------===//
+// MachineOutliner
+//===----------------------------------------------------------------------===//
+
+// The one frame/call construction EZH supports: call the outlined function
+// with a gosub, return with goto ra. There is no alternate link register,
+// so no tail-call or register-save variant exists.
+namespace {
+enum EZHOutlinerConstructionID { EZHOutlinerDefault };
+} // namespace
+
+// An instruction is outlinable only if it is a pure, position-independent,
+// state-free value computation: no control transfer, no memory, no side
+// effects, no flag production or consumption, no position-dependent
+// operand, and no reserved/special register. Relocating such an
+// instruction into a shared function cannot change its behavior.
+//
+// This is a rejection over an EXHAUSTIVE enumeration of EZH's danger
+// classes, not a positive opcode list -- which is both safer (no danger
+// class can be forgotten by omitting an opcode) and more complete (it
+// admits the fused shifted-ALU forms without a fragile 60-entry table).
+// The completeness argument, class by class:
+//  - control transfer -> isBranch/isCall/isReturn/isTerminator/indirect
+//  - memory, incl. pc-relative pool loads (LOAD_CONSTANT has mayLoad) ->
+//    mayLoadOrStore
+//  - peripheral/event/GPIO/CFM/hold/trigger/tight_loop -> every one is
+//    hasUnmodeledSideEffects
+//  - flag PRODUCED -> the _s suffix is exactly how the by-construction flag
+//    model marks a producer
+//  - flag/carry CONSUMED -> isPredicated (pred operand != ICC_EU) or an ADC
+//    / SBC carry lane anywhere in the mnemonic
+//  - position-dependent operand (CPI/JTI/MBB/global/blockaddress/symbol/
+//    frame index) -> the operand loop admits only reg and plain imm
+//  - reserved/special register, explicit OR implicit -> reads/modifies
+//    check over RA/SP/PC/GPO/GPD/CFS/CFM/GPI
+bool EZHInstrInfo::isOutlineWhitelisted(const MachineInstr &MI) const {
+  if (MI.isBranch() || MI.isCall() || MI.isReturn() || MI.isTerminator() ||
+      MI.isIndirectBranch() || MI.isInlineAsm())
+    return false;
+  if (MI.mayLoadOrStore() || MI.hasUnmodeledSideEffects())
+    return false;
+
+  // Flags: no producer (_s), no consumer (predicated), no carry lane.
+  if (isPredicated(MI))
+    return false;
+  StringRef Name = getName(MI.getOpcode());
+  if (Name.ends_with("_s") || Name.contains("ADC") || Name.contains("SBC"))
+    return false;
+
+  // Operands: register or plain immediate only.
+  for (const MachineOperand &MO : MI.operands())
+    if (!MO.isReg() && !MO.isImm())
+      return false;
+
+  // No reserved/special register (covers implicit uses/defs too).
+  const EZHRegisterInfo *TRI = &getRegisterInfo();
+  for (Register R : {EZH::RA, EZH::SP, EZH::PC, EZH::GPO, EZH::GPD, EZH::CFS,
+                     EZH::CFM, EZH::GPI})
+    if (MI.readsRegister(R, TRI) || MI.modifiesRegister(R, TRI))
+      return false;
+
+  // Must produce a value (a pure computation), never a bare pseudo/meta.
+  return MI.getNumExplicitDefs() >= 1 && !MI.isPseudo();
+}
+
+outliner::InstrType
+EZHInstrInfo::getOutliningTypeImpl(const MachineModuleInfo &, /*MMI*/
+                                   MachineBasicBlock::iterator &MIT,
+                                   unsigned Flags) const {
+  MachineInstr &MI = *MIT;
+
+  if (MI.isDebugInstr() || MI.getOpcode() == TargetOpcode::IMPLICIT_DEF ||
+      MI.isKill())
+    return outliner::InstrType::Invisible;
+
+  // CFI runs would split unwind state across two code regions; never
+  // outline them (the outlined function carries no CFA).
+  if (MI.isCFIInstruction())
+    return outliner::InstrType::Illegal;
+
+  return isOutlineWhitelisted(MI) ? outliner::InstrType::Legal
+                                  : outliner::InstrType::Illegal;
+}
+
+std::optional<std::unique_ptr<outliner::OutlinedFunction>>
+EZHInstrInfo::getOutliningCandidateInfo(
+    const MachineModuleInfo &MMI,
+    std::vector<outliner::Candidate> &RepeatedSequenceLocs,
+    unsigned MinRepeats) const {
+  // A single link register: the outlined call (gosub) clobbers RA, so a
+  // candidate is viable only where RA is dead across the sequence. Framed
+  // functions spilled RA in the prologue (dead across the body); frameless
+  // leaves keep the live return address in RA and are rejected. Require
+  // BOTH the liveness query and that the function actually spilled RA, so
+  // the gate never depends on pristine-register inference alone -- this is
+  // the sole guard against return-address corruption and has no backstop.
+  auto SpilledRA = [](const outliner::Candidate &C) {
+    for (const CalleeSavedInfo &CS :
+         C.getMF()->getFrameInfo().getCalleeSavedInfo())
+      if (CS.getReg() == EZH::RA)
+        return true;
+    return false;
+  };
+  const EZHRegisterInfo *TRI = &getRegisterInfo();
+  llvm::erase_if(RepeatedSequenceLocs, [&](outliner::Candidate &C) {
+    return !SpilledRA(C) || !C.isAvailableAcrossAndOutOfSeq(EZH::RA, *TRI);
+  });
+
+  if (RepeatedSequenceLocs.size() < MinRepeats)
+    return std::nullopt;
+
+  unsigned SequenceSize = 0;
+  for (const MachineInstr &MI : RepeatedSequenceLocs[0])
+    SequenceSize += getInstSizeInBytes(MI);
+
+  // gosub is 4 bytes; under bitslice interrupts BitSliceInjection (which
+  // runs after the outliner) will prepend a 4-byte gotol_bs poll to each
+  // new gosub site. FrameOverhead is the single trailing RET (4 bytes); no
+  // poll is added to RET (not a branch or call) and there is no prologue.
+  bool Bitslice = RepeatedSequenceLocs[0]
+                      .getMF()
+                      ->getSubtarget<EZHSubtarget>()
+                      .hasBitSliceInterrupts();
+  unsigned CallOverhead = Bitslice ? 8 : 4;
+  for (outliner::Candidate &C : RepeatedSequenceLocs)
+    C.setCallInfo(EZHOutlinerDefault, CallOverhead);
+
+  return std::make_unique<outliner::OutlinedFunction>(
+      RepeatedSequenceLocs, SequenceSize, /*FrameOverhead=*/4,
+      EZHOutlinerDefault);
+}
+
+bool EZHInstrInfo::isFunctionSafeToOutlineFrom(
+    MachineFunction &MF, bool OutlineFromLinkOnceODRs) const {
+  const Function &F = MF.getFunction();
+  // The interrupt handler must never be restructured; and never outline
+  // across a section boundary or from a naked function.
+  if (MF.getName() == "bitslice_handler")
+    return false;
+  if (F.hasSection() || F.hasFnAttribute(Attribute::Naked))
+    return false;
+  if (!OutlineFromLinkOnceODRs && F.hasLinkOnceODRLinkage())
+    return false;
+  return true;
+}
+
+bool EZHInstrInfo::shouldOutlineFromFunctionByDefault(
+    MachineFunction &MF) const {
+  // Default-on only at -Oz, matching the upstream AArch64/RISC-V
+  // convention: outlining captures just intra-module repetition, which is
+  // sparse in typical single-module EZH firmware (measured ~0.004% of
+  // .text across the 3078-test corpus), so it is not worth the pass cost by
+  // default at -Os. It stays available at any level via
+  // -mllvm -enable-machine-outliner and is fully correct when enabled
+  // (validated across the whole -Os corpus).
+  return MF.getFunction().hasMinSize();
+}
+
+void EZHInstrInfo::buildOutlinedFrame(
+    MachineBasicBlock &MBB, MachineFunction &MF,
+    const outliner::OutlinedFunction &OF) const {
+  // The caller's gosub left the return address in RA; the body is a strict
+  // leaf (no whitelisted instruction is a branch or call), so nothing
+  // clobbers it. Declare RA live-in for the verifier and append the return.
+  MBB.addLiveIn(EZH::RA);
+  MBB.insert(MBB.end(), BuildMI(MF, DebugLoc(), get(EZH::RET)));
+}
+
+MachineBasicBlock::iterator EZHInstrInfo::insertOutlinedCall(
+    Module &M, MachineBasicBlock &MBB, MachineBasicBlock::iterator &It,
+    MachineFunction &MF, outliner::Candidate &C) const {
+  // MF is the outlined function being called (the pass passes it here);
+  // gosub to its symbol. No call-frame setup: gosub does not touch SP and
+  // the outlined body is stack-neutral, so every SP+imm access in the
+  // caller still hits the same offset.
+  It = MBB.insert(It, BuildMI(MF, DebugLoc(), get(EZH::OUTLINE_CALL))
+                          .addGlobalAddress(M.getNamedValue(MF.getName())));
+  return It;
 }

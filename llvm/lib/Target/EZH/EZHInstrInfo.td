@@ -1091,6 +1091,15 @@ let isCall = 1, isReturn = 1, isTerminator = 1, isBarrier = 1,
                                 "ldr$Cond $Rd, $Rn, $Offset", []>;
 }
 
+// MachineOutliner call: a gosub whose only modelled def is RA (the
+// hardware gosub writes only the link register). Unlike CALL it must NOT
+// claim R0-R3, so the framework's per-candidate liveness stays the sole
+// authority on general registers -- a value live through R0-R3 that the
+// outlined body does not write is correctly preserved.
+let isCall = 1, Defs = [RA], isCodeGenOnly = 1 in
+  def OUTLINE_CALL : EZHInstCall<OP_GOSUB, (outs), (ins calltarget:$addr),
+                                 "gosub $addr", []>;
+
 let isCall = 1, Defs = [R0, R1, R2, R3, RA] in {
   def CALL : EZHInstCall<OP_GOSUB, (outs), (ins calltarget:$addr), "gosub $addr", [(EZH_call tglobaladdr:$addr)]>;
   let isCodeGenOnly = 1 in

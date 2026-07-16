@@ -88,6 +88,13 @@ EZHTargetMachine::EZHTargetMachine(const Target &T, const Triple &TT,
                 OptLevel),
       TLOF(std::make_unique<TargetLoweringObjectFileELF>()) {
   initAsmInfo();
+  // Opt into the target-default MachineOutliner: enable the pass and let it
+  // run by default when the function requests minimum size. The generic pass
+  // runs before addPreEmitPass2, so it never sees injected gotol_bs polls or
+  // materialized pc-relative island loads. EZHInstrInfo's whitelist-closed
+  // classification governs what may be outlined.
+  setMachineOutliner(true);
+  setSupportsDefaultOutlining(true);
 }
 
 TargetTransformInfo
