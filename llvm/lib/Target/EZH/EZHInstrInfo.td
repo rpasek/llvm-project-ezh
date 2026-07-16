@@ -43,6 +43,7 @@ def EZH_adds : SDNode<"EZHISD::ADDS", SDTIntBinOp, [SDNPCommutative, SDNPOutGlue
 def EZH_subs : SDNode<"EZHISD::SUBS", SDTIntBinOp, [SDNPOutGlue]>;
 def EZH_adc  : SDNode<"EZHISD::ADC",  SDTIntBinOp, [SDNPCommutative, SDNPInGlue]>;
 def EZH_sbc  : SDNode<"EZHISD::SBC",  SDTIntBinOp, [SDNPInGlue]>;
+def EZH_sbcs : SDNode<"EZHISD::SBCS", SDTIntBinOp, [SDNPInGlue, SDNPOutGlue]>;
 def EZH_adjcallstackdown : SDNode<"ISD::CALLSEQ_START", SDT_EZHCallSeqStart, [SDNPHasChain, SDNPOutGlue]>;
 def EZH_adjcallstackup : SDNode<"ISD::CALLSEQ_END", SDT_EZHCallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def EZH_ret_glue_node : SDNode<"EZHISD::RET_GLUE_INTERNAL", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
@@ -508,11 +509,15 @@ multiclass LoadImmOps<string opc_str, string sf_suffix, bit is_immn = 0> {
   defvar ins_imm_pred = (ins imms11:$Imm, pred:$Cond);
 
   // The plain (non-flag-setting) form is safely rematerializable: pure
-  // immediate, flag-transparent. It must also override the format class's
-  // hasSideEffects = 1 (which serves the flag-setting _s twins and the
-  // special-register wrappers sharing the format), or the generic remat
-  // check rejects it. EZHInstrInfo restricts remat to the unpredicated
-  // encoding at run time (the predicate is an operand).
+  // immediate, flag-transparent. hasSideEffects must be 0 for that to
+  // work: LiveRangeEdit gates remat on MachineInstr::isSafeToMove, which
+  // rejects unmodelled side effects with no target override. The
+  // descriptor is shared with the predicated encodings (the predicate is
+  // an operand), which DO read unmodelled flags; today nothing moves
+  // machine instructions after the if-converter creates them, and
+  // EZHSubtarget pins that invariant by keeping the post-RA scheduler
+  // off. The architecturally complete fix is a predicated/unpredicated
+  // opcode split -- see OPT_BACKLOG.md.
   let isReMaterializable = !empty(sf_suffix),
       isAsCheapAsAMove = !empty(sf_suffix),
       hasSideEffects = !if(!empty(sf_suffix), 0, 1) in
@@ -1116,6 +1121,8 @@ def : Pat<(EZH_adc i32:$a, i32:$b), (ADC GPR:$a, GPR:$b, 0)>;
 def : Pat<(EZH_adc i32:$a, imms12:$b), (ADC_IMM GPR:$a, imms12:$b, 0)>;
 def : Pat<(EZH_sbc i32:$a, i32:$b), (SBC GPR:$a, GPR:$b, 0)>;
 def : Pat<(EZH_sbc i32:$a, imms12:$b), (SBC_IMM GPR:$a, imms12:$b, 0)>;
+def : Pat<(EZH_sbcs i32:$a, i32:$b), (SBC_s GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_sbcs i32:$a, imms12:$b), (SBC_IMM_s GPR:$a, imms12:$b, 0)>;
 
 // Memory Patterns (Words and Bytes)
 // 16-bit access is handled by the Legalizer's Expand mechanism into bytes.

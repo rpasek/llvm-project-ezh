@@ -364,3 +364,21 @@ Warning from project history: a bare flip of GOTO's isBarrier to 0 was tried in
 an earlier session and MISCOMPILED the C++ SjLj exception dispatch (reverted;
 generic passes rely on barrier-ness of unconditional branches). The split is
 the only sound shape for this fix -- do not retry the flip.
+
+## [KNOWN ISSUE] Predicated and unpredicated encodings share opcodes and descriptors
+
+Sibling of the GOTO isBarrier issue above, surfaced by external review of the
+immediate-remat change: the predicate is an operand, so static MCID flags
+cannot distinguish a pure unpredicated load_imm (safe to move, remat, CSE)
+from a predicated load_imm_cc (reads unmodelled flags, must not move). The
+descriptor dilemma is unsolvable per-instance: LiveRangeEdit gates remat on
+MachineInstr::isSafeToMove, which rejects unmodelled side effects with no
+target override, so hasSideEffects = 1 kills remat and hasSideEffects = 0
+under-describes the predicated instances. Today the pipeline is safe by
+construction (predicated instances only exist after the if-converter, and
+EZHSubtarget::enablePostRAScheduler pins the post-RA scheduler off), but the
+complete fix is an opcode split: unpredicated opcodes with honest movable
+descriptors, predicated *_CC opcodes with hasSideEffects = 1, and
+PredicateInstruction switching opcode instead of rewriting an operand. Best
+done together with the GOTO/GOTO_CC split as one predication-modeling
+overhaul.

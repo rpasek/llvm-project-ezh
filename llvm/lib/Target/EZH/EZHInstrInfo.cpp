@@ -322,7 +322,20 @@ bool EZHInstrInfo::isPredicated(const MachineInstr &MI) const {
 bool EZHInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
   if (isPredicated(MI))
     return false;
-  return TargetInstrInfo::isReMaterializableImpl(MI);
+  switch (MI.getOpcode()) {
+  case EZH::LOAD_IMM:
+  case EZH::LOAD_IMMN:
+  case EZH::LOAD_SIMM:
+  case EZH::LOAD_SIMMN:
+    // Unpredicated immediate materializations are pure value producers.
+    // Their descriptors keep hasSideEffects = 1 (the predicated instances
+    // sharing the opcode read unmodelled flags, and the conservative flag
+    // is what pins them against any future late motion pass), which the
+    // generic check below would reject -- accept them here instead.
+    return true;
+  default:
+    return TargetInstrInfo::isReMaterializableImpl(MI);
+  }
 }
 
 bool EZHInstrInfo::isPredicable(const MachineInstr &MI) const {
