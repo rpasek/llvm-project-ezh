@@ -34,3 +34,31 @@ entry:
   %v = add i32 %a, 777
   ret i32 %v
 }
+
+; The load itself must rematerialize: a constant live before and after the
+; call is re-created by a second load_imm, not parked in a callee-saved
+; register (external review caught the flag-setting format class
+; overriding the remat eligibility here).
+define i32 @imm_live_across(i32 %a, i32 %b, i32 %c, i32 %d) {
+; CHECK-LABEL: imm_live_across:
+; CHECK-NOT:   pushd r4
+; CHECK:       load_imm r0, 777
+; CHECK:       gosub use
+; CHECK-NEXT:  load_imm r0, 777
+; CHECK-NEXT:  popd pc
+entry:
+  call void @use(i32 777, i32 %b, i32 %c, i32 %d)
+  ret i32 777
+}
+
+; Shifted-immediate form, same requirement.
+define i32 @simm_live_across(i32 %a, i32 %b, i32 %c, i32 %d) {
+; CHECK-LABEL: simm_live_across:
+; CHECK-NOT:   pushd r4
+; CHECK:       load_simm r0, 81920
+; CHECK:       gosub use
+; CHECK-NEXT:  load_simm r0, 81920
+entry:
+  call void @use(i32 81920, i32 %b, i32 %c, i32 %d)
+  ret i32 81920
+}

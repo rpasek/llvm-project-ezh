@@ -46,7 +46,7 @@ int intmax(void) { return 0x7FFFFFFF; }
 
 Fix: EZHISelLowering.cpp LowerConstant (line 898): after the existing LOAD_SIMM check (isInt<11>(SVal>>TZ), line 911), run the identical check on ~UVal and emit DAG.getMachineNode(EZH::LOAD_SIMMN, DL, MVT::i32, {HiOfNot, ShiftOfNot, Pred}). Also teach the RecoverConstant lambda in the signed-compare bias combine (EZHISelLowering.cpp:649) to recover values from LOAD_SIMMN nodes so the C^0x80000000 fold keeps applying. Side fix while there: AsmParser cvtShiftedImm (EZHAsmParser.cpp:247) silently truncates unencodable values (`load_simmn r0, 65535` assembles to imm=-1,sh=0 = wrong value) - add a post-split isInt<11> range check. Validate the LOAD_SIMMN encoding once against ezhdis since only the SIMM form is silicon-proven.
 
-## [9] [DONE 17dae33d] i64 add/sub/neg re-derive the carry with subs+mov_ca instead of using adds/adc -- the adde/sube patterns in the td are dead code
+## [9] [DONE 222f8f47] i64 add/sub/neg re-derive the carry with subs+mov_ca instead of using adds/adc -- the adde/sube patterns in the td are dead code
 
 Estimated win: 28-44 bytes and ~10 cycles per i64 add/sub (9-13 insns -> 2-3), plus 2 callee-saved registers freed per site on an 8-register machine (kills the pushd/popd pairs and spill pressure around them).
 
@@ -70,7 +70,7 @@ void t(void) { s.y = s.x; s.z = a; }
 
 Fix: EZHISelLowering.cpp LowerGlobalAddress (line ~932): when GV->getOffset() != 0 and isInt<11>(Offset), emit LOAD_CONSTANT of the bare GV and wrap it in DAG.getNode(ISD::ADD, ..., getConstant(Offset)). SelectionDAG CSEs the bare-GV node across all offsets in a block, and the existing MemOps patterns (EZHInstrInfo.td:813-831, (load (add i32:$Rn, imms8_word:$Offset))) fold the add into the ldr/str offset; non-memory uses select ADD_IMM (imms11). Keep the pooled GV+off form only as fallback for offsets outside imm range.
 
-## [9] [DONE 33aaea40] LOAD_CONSTANT has no MMO and is not rematerializable, so MachineCSE never merges cross-block reloads of the same pool entry
+## [9] [DONE 2341fef2] LOAD_CONSTANT has no MMO and is not rematerializable, so MachineCSE never merges cross-block reloads of the same pool entry
 
 Estimated win: 4 bytes per eliminated reload; up to 16KB corpus (35% of all pool loads), ~1.4KB across the 24 firmware demos; small targeted change
 
@@ -124,7 +124,7 @@ void touch(void) { g.a = 1; g.b = 2; g.c = 3; g.d = 4; g.e = 5; }
 
 Fix: /Users/foxy/Downloads/llvm-ezh-port/llvm/lib/Target/EZH/EZHISelLowering.cpp LowerGlobalAddress (line ~932): when GV->getOffset() != 0, emit the pool entry for the bare GlobalValue and wrap the LOAD_CONSTANT in an ISD::ADD of the offset; SelectionDAG CSE then shares one base load and the existing (load/store (add Rn, imms8_word)) patterns in EZHInstrInfo.td fold the offset into the memory instruction (verified working: pointer-based p->b already emits ldr rD, rN, 4). Also override TargetLowering::isOffsetFoldingLegal to return false so DAGCombiner stops re-merging (add GA, C) into GA+C. Keep the pooled sym+off form only for offsets outside add_imm's imms12 range.
 
-## [8] [DONE 33aaea40, except ADD_IMM] LOAD_CONSTANT / LOAD_IMM / LOAD_SIMM / ADD_IMM are not marked isReMaterializable, so register pressure spills freshly materialized addresses and constants to the stack instead of recomputing them
+## [8] [DONE 2341fef2 + side-effect descriptor fix, except ADD_IMM] LOAD_CONSTANT / LOAD_IMM / LOAD_SIMM / ADD_IMM are not marked isReMaterializable, so register pressure spills freshly materialized addresses and constants to the stack instead of recomputing them
 
 Estimated win: Eliminates the spill store (4 bytes code + 1 SRAM store + 4 bytes frame) per occurrence and converts the reload into a cycle-equivalent pool load; >=536 adjacent occurrences in the corpus, 10 in the one-function repro alone.
 
@@ -141,7 +141,7 @@ void f(void) {
 
 Fix: /Users/foxy/Downloads/llvm-ezh-port/llvm/lib/Target/EZH/EZHInstrInfo.td: add isReMaterializable = 1 (and isAsCheapAsAMove for the ALU forms) to the LoadImmOps/LoadSimmOps multiclasses, the LOAD_CONSTANT pseudo (ARM precedent: tLDRpci is isReMaterializable despite mayLoad), and ADD_IMM (covers sp-relative address materialization; RISCV marks ADDI the same way). If the generic isReallyTriviallyReMaterializable check balks at the SP read or the constant-pool MMO, override it in EZHInstrInfo.cpp.
 
-## [8] [DONE 47a01ced] Select-of-constants materializes both values then conditionally moves: 'load_imm rA,K; mov_cc rD,rA' never folded into the predicated 'load_imm_cc rD,K'
+## [8] [DONE dadf3cd8] Select-of-constants materializes both values then conditionally moves: 'load_imm rA,K; mov_cc rD,rA' never folded into the predicated 'load_imm_cc rD,K'
 
 Estimated win: 4 bytes (1 insn) per site, often 8 with the freed register shuffle; ~391 sites / 848 files (~0.5 per file). The select-feeding-add combine saves 12 bytes (3 insns) per counting-loop body.
 

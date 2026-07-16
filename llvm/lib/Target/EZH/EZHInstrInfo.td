@@ -508,10 +508,14 @@ multiclass LoadImmOps<string opc_str, string sf_suffix, bit is_immn = 0> {
   defvar ins_imm_pred = (ins imms11:$Imm, pred:$Cond);
 
   // The plain (non-flag-setting) form is safely rematerializable: pure
-  // immediate, flag-transparent. EZHInstrInfo restricts remat to the
-  // unpredicated encoding at run time (the predicate is an operand).
+  // immediate, flag-transparent. It must also override the format class's
+  // hasSideEffects = 1 (which serves the flag-setting _s twins and the
+  // special-register wrappers sharing the format), or the generic remat
+  // check rejects it. EZHInstrInfo restricts remat to the unpredicated
+  // encoding at run time (the predicate is an operand).
   let isReMaterializable = !empty(sf_suffix),
-      isAsCheapAsAMove = !empty(sf_suffix) in
+      isAsCheapAsAMove = !empty(sf_suffix),
+      hasSideEffects = !if(!empty(sf_suffix), 0, 1) in
   def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
     : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd), ins_imm_pred,
                   opc_str#sf_suffix#"$Cond $Rd, $Imm",
@@ -530,7 +534,8 @@ multiclass LoadSimmOps<string opc_str, string sf_suffix, bit invert_val> {
 
   let AsmMatchConverter = "cvtShiftedImm" in {
     let isReMaterializable = !empty(sf_suffix),
-        isAsCheapAsAMove = !empty(sf_suffix) in
+        isAsCheapAsAMove = !empty(sf_suffix),
+        hasSideEffects = !if(!empty(sf_suffix), 0, 1) in
     def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
       : EZHInstALUIShifted<OP_MOV, invert_val, (outs GPR:$Rd), ins_simm_pred,
                            opc_str#sf_suffix#"$Cond $Rd, $Imm",
