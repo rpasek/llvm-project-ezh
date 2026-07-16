@@ -384,7 +384,7 @@ an earlier session and MISCOMPILED the C++ SjLj exception dispatch (reverted;
 generic passes rely on barrier-ness of unconditional branches). The split is
 the only sound shape for this fix -- do not retry the flip.
 
-## [KNOWN ISSUE] [RESOLVED: b87fb16 split + 7c4ec21 investigation] Predicated and unpredicated encodings share opcodes and descriptors
+## [KNOWN ISSUE] [materializers/GOTO/TCRETURN DONE; general predicated-consumer modeling OPEN] Predicated and unpredicated encodings share opcodes and descriptors
 
 DONE 2026-07-16 (b87fb16382a5) for the IMMEDIATE MATERIALIZERS -- the load-bearing
 case this item is about (load_imm / load_simm want honest movable descriptors so
@@ -394,31 +394,30 @@ PredicateInstruction rewrites the base opcode to its _CC twin instead of just
 setting the predicate operand, exactly the fix prescribed below. Byte-identical
 codegen (0/244 gcc-torture at -O2, bitslice on and off); 3078/3078 silicon O0+Os.
 The isReMaterializableImpl isPredicated guard is now defensive, not load-bearing.
-GENERAL ALU ops -- investigated 2026-07-16, NO split needed. The general
-predicated ALU ops (add_ze, sub_nz, mov_cc, ...) share opcodes with their
-unpredicated forms, but unlike the materializers they are NOT dishonest: the
-EZHInstALU/Shifted formats give every ALU op hasSideEffects=1, which is correct
-for a predicated instance (it reads flags) and merely conservative for an
-unpredicated one. A survey confirmed the ONLY movable (hasSideEffects=0 /
-isReMaterializable) descriptors in the whole backend are the materializers and
-LOAD_CONSTANT -- all already split. So a general ALU _CC split would be pure
-codegen-neutral churn with no honesty fix.
+GENERAL PREDICATED OPS -- the 2026-07-16 "NO split needed" survey was WRONG,
+caught by external review. That survey grepped the td for explicit
+hasSideEffects=0 and concluded every general ALU op carries hasSideEffects=1.
+It missed that tablegen INFERS pure descriptors from ISel patterns when the
+format class does not set the flag: EZHInstALU/ALUI set hasSideEffects=1
+(so ADD/SUB/MOV are conservative), but the shift, bit-op, ANDOR, and memory
+formats do not. Ground truth from EZHGenInstrInfo.inc: 254 predicable
+descriptors have NO UnmodeledSideEffects flag (LSL, BSET, ANDOR, LDR, STR,
+the RROR family, ... including flag-WRITING _s shift forms like LSL_s).
+Reachable predicated example after if-conversion:
+    SUB_IMM_s ..., 0        ; flag producer (side-effecting descriptor)
+    LSL ..., 2, 1           ; predicated flag READER with a PURE descriptor
+Nothing in the descriptors ties that LSL to its producer: marking only the
+producer side-effecting creates no scheduling edge to a pure consumer.
 
-The pin (targetSchedulesPostRAScheduling=true) was investigated as the real
-lever. Finding: it appears droppable -- with every predicated instance at
-hasSideEffects=1, the scheduler treats each flag writer/reader as a global
-scheduling object, so each S-form producer stays adjacent to its predicated
-consumer (observed: enabling it kept `subs` directly before `mov_ca`,
--verify-machineinstrs clean, 11/244 corpus files changed, all inspected as
-benign load reshuffles). CAVEAT: that is a bounded host experiment (one corpus,
-output inspection), NOT a silicon sweep with scheduling enabled; the adjacency
-argument is structural but an actual pin drop must clear the full silicon bar. BUT dropping it yields NO benefit: the active model is
-NoSchedModel, so the scheduler has no latencies to hide and only reshuffles
-loads unprincipledly. The genuine optimization is to wire up a real SchedModel
-(an unused EZHSchedModel with LoadLatency=2 already exists) AND drop the pin, so
-the post-RA scheduler hoists loads to hide the load-use latency -- a separate,
-silicon-validated effort of modest expected value on a simple in-order core.
-Until then the pin stays (cheap, and now redundant-for-safety anyway).
+The pin (targetSchedulesPostRAScheduling=true) is therefore
+CORRECTNESS-CRITICAL, not held for performance. The earlier "appears
+droppable" experiment observed `subs` + `mov_ca` adjacency -- but MOV comes
+from EZHInstALU and is side-effecting, so that experiment sampled exactly the
+subset for which ordering IS preserved and proved nothing about the 254 pure
+forms. There is no miscompile today only because the pin keeps every post-RA
+scheduler off and no other instruction-motion pass runs after the
+if-converter creates predicated instances (pass-ordering safety, as
+originally documented).
 
 ORIGINAL ANALYSIS (retained for context; the prescription in its last sentence
 is exactly what b87fb16 implemented for every opcode that needed it): sibling of
@@ -434,21 +433,32 @@ unpredicated opcodes with honest movable descriptors, predicated *_CC opcodes
 with hasSideEffects = 1, and PredicateInstruction switching opcode instead of
 rewriting an operand.
 
-CLOSING STATUS (2026-07-16): the split shipped for every opcode whose base
-descriptor is movable (the four materializers, b87fb16; the GOTO and TCRETURN
-barrier splits are the sibling item above). LOAD_CONSTANT was already a
-separate opcode pair, but external review caught that LOAD_CONSTANT_COND
-inherited hasSideEffects=0 from the shared let block -- a predicated
-flag-reader wearing the movable flag. Corrected to hasSideEffects=1
-(behavior-neutral: it is only created by the constant-island pass's
-conditional-branch fixup, post-RA, after all instruction motion). The general predicated ALU ops keep their shared opcodes by DESIGN,
-not omission: their shared descriptor (hasSideEffects=1) is already correct
-for the predicated instances and merely conservative for the unpredicated
-ones, so there is no dishonesty left to fix and a uniform ALU _CC split would
-be codegen-neutral churn. If post-RA scheduling is ever wanted (SchedModel +
-pin drop, see the investigation note above), it is already safe without any
-further split. MIR regression tests (select-const.ll, tail-call.ll,
--stop-after=if-converter) pin the PredicateInstruction opcode rewrite.
+STATUS (2026-07-16): DONE for every opcode whose base descriptor is MOVABLE --
+the remat/CSE-relevant cases this item's original prescription targeted: the
+four materializers (b87fb16, MIR tests pin the rewrite), LOAD_CONSTANT_COND's
+inherited-flag fix (0b7d8aa), and the GOTO/TCRETURN barrier splits (sibling
+item above). OPEN for the general predicated-consumer modeling gap described
+above: 254 predicable pure descriptors whose predicated instances rely solely
+on pass ordering plus the scheduler pin. This is a latent-hazard item, not an
+active bug, and it only becomes load-bearing if the pin is ever dropped (e.g.
+for the SchedModel optimization) or a new post-if-conversion motion pass
+appears. Closing it requires one of:
+  (a) Model the condition flags as an implicit physical register, ARM-CPSR
+      style: S-forms Def a FLAGS reg; the pred operand becomes (imm, reg) so
+      every predicated instance carries a true register Use. Architecturally
+      right, but touches every BuildMI/.addImm(pred) site in the backend and
+      the pred PredicateOperand definition -- a large, silicon-validated
+      effort.
+  (b) Exhaustive honest descriptors: hasSideEffects=1 on the remaining
+      flag-WRITER forms (the _s shifts etc. -- honest, they mutate unmodelled
+      state) PLUS either _CC twins for all reachable predicated consumers or
+      a per-instance TargetInstrInfo::isSchedulingBoundary override for
+      isPredicated instances. NOTE the subtlety: boundaries on readers alone
+      are insufficient -- a pure-descriptor flag WRITER (lsl_s) could still be
+      scheduled between a producer and its boundary-frozen consumer, so
+      writers must be marked too.
+Until then the pin stays and is documented as correctness-critical
+(EZHTargetMachine.h).
 
 ## [DEFERRED - unsafe minimal fixes] Jump-table dispatch clobbers RA as scratch, forcing pushd ra in leaf switch functions
 

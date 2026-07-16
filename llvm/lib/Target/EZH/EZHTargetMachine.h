@@ -71,27 +71,29 @@ public:
   // schedule nothing: this is the hook that keeps the generic pipeline
   // from ever inserting a post-RA scheduler, including through the
   // -post-RA-scheduler and -misched-postra options (a subtarget
-  // enablePostRAScheduler override is bypassable by both). Predicated
-  // instructions read the unmodelled condition flags, so no pass may move a
-  // predicated consumer away from its flag-setting (S-form) producer.
+  // enablePostRAScheduler override is bypassable by both).
   //
-  // The descriptor-sharing hazard that once compounded this (the immediate
-  // materializers were rematerializable/hasSideEffects=0 yet shared their
-  // opcode with the predicated encodings) is now gone: the materializer and
-  // GOTO/TCRETURN opcode splits mean every predicated instance carries
-  // hasSideEffects=1. A bounded host experiment (2026-07-16; one corpus,
-  // output inspection -- not a silicon sweep with scheduling enabled) showed
-  // the generic post-RA scheduler then preserves the S-form/predicated
-  // adjacency: hasSideEffects=1 makes every flag-setter and flag-reader a
-  // global scheduling object, ordered relative to each other (observed: subs
-  // stays immediately before its mov_ca; -verify-machineinstrs clean). So the
-  // pin is retained mostly for value, with the safety case strong but not
-  // silicon-proven: the active model is NoSchedModel, so post-RA scheduling
-  // has no latencies to hide and only reshuffles loads without benefit on
-  // this in-order core. Dropping it is worthwhile only together with a real
-  // SchedModel (an unused EZHSchedModel with LoadLatency=2 exists) to
-  // actually hide the load-use latency -- a separate effort that must clear
-  // the full silicon bar. See ezh/OPT_BACKLOG.md.
+  // This pin is CORRECTNESS-CRITICAL, not a performance choice. The
+  // condition flags are not modelled as a register, so the only thing
+  // keeping a flag-setting (S-form) producer adjacent to its predicated
+  // consumer is that no instruction-motion pass runs after the if-converter
+  // creates predicated instances. Descriptor flags do NOT protect this:
+  // while the immediate materializers, GOTO/TCRETURN, and the EZHInstALU
+  // formats carry hasSideEffects=1, tablegen infers PURE descriptors from
+  // the ISel patterns of the shift, bit-op, ANDOR, and memory formats -- 254
+  // predicable descriptors have no side-effect flag. A reachable example
+  // after if-conversion is "SUB_IMM_s ...; LSL ..., 2, 1": the predicated
+  // LSL reads flags but its descriptor gives a scheduler no dependence on
+  // the producer, and marking only the producer side-effecting creates no
+  // edge to a pure consumer. (An earlier note here claimed the pin was
+  // droppable; that conclusion came from observing a side-effecting
+  // consumer, mov_cc, and was wrong for the pure-descriptor forms.)
+  //
+  // Dropping the pin therefore first requires closing the modeling gap:
+  // either model the flags as an implicit physical register (ARM-CPSR
+  // style), or give every reachable predicated-consumer and flag-writer
+  // form an honest descriptor (_CC-twin splits or hasSideEffects on the
+  // remaining formats). See ezh/OPT_BACKLOG.md for the full analysis.
   bool targetSchedulesPostRAScheduling() const override { return true; }
 
   TargetLoweringObjectFile *getObjFileLowering() const override {
