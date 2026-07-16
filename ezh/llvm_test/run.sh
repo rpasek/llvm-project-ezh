@@ -123,7 +123,7 @@ if [ "$SKIP_BUILD" = false ]; then
             -DCMAKE_C_COMPILER_TARGET=ezh-none-elf \
             -DTEST_SUITE_USER_MODE_EMULATION=ON \
             -DCMAKE_C_FLAGS="-target ezh-none-elf ${BITSLICE_FLAGS} -nostdlibinc -isystem ${EZH_TEST_DIR}/../include_shim -isystem ${ROOT_DIR}/build/libc/libc/include -I ${ROOT_DIR}/lldb/source/Plugins/Process/EZH/ -D__TEST__ -DSTACK_SIZE_WORDS=262144 -DPRINTF_BUF_SIZE=2048 -${OPT} -ffunction-sections -fdata-sections -DSIGNAL_SUPPRESS -Dalloca=__builtin_alloca ${EXTRA_CFLAGS:-}" \
-            -DCMAKE_CXX_FLAGS="-target ezh-none-elf ${BITSLICE_FLAGS} -nostdlibinc -fexceptions -isystem ${EZH_TEST_DIR}/../include_shim -isystem ${ROOT_DIR}/build/libc/include/c++/v1 -isystem ${ROOT_DIR}/build/libc/libc/include -I ${ROOT_DIR}/lldb/source/Plugins/Process/EZH/ -D__TEST__ -DSTACK_SIZE_WORDS=262144 -DPRINTF_BUF_SIZE=2048 -${OPT} -ffunction-sections -fdata-sections -DSIGNAL_SUPPRESS -Dalloca=__builtin_alloca -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE" \
+            -DCMAKE_CXX_FLAGS="-target ezh-none-elf ${BITSLICE_FLAGS} -nostdlibinc -fexceptions -isystem ${EZH_TEST_DIR}/../include_shim -isystem ${ROOT_DIR}/build/libc/include/c++/v1 -isystem ${ROOT_DIR}/build/libc/libc/include -I ${ROOT_DIR}/lldb/source/Plugins/Process/EZH/ -D__TEST__ -DSTACK_SIZE_WORDS=262144 -DPRINTF_BUF_SIZE=2048 -${OPT} -ffunction-sections -fdata-sections -DSIGNAL_SUPPRESS -Dalloca=__builtin_alloca -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE ${EXTRA_CFLAGS:-}" \
             -DTEST_SUITE_SUBDIRS="SingleSource/Regression/C;SingleSource/Regression/C++" \
             -DCMAKE_LINKER="${ROOT_DIR}/build/bin/ld.lld" \
             -DCMAKE_C_LINK_EXECUTABLE="<CMAKE_LINKER> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>" \

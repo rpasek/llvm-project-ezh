@@ -98,7 +98,7 @@ void cond_tail(int x) { if (x) h(); }
 
 Fix: EZHISelLowering: override TargetLowering::mayBeEmittedAsTailCall (TargetLowering.h:5141 default returns false) to return true for CI->isTailCall() under CallingConv::C, like RISCVISelLowering.cpp:25569. CodeGenPrepare::dupRetToEnableTailCallOpts then duplicates the ret into the calling block and the existing TCRETURN path (EZHInstrInfo.td:1031) takes over; LowerCall's eligibility checks (stack-arg-free etc., EZHISelLowering.cpp:1147-1159) already guard correctness.
 
-## [8] Flag-to-0/1 materialization uses load_imm 0 + load_imm 1 + predicated reg-mov instead of a predicated load_imm — burns an instruction AND a register (often a callee-saved push/pop pair)
+## [8] [DONE ed6c60f1] Flag-to-0/1 materialization uses load_imm 0 + load_imm 1 + predicated reg-mov instead of a predicated load_imm — burns an instruction AND a register (often a callee-saved push/pop pair)
 
 Estimated win: 1-3 insns (4-12 bytes) per site, plus one register freed — in the repros that turns into removing a pushd/popd pair (8 more bytes + 4 SRAM accesses); addll drops from 12 insns to 5
 
@@ -167,7 +167,7 @@ void gdia(int x) { if (x) g = 5; else h = 7; }
 
 Fix: llvm/lib/Target/EZH/EZHInstrInfo.cpp: make isPredicable() return true for EZH::LOAD_CONSTANT, and in PredicateInstruction() handle it by setDesc(LOAD_CONSTANT_COND), appending the predicate immediate and the implicit dest-reg use (same pattern as the existing pred-operand path at line 333). ~15 lines; the printer and constant-island pass already handle the _COND form end-to-end.
 
-## [8] GlobalAddress+offset baked into pool entries: one pool slot + one pool load per struct field / array element, ldr offset field unused
+## [8] [DONE f44c4db5] GlobalAddress+offset baked into pool entries: one pool slot + one pool load per struct field / array element, ldr offset field unused
 
 Estimated win: 8 bytes + 1 SRAM load per folded slot (kills both the extra `ldr rX, pc, .LCPI` and the 4-byte slot); ~27KB across the corpus, typically 12-24B per struct-heavy function
 
@@ -192,7 +192,7 @@ unsigned g(void) { return 12345; }
 
 Fix: Extend the cost model in EZHISelLowering.cpp LowerConstant (line 898): before falling back to LOAD_CONSTANT, test whether UVal-d (d = sign-extended low 12 bits, i.e. d = (int32_t)(UVal<<20)>>20) passes the LOAD_SIMM or new LOAD_SIMMN check; if so emit the machine-node pair LOAD_SIMM(base) feeding ADD_IMM (EZHInstALUI12, imms12). Two glued machine nodes from LowerConstant, or lower to (ISD::ADD Custom-const, d) and let ISel patterns pick add_imm. Keep pool fallback for the truly hard 58% (0x41C64E6D-style multipliers).
 
-## [8] Variable-amount i64 shifts are libcalls (__ashldi3/__lshrdi3/__ashrdi3) even at -O2 because SHL/SRA/SRL_PARTS are set to Expand
+## [8] [DONE 69fadd44] Variable-amount i64 shifts are libcalls (__ashldi3/__lshrdi3/__ashrdi3) even at -O2 because SHL/SRA/SRL_PARTS are set to Expand
 
 Estimated win: Per site at -O2: removes gosub+ra save and the ~30-60 cycle helper for ~8 inline insns; ~5x cycle win. Neutral-to-negative on size, so gate on OptForSpeed.
 
@@ -227,7 +227,7 @@ unsigned f(unsigned a, unsigned b) { return a < b ? a : b; }  // -Os or -O2
 
 Fix: Root cause: PseudoSELECT_CC (EZHISelLowering.cpp:1594) is expanded to a diamond + PHI; phi-elim makes the copy, if-converter (addPreSched2) predicates it — but per llc -debug-pass=Structure the last machine-cp runs BEFORE postrapseudos and if-converter, so nothing ever cleans predicated copies. Fix A (small): pre-emit peephole (next to EZHCompareFusion in EZHTargetMachine.cpp addPreEmitPass) rewriting `mov_cc A,B ; mov B,A` (A dead, adjacent) to `mov_inv(cc) B,A` using the CC pairs ZE/NZ, CA/NC, PO/NE, ZB/AZ (all forms assemble, verified with llvm-mc round-trip). Fix B (structural, ARM-style): replace the diamond expansion with a tied-operand MOVCC pseudo (dst tied to falsev) so the coalescer folds the copy for free. Also worth implementing EZHInstrInfo::isCopyInstrImpl for always-predicated EZH::MOV so any late copy-cleanup pass can see MOVs at all.
 
-## [7] [DONE 8d4c5674] Libcalls are never tail-called: isUsedByReturnOnly not overridden, so every tail-position __mulsi3/__ashldi3/soft-float call keeps a pushd ra / popd pc frame
+## [7] [PARTIAL 8d4c5674] Libcalls are never tail-called: isUsedByReturnOnly not overridden, so every tail-position __mulsi3/__ashldi3/soft-float call keeps a pushd ra / popd pc frame
 
 Estimated win: 2 insns / 8 bytes + 4 SRAM stack ops per site (pushd ra + popd pc + gosub → goto); pure forwarding wrappers shrink 3x
 
@@ -237,6 +237,8 @@ long long shl(long long x, int n) { return x << n; }
 ```
 
 Fix: Override isUsedByReturnOnly in EZHTargetLowering (/Users/foxy/Downloads/llvm-ezh-port/llvm/lib/Target/EZH/EZHISelLowering.cpp|.h), modeled on RISCV/ARM: walk the node's uses, accept CopyToReg into R0..R3 whose glue/chain feeds the EZH return node, and hand back TCChain. LowerCall's existing eligibility check (line 1147-1160) already accepts direct external-symbol callees with register-only args, so the goto path lights up with no other change.
+
+STATUS (8d4c5674, verified 2026-07-16): PARTIAL — only SINGLE-REGISTER-result libcalls tail-call today. `mul_i32` → `goto __mulsi3` ✓; but soft-float `add_f32` → `pushd ra / gosub __addsf3 / popd pc` and i64-result `div_i64` → `pushd ra / gosub __divdi3 / popd pc` both still keep the frame. The remaining work is multi-register (register-pair) return values: isUsedByReturnOnly must accept the R0:R1 pair (and the soft-float return path) feeding the EZH return node, not just a single CopyToReg into R0. Also note: passes 31/31 host tests and codegen is correct, but the win is ZERO `.text` in the DEFAULT (bitslice-interrupts ON) corpus. In bitslice mode the tail call still becomes a `goto` (opt fires), but the injected `gotol_bs bitslice_handler` poll writes RA, so RA must be saved/restored around it — the frame becomes `pushd ra / gotol_bs / popd ra / goto __mulsi3` (4 insns), the same count as the un-optimized `pushd ra / gotol_bs / gosub / popd pc`. The `goto`-for-`gosub` swap nets zero bytes. The 2-insn/8-byte win is realized only under `-mno-ezh-bitslice-interrupts`, where the whole frame collapses to a bare `goto __mulsi3`.
 
 ## [7] Reg-offset store folds a multi-use address add and re-materializes the scaled index with a standalone lsl even though an lsl_add of the same address already exists
 
@@ -313,7 +315,7 @@ Fix: EZHISelLowering.cpp:1421 -- PerformDAGCombine's mul-by-constant chain build
 
 ## [6] [DONE 0c0627ab] MachineOutliner not ported: heavy exact-sequence duplication, especially expanded 16-bit load/store idioms and CSR pop chains
 
-OUTCOME: ported (whitelist-closed classifier; dedicated OUTLINE_CALL with Defs=[RA] only; RA-dead-and-spilled gate rejects frameless leaves; runs before addPreEmitPass2). Default-on at -Oz ONLY (hasMinSize); available anywhere via -mllvm -enable-machine-outliner. There is NO RA-spill/RegSave fallback -- EZH has a single link register, so a candidate is simply dropped when RA is not already dead across it. MEASURED BENEFIT IS SMALL: the estimate below was a cross-corpus upper bound the outliner cannot reach (it captures only intra-module duplication); actual saving is ~80 bytes on the self-test and ~768 bytes / 0.004% of .text across the 3078-test corpus when forced on at -Os. Correctness proven three ways: 30/30 host tests, the on-silicon differential (run_outliner.sh: ON vs OFF vs host golden, 1 outlined helper + 24 call sites, byte-identical), and a one-time full -Os corpus run with the outliner forced active (3078/3078, artifact ezh/llvm_test/ezh_lit_results_outliner_forced.json). Original estimate below is retained for context only.
+OUTCOME: ported (whitelist-closed classifier; dedicated OUTLINE_CALL with Defs=[RA] only; RA-dead-and-spilled gate rejects frameless leaves; runs before addPreEmitPass2). Default-on at -Oz ONLY (hasMinSize); available anywhere via -mllvm -enable-machine-outliner. There is NO RA-spill/RegSave fallback -- EZH has a single link register, so a candidate is simply dropped when RA is not already dead across it. MEASURED BENEFIT IS SMALL: the estimate below was a cross-corpus upper bound the outliner cannot reach (it captures only intra-module duplication); actual saving is ~80 bytes on the self-test and exactly 768 bytes across the C tests (12 C executables changed) when forced on at -Os. MEASUREMENT CAVEAT: the forced-outliner corpus run set EXTRA_CFLAGS only via CMAKE_C_FLAGS -- run.sh omitted it from CMAKE_CXX_FLAGS (fixed 2026-07-16) -- so the 30 C++ -Os tests, INCLUDING the EH tests, did NOT exercise forced outlining. The 768-byte figure and the "12 executables changed" are therefore C-only; the forced-mode C++ contribution is unmeasured (a re-run with the fixed script would cover it). Correctness proven three ways: 30/30 host tests, the on-silicon differential (run_outliner.sh: ON vs OFF vs host golden, 1 outlined helper + 24 call sites, byte-identical), and a one-time full -Os corpus run with the outliner forced active (all 3078 tests passed -- correctness holds for C and C++ alike; artifact ezh/llvm_test/ezh_lit_results_outliner_forced.json). Original estimate below is retained for context only.
 
 Estimated win: ~1 insn per site minus (L+1) shared copy per candidate; measured upper bound 42.8KB+2.7KB (12%) on corpus, 3.6KB in the largest firmware demo; biggest single lever but a real feature port
 
@@ -322,7 +324,7 @@ Repro:
 Any code using short/uint16_t fields (EZH has only 8/32-bit ld/st, so each i16 access expands to 5-6 insns), e.g. ezh/ezh_test/ezh_comp.c: the 6-insn sequence 'ldrb r1,r1,0 | ldrb r2,r2,0 | lsl r2,r2,24 | lsl_or r1,r2,r1,16 | asr r1,r1,16 | ldrb r2,r3,0' repeats 14x verbatim in one module.
 ```
 
-Fix: Implement the TargetInstrInfo outliner hooks in EZHInstrInfo (isFunctionSafeToOutlineFrom, getOutliningTypeImpl, getOutliningCandidateInfo, buildOutlinedFrame, insertOutlinedCall) and enable via shouldOutlineFromFunctionByDefault at -Os/-Oz. Call = gosub (1 insn, clobbers RA per td Defs list), return = mov pc, ra; candidates containing gosub or live RA need an RA spill in the outlined frame (pushd ra/popd pc, +2 insns) -- same model as RISC-V's port. Sequences ending in the popd-chain+return outline as tail calls (goto).
+Fix (ORIGINAL PLAN -- superseded by OUTCOME above where they differ; the two prescriptions below were deliberately NOT adopted): Implement the TargetInstrInfo outliner hooks in EZHInstrInfo (isFunctionSafeToOutlineFrom, getOutliningTypeImpl, getOutliningCandidateInfo, buildOutlinedFrame, insertOutlinedCall). Call = gosub (1 insn, clobbers RA per td Defs list), return = mov pc, ra. Two plan items changed in the shipped port: (1) default is -Oz ONLY (hasMinSize), NOT -Os/-Oz -- forced-on at -Os was used only for the one-time corpus measurement. (2) There is NO RA-spill fallback (the RISC-V "pushd ra/popd pc in the outlined frame" model does not apply): EZH has a single link register, so a candidate with live (not-already-dead-and-spilled) RA is simply DROPPED rather than spilled. Sequences ending in the popd-chain+return still outline as tail calls (goto).
 
 ## [5] Duplicate {load_imm rX, V; return/goto} tails survive branch folding (tail-merge threshold too high for fixed 4-byte insns)
 
@@ -347,7 +349,18 @@ unsigned udiv10(unsigned x) { return x / 10; }   // also x/3, x%10 etc., -O2
 Fix: Custom-lower ISD::UDIV/UREM (and SDIV via sign-fixup) for constant divisors from a small table of shift-add reciprocal recipes in EZHISelLowering.cpp (or a DAGCombine before the LibCall action triggers), gated on OptForSpeed / divisor in table. UREM as x - d*(x/d) reuses the existing mul-by-constant chain (EZHISelLowering.cpp:1421). Lower priority / more work than findings 1-3, but the only path to non-pow2 constant division without a hardware multiply.
 
 
-## [KNOWN ISSUE] Predicated GOTO carries a static isBarrier, so -verify-machineinstrs fails on any conditional branch
+## [KNOWN ISSUE] [DONE 725f496] Predicated GOTO carries a static isBarrier, so -verify-machineinstrs fails on any conditional branch
+
+DONE 2026-07-16 (725f496aa321): GOTO split into GOTO (unconditional, isBarrier,
+no predicate operand, codegen-only), GOTO_CC (conditional, not a barrier, pred
+operand), and GOTOL (conditional link form). analyzeBranch / insertBranch /
+PredicateInstruction / EZHBitSliceInjection / EZHConstantIslandPass (incl.
+range-tracking GOTO_CC) and the SjLj/custom-inserter branch builders were all
+updated. -verify-machineinstrs is now clean at -O0/-O2 and is enabled on every
+EZH CodeGen test RUN line. Validated 3078/3078 on silicon at -O0 and -Os
+including ezh_eh/ezh_setjmp -- the bare-isBarrier-flip SjLj miscompile did NOT
+recur because the split keeps unconditional dispatch branches as barriers. The
+predicated-tail-call (TCRETURN) path did not need changes.
 
 External review: "MBB exits via conditional branch/fall-through but ends with a
 barrier instruction". GOTO is one opcode whose predicate is an operand, but
@@ -377,13 +390,18 @@ descriptor dilemma is unsolvable per-instance: LiveRangeEdit gates remat on
 MachineInstr::isSafeToMove, which rejects unmodelled side effects with no
 target override, so hasSideEffects = 1 kills remat and hasSideEffects = 0
 under-describes the predicated instances. Today the pipeline is safe by
-construction (predicated instances only exist after the if-converter, and
-EZHSubtarget::enablePostRAScheduler pins the post-RA scheduler off), but the
+construction (predicated instances only exist after the if-converter, and the
+post-RA scheduler is pinned off via targetSchedulesPostRAScheduling), but the
 complete fix is an opcode split: unpredicated opcodes with honest movable
 descriptors, predicated *_CC opcodes with hasSideEffects = 1, and
-PredicateInstruction switching opcode instead of rewriting an operand. Best
-done together with the GOTO/GOTO_CC split as one predication-modeling
-overhaul.
+PredicateInstruction switching opcode instead of rewriting an operand.
+
+STILL OPEN (2026-07-16): this is the remaining half of the predication-modeling
+overhaul. The GOTO/GOTO_CC branch split shipped on its own in 725f496 (see the
+item above), which is what unblocked -verify-machineinstrs; this general
+materializer split (load_imm / load_imm_cc etc.) was NOT part of that commit and
+is a modeling-purity item, not a correctness blocker -- the verifier runs clean
+today because the pipeline is safe by construction.
 
 ## [DEFERRED - unsafe minimal fixes] Jump-table dispatch clobbers RA as scratch, forcing pushd ra in leaf switch functions
 
