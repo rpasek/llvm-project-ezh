@@ -112,6 +112,7 @@ public:
     return getTM<EZHTargetMachine>();
   }
 
+  void addIRPasses() override;
   bool addInstSelector() override;
   void addPostRegAlloc() override;
   void addPreSched2() override;
@@ -123,6 +124,19 @@ public:
 TargetPassConfig *
 EZHTargetMachine::createPassConfig(PassManagerBase &PassManager) {
   return new EZHPassConfig(*this, &PassManager);
+}
+
+void EZHPassConfig::addIRPasses() {
+  // Merge small globals into one blob: every global otherwise costs its
+  // own constant-pool entry plus a pc-relative load per function that
+  // touches it, while a merged blob shares a single pooled base address
+  // whose member offsets fold straight into the load/store immediates.
+  // 508 is the word-offset addressing limit; byte accesses past 127 pay
+  // one add_imm but still save the pool slot and load.
+  if (TM->getOptLevel() != CodeGenOptLevel::None)
+    addPass(createGlobalMergePass(TM, 508, /*OnlyOptimizeForSize=*/false,
+                                  /*MergeExternalByDefault=*/true));
+  TargetPassConfig::addIRPasses();
 }
 
 bool EZHPassConfig::addInstSelector() {
