@@ -29,6 +29,24 @@
 //
 //===----------------------------------------------------------------------===//
 
+// Per-def latency tuning for the post/pre-indexed loads: their FIRST def
+// (the loaded data) takes the AN14650 E_LDR latency of >= 2 cycles, but the
+// SECOND def (the pointer writeback) is computed on the ALU path and is
+// ready in 1 cycle. The blanket defaultDefLatency fallback would give BOTH
+// defs the 2-cycle load latency, inserting phantom stalls on the pointer
+// recurrence that is the critical path of tight_loop pump bodies
+// (ldr_post/str_post chains). Everything else stays UNBOUND on purpose:
+// TargetSchedModel::computeOperandLatency falls back to defaultDefLatency
+// (mayLoad -> LoadLatency, else 1) for opcodes whose sched class carries no
+// write-latency entries, which encodes the documented timing already
+// (E_STR/E_PER_*/E_PUSH-POP: "performance characteristics same as E_LDR";
+// stores produce only the 1-cycle writeback def). Keep the binding surface
+// minimal -- an earlier draft's UNBOUND WriteRes tables silently disabled
+// the LoadLatency fallback through a different consumer path; re-verify the
+// load-hoisting probe after any change here.
+def EZHWriteLoad : SchedWrite; // AHB read data: >= 2 cycles (AN14650 E_LDR)
+def EZHWriteWB : SchedWrite;   // pointer writeback: ALU path, 1 cycle
+
 def EZHSchedModel : SchedMachineModel {
   // Cycles for a load result to become usable (SRAM access).
   let LoadLatency = 2;
@@ -47,4 +65,12 @@ def EZHSchedModel : SchedMachineModel {
   // The post-RA scheduler is placed explicitly by EZHPassConfig
   // (addPreEmitPass), not via this flag.
   let PostRAScheduler = 0;
+}
+
+let SchedModel = EZHSchedModel in {
+  def : WriteRes<EZHWriteLoad, []> { let Latency = 2; }
+  def : WriteRes<EZHWriteWB, []> { let Latency = 1; }
+  // Indexed loads: defs are (data, pointer-writeback) in that order.
+  def : InstRW<[EZHWriteLoad, EZHWriteWB],
+               (instregex "^LDR(B|BS)?_(PRE|POST)$")>;
 }

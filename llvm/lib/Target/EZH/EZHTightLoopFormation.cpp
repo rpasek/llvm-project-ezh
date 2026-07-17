@@ -264,12 +264,17 @@ bool EZHTightLoopFormation::tryConvertLoop(MachineLoop *L,
   // form of evidence. A join block ends the walk (another path might not
   // guard the counter).
   MachineBasicBlock *P = Pre;
+  MachineBasicBlock *Child = B; // the block we reached P's fall-through from
   for (unsigned Hops = 0; P && Hops < 4 && !CountIsPositive; ++Hops) {
-    // (a) canonical guard: P ends with a conditional branch to the exit on a
-    //     zero condition, fed by a compare-with-zero of the counter.
+    // (a) canonical guard: P ends with a conditional branch AWAY on a zero
+    //     condition, fed by an unconditional compare-with-zero of the
+    //     counter. Reaching the loop chain via P's FALL-THROUGH means the
+    //     zero branch was not taken on this path, so Cnt != 0 -- where the
+    //     branch goes is irrelevant (it may target a tail-duplicated or
+    //     separate zero-path block rather than the loop's own exit).
     MachineBasicBlock::iterator GT = P->getFirstTerminator();
     if (GT != P->end() && GT->getOpcode() == EZH::GOTO_CC &&
-        GT->getOperand(0).isMBB() && GT->getOperand(0).getMBB() == Exit &&
+        GT->getOperand(0).isMBB() && GT->getOperand(0).getMBB() != Child &&
         (GT->getOperand(1).getImm() == EZHCC::ICC_ZE ||
          GT->getOperand(1).getImm() == EZHCC::ICC_ZB)) {
       for (MachineBasicBlock::iterator I = GT; I != P->begin();) {
@@ -321,6 +326,7 @@ bool EZHTightLoopFormation::tryConvertLoop(MachineLoop *L,
     }
     if (DefinedHere)
       break;
+    Child = P;
     P = P->pred_size() == 1 ? *P->pred_begin() : nullptr;
   }
   if (!CountIsPositive)
