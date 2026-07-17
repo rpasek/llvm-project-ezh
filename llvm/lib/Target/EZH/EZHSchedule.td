@@ -30,9 +30,14 @@
 //===----------------------------------------------------------------------===//
 
 // Per-def latency tuning for the post/pre-indexed loads: their FIRST def
-// (the loaded data) takes the AN14650 E_LDR latency of >= 2 cycles, but the
-// SECOND def (the pointer writeback) is computed on the ALU path and is
-// ready in 1 cycle. The blanket defaultDefLatency fallback would give BOTH
+// (the loaded data) takes the AN14650 E_LDR latency of >= 2 cycles. The
+// SECOND def (the pointer writeback) is modeled at 1 cycle -- an INFERENCE,
+// not a documented or silicon-measured fact: AN14650 gives the data timing
+// and the consumer interlock but never states when the writeback is
+// available; a post-increment is address arithmetic, so the ALU-path
+// assumption is the natural reading. Either way the choice is
+// correctness-neutral: the documented hardware interlock stalls any early
+// consumer, so scheduling latencies here only shape performance. The blanket defaultDefLatency fallback would give BOTH
 // defs the 2-cycle load latency, inserting phantom stalls on the pointer
 // recurrence that is the critical path of tight_loop pump bodies
 // (ldr_post/str_post chains). Everything else stays UNBOUND on purpose:
