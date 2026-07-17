@@ -334,6 +334,7 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   //    (Load target block address from jump table into PC register)
   SmallVector<MachineInstr *, 4> JTPseudos;
   SmallVector<MachineInstr *, 4> BrindPseudos;
+  SmallVector<MachineInstr *, 4> TightLoops;
   for (auto &MBB : *MF) {
     for (auto &MI : MBB) {
       if (MI.getOpcode() == EZH::PseudoBR_JT) {
@@ -341,16 +342,100 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
       } else if (MI.getOpcode() == EZH::BRIND_LDR) {
         BrindPseudos.push_back(&MI);
       } else if (MI.getOpcode() == EZH::TIGHT_LOOP) {
-        // Register EVERY block containing a TIGHT_LOOP as a no-water zone,
-        // not just the ones EZHTightLoopFormation created: a hand-written
-        // __builtin_ezh_tight_loop has the same layout contract (the
-        // hardware repeats everything from the instruction after the slot
-        // up to the Rend address, typically the next block's label), but
-        // never registers itself. Silicon incident: an island plus its
-        // branch-around goto landed between a one-instruction hand-written
-        // body and its label; the taken goto inside the repeated region
-        // killed the loop after a single iteration.
-        AFI->addTightLoopBody(&MBB);
+        TightLoops.push_back(&MI);
+      }
+    }
+  }
+
+  // Register the COMPLETE repeated region of every TIGHT_LOOP as a no-water
+  // zone, not just the ones EZHTightLoopFormation created: a hand-written
+  // __builtin_ezh_tight_loop has the same layout contract (the hardware
+  // repeats everything from the instruction after the run-once slot up to
+  // the Rend address), but never registers itself. Silicon incident: an
+  // island plus its branch-around goto landed between a one-instruction
+  // hand-written body and its Rend label; the taken goto inside the
+  // repeated region killed the loop after a single iteration.
+  //
+  // The region can span several fall-through blocks before the Rend label,
+  // so resolve Rend statically where possible: trace the Rend register to
+  // its constant-pool load in the same block and map the entry (formation
+  // loops carry the exit MachineBasicBlock, intrinsic loops the IR
+  // blockaddress) to its target block, then mark every layout block up to
+  // it. When Rend is not statically recoverable (hoisted or computed), only
+  // the TIGHT_LOOP's own block is marked -- the region beyond a block that
+  // does not fall through is broken on hardware regardless.
+  const TargetRegisterInfo *TRI = STI->getRegisterInfo();
+  for (MachineInstr *TL : TightLoops) {
+    MachineBasicBlock *Body = TL->getParent();
+    AFI->addTightLoopBody(Body);
+
+    // Find the def of the Rend register: scan backward from the TIGHT_LOOP,
+    // then up the dominator chain -- the materialization is commonly
+    // CSE-hoisted out of the loop block when the same blockaddress has
+    // other uses. A def found in a dominator when a non-dominating block
+    // redefines the register on some path could over- or under-mark, but
+    // both directions are safe: marked blocks are only no-water zones, and
+    // an unresolved/short region falls back to today's single-block
+    // coverage.
+    const MachineBasicBlock *Target = nullptr;
+    const MachineInstr *Def = nullptr;
+    {
+      Register EndReg = TL->getOperand(0).getReg();
+      MachineBasicBlock *Scan = Body;
+      MachineBasicBlock::iterator I = TL->getIterator();
+      for (unsigned Depth = 0; !Def && Depth != 8; ++Depth) {
+        while (I != Scan->begin()) {
+          --I;
+          if (I->definesRegister(EndReg, TRI)) {
+            Def = &*I;
+            break;
+          }
+        }
+        if (Def)
+          break;
+        MachineDomTreeNode *N = DT->getNode(Scan);
+        if (!N || !N->getIDom())
+          break;
+        Scan = N->getIDom()->getBlock();
+        I = Scan->end();
+      }
+    }
+    if (Def) {
+      for (const MachineOperand &MO : Def->operands()) {
+        if (!MO.isCPI())
+          continue;
+        const MachineConstantPoolEntry &E =
+            MCP->getConstants()[MO.getIndex()];
+        if (!E.isMachineConstantPoolEntry())
+          break;
+        const auto *CPV =
+            static_cast<const EZHConstantPoolValue *>(E.Val.MachineCPVal);
+        if (CPV->isMachineBasicBlock()) {
+          Target = CPV->getMachineBasicBlock();
+        } else if (CPV->isBlockAddress() &&
+                   CPV->getBlockAddress()->getFunction() ==
+                       &MF->getFunction()) {
+          const BasicBlock *BB = CPV->getBlockAddress()->getBasicBlock();
+          for (MachineBasicBlock &C : *MF)
+            if (C.getAddressTakenIRBlock() == BB) {
+              Target = &C;
+              break;
+            }
+        }
+        break;
+      }
+    }
+
+    if (Target) {
+      MachineBasicBlock *X = Body;
+      for (unsigned N = 0; N != 16; ++N) {
+        if (!BBHasFallthrough(X))
+          break;
+        MachineFunction::iterator Next = std::next(X->getIterator());
+        if (Next == MF->end() || &*Next == Target)
+          break;
+        X = &*Next;
+        AFI->addTightLoopBody(X);
       }
     }
   }
@@ -1127,21 +1212,31 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
   // pass guarantees a layout predecessor that is not itself a loop body,
   // and caps body size so this spot is always in range of the setup load.
   if (MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(UserMBB)) {
-    // Formation-created bodies always have a setup predecessor; a
-    // hand-written intrinsic loop in the entry block would not. Refuse
-    // loudly rather than fall into std::prev(begin()) in release builds.
-    if (UserMBB->getIterator() == MF->begin())
-      report_fatal_error(
-          "EZH tight_loop: constant-pool water needed before a tight_loop "
-          "in the entry block; hoist the loop out of the entry block");
-    MachineBasicBlock *Prev = &*std::prev(UserMBB->getIterator());
-    if (MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(Prev))
-      report_fatal_error(
-          "EZH tight_loop: cannot place constant-pool water before loop");
+    // The repeated region may span several marked fall-through blocks (see
+    // the registration walk in runOnMachineFunction); water must go before
+    // the FIRST of them. Walk back over the consecutive marked run. A run
+    // reaching the entry block cannot be protected (an island at the
+    // function's first address would be executed): refuse loudly rather
+    // than fall into std::prev(begin()) in release builds.
+    MachineBasicBlock *First = UserMBB;
+    for (unsigned N = 0;; ++N) {
+      if (First->getIterator() == MF->begin())
+        report_fatal_error(
+            "EZH tight_loop: constant-pool water needed before a tight_loop "
+            "region starting at the entry block; hoist the loop");
+      MachineBasicBlock *P = &*std::prev(First->getIterator());
+      if (!MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(P))
+        break;
+      First = P;
+      if (N == 16)
+        report_fatal_error(
+            "EZH tight_loop: runaway hardware-loop region walk");
+    }
+    MachineBasicBlock *Prev = &*std::prev(First->getIterator());
     if (BBHasFallthrough(Prev)) {
-      // The island will sit between Prev and UserMBB; Prev must branch
+      // The island will sit between Prev and First; Prev must branch
       // around it (same bookkeeping as the split-at-end path below).
-      BuildMI(Prev, DebugLoc(), TII->get(EZH::GOTO)).addMBB(UserMBB);
+      BuildMI(Prev, DebugLoc(), TII->get(EZH::GOTO)).addMBB(First);
       unsigned MaxDisp = 8 * 1024 * 1024;
       ImmBranches.push_back(
           ImmBranch(&Prev->back(), MaxDisp, false, EZH::GOTO));
@@ -1149,11 +1244,11 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
       BBUtils->adjustBBOffsetsAfter(Prev);
     }
     // handleConstantPoolUser inserts the island BEFORE NewMBB, so NewMBB is
-    // the block that FOLLOWS the water point: the loop block itself. (An
+    // the block that FOLLOWS the water point: the first region block. (An
     // earlier version returned Prev here, which put the island on the far
     // side of Prev -- before a block whose fall-through was then unprotected
     // -- and invoked UB when Prev was the entry block.)
-    NewMBB = UserMBB;
+    NewMBB = First;
     return;
   }
 

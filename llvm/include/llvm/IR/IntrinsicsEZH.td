@@ -24,19 +24,38 @@ let TargetPrefix = "ezh" in {
 def int_ezh_hold : ClangBuiltin<"__builtin_ezh_hold">,
     Intrinsic<[], [], [IntrHasSideEffects]>;
 
-// The tight_loop (OP_LOOP) hardware loop: re-execute the instructions between
-// this point and the code address Rend a total of Rcount+1 times, then fall
-// through to Rend -- ONLY when each iteration holds on an armed bitslice
-// event (event-paced DMA); a FREE-RUNNING loop executes the body ZERO times
-// (measured). Expert primitive with the same contract family as hold. Because
-// the compiler models the body as straight-line code that runs once, the body
-// must consist of side-effecting operations only (volatile/MMIO accesses and
-// EZH intrinsics), with any loop-carried state in volatile storage, and must
-// contain no control flow -- INCLUDING operations that lower to a libcall
-// (32-bit mul/div/mod, soft-float), which insert a gosub inside the loop
-// region; with the default bitslice-interrupts feature the injection pass
-// adds a further gotol_bs before such calls. Rend is normally `&&label` of
-// the label placed immediately after the body.
+// The tight_loop (OP_LOOP) hardware loop -- a FREE-RUNNING counted loop
+// (cycle-timed on silicon; ezh/TIGHT_LOOP_TIMING.md):
+//
+//  - The instruction IMMEDIATELY AFTER tight_loop is a run-once slot: it
+//    executes exactly once and is NOT part of the repeated block. Hand
+//    code conventionally puts a nop there.
+//  - The repeated block starts one instruction later and ends at the
+//    address in Rend (normally `&&label` of the label placed immediately
+//    after the body); it executes Rcount+1 times with no event pacing and
+//    a zero-cycle loop-back, then execution continues at Rend. Both
+//    registers are latched at loop entry; the body may clobber them.
+//  - A `hold` inside the body CAN pace iterations on a bitslice event, but
+//    the loop-back is delay-slot sensitive and level-signal pacing is far
+//    more robust as an ordinary C loop around __builtin_ezh_hold.
+//
+// Expert primitive. The compiler models the body as straight-line code that
+// runs once, so the body must consist of side-effecting operations only
+// (volatile/MMIO accesses and EZH intrinsics), with any loop-carried state
+// in volatile storage, and must contain no control flow -- INCLUDING
+// operations that lower to a libcall (32-bit mul/div/mod, soft-float),
+// which insert a gosub inside the loop region; with the default
+// bitslice-interrupts feature the injection pass adds a further gotol_bs
+// before such calls.
+//
+// LAYOUT HAZARD: the compiler cannot promise that [tight_loop .. &&label)
+// stays contiguous at the instruction level. The constant-island pass keeps
+// its islands out of the region, but the scheduler may still sink operand
+// materializations into it -- pin every register the body consumes with an
+// empty volatile-asm barrier BEFORE the intrinsic, keep the whole body in
+// ONE volatile asm block, and verify the disassembly (checklist in
+// ezh/TIGHT_LOOP_TIMING.md). Keep the region small: a pool user inside a
+// region longer than the pc-relative load range cannot be placed.
 def int_ezh_tight_loop : ClangBuiltin<"__builtin_ezh_tight_loop">,
     Intrinsic<[], [llvm_ptr_ty, llvm_i32_ty], [IntrHasSideEffects]>;
 

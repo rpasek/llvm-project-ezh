@@ -6,9 +6,14 @@ against CTIMER0 free-running on FRO_DIV1 (the tick-per-cycle quantum cancels
 in ratios; `q = (alu2 - alu1) / iters` came out 0.885 and dead stable). Every
 number below survived two independent validity gates: a static
 instruction-by-instruction check of each emitted `[tight_loop; nop; body...]`
-sequence, and a per-case architectural-state check (pointer march distance,
-accumulator totals) read back after the run. Both gates caught real bugs
-before any number was trusted — see "measurement war stories" below.
+sequence, and a per-case ARCHITECTURAL-state check over patterned data —
+pointer march distances, exact accumulator totals, and destination contents.
+The rotated cases pin the cross-wrap dependency by value, not just by time:
+`load_rot`'s accumulator total is only right if each `add` consumed the word
+loaded one iteration earlier across the wrap, and `copy_rot`'s destination
+must be the source shifted by exactly one byte with `dst[0]` carrying the
+previous pass's final load. Both gates caught real bugs before any number
+was trusted — see "measurement war stories" below.
 
 ## The question: is loop rotation worth implementing?
 

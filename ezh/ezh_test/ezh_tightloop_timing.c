@@ -65,6 +65,29 @@ static volatile unsigned buf[4096]; /* 16 KB: two disjoint 8 KB halves */
 #define PIN3(a, b, c) __asm volatile("" : "+r"(a), "+r"(b), "+r"(c))
 #define PIN4(a, b, c, d) __asm volatile("" : "+r"(a), "+r"(b), "+r"(c), "+r"(d))
 
+/* Patterned data + value checks make the dependency evidence ARCHITECTURAL,
+   not just timing-based: the rotated cases must deliver the value loaded in
+   the PREVIOUS iteration across the wrap, and with distinct per-index data a
+   stale or shifted delivery changes sums and destination bytes. All init and
+   check loops are plain C, outside the timed windows. */
+static unsigned patw(unsigned i) { return (i << 1) + 3; }
+static unsigned char patb(unsigned i) { return (unsigned char)(i * 7 + 13); }
+static void init_words(void) {
+  for (unsigned i = 0; i < INNER; i++)
+    buf[i] = patw(i);
+}
+static void init_bytes(void) {
+  volatile unsigned char *b = (volatile unsigned char *)buf;
+  for (unsigned i = 0; i < INNER; i++)
+    b[i] = patb(i);
+}
+static unsigned wordsum(unsigned lo, unsigned hi) {
+  unsigned s = 0;
+  for (unsigned i = lo; i <= hi; i++)
+    s += buf[i];
+  return s;
+}
+
 int main() {
   unsigned t0, t1, k;
 
@@ -154,6 +177,7 @@ int main() {
     volatile unsigned *p;
     INIT0(a);
     INIT0(d);
+    init_words();
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       p = buf;
@@ -167,7 +191,10 @@ int main() {
     }
     t1 = TC;
     results[4] = t1 - t0;
-    valid[4] = (p == buf + INNER) ? 1 : 0xBAD00004;
+    valid[4] = (p == buf + INNER && a == OUTER * wordsum(0, INNER - 1) &&
+                d == patw(INNER - 1))
+                   ? 1
+                   : 0xBAD00004;
   }
 
   /* [5] load_rot, the ROTATED sum pump: [add; ldr_post] with the same
@@ -177,6 +204,7 @@ int main() {
     volatile unsigned *p;
     INIT0(a);
     INIT0(d);
+    init_words();
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       p = buf;
@@ -190,7 +218,17 @@ int main() {
     }
     t1 = TC;
     results[5] = t1 - t0;
-    valid[5] = (p == buf + INNER) ? 1 : 0xBAD00005;
+    /* Each add consumes the value loaded ONE ITERATION EARLIER, across the
+       hardware wrap: per pass the sum is d_entry + buf[0..INNER-2], where
+       d_entry is 0 on the first pass (INIT0) and buf[INNER-1] carried over
+       on every later pass. A stale or dropped cross-wrap delivery breaks
+       this exact total. */
+    valid[5] = (p == buf + INNER &&
+                a == OUTER * wordsum(0, INNER - 2) +
+                         (OUTER - 1) * patw(INNER - 1) &&
+                d == patw(INNER - 1))
+                   ? 1
+                   : 0xBAD00005;
   }
 
   /* [6] load_space: consumer at distance 2 inside the block.
@@ -201,6 +239,7 @@ int main() {
     INIT0(a);
     INIT0(d);
     INIT0(x);
+    init_words();
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       p = buf;
@@ -214,7 +253,10 @@ int main() {
     }
     t1 = TC;
     results[6] = t1 - t0;
-    valid[6] = (p == buf + INNER && x == OUTER * INNER) ? 1 : 0xBAD00006;
+    valid[6] = (p == buf + INNER && x == OUTER * INNER &&
+                a == OUTER * wordsum(0, INNER - 1))
+                   ? 1
+                   : 0xBAD00006;
   }
 
   /* [7] load_only: back-to-back unconsumed loads -- raw AHB issue rate. */
@@ -234,14 +276,14 @@ int main() {
     }
     t1 = TC;
     results[7] = t1 - t0;
-    valid[7] = (p == buf + INNER) ? 1 : 0xBAD00007;
+    valid[7] = (p == buf + INNER && d == patw(INNER - 1)) ? 1 : 0xBAD00007;
   }
 
   /* [8] store_only: back-to-back stores -- raw store issue rate. */
   {
     unsigned d;
     volatile unsigned *p;
-    INIT0(d);
+    d = 0x5A17u;
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       p = buf;
@@ -255,6 +297,9 @@ int main() {
     t1 = TC;
     results[8] = t1 - t0;
     valid[8] = (p == buf + INNER) ? 1 : 0xBAD00008;
+    for (unsigned i = 0; i < INNER; i++)
+      if (buf[i] != 0x5A17u)
+        valid[8] = 0xBAD10008;
   }
 
   /* [9] copy, the UNROTATED memcpy pump: [ldrb_post; strb_post], the
@@ -263,6 +308,7 @@ int main() {
     unsigned d;
     volatile unsigned char *ps, *pd;
     INIT0(d);
+    init_bytes();
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       ps = (volatile unsigned char *)buf;
@@ -283,6 +329,9 @@ int main() {
                 pd == (unsigned char *)(buf + 2048) + INNER)
                    ? 1
                    : 0xBAD00009;
+    for (unsigned i = 0; i < INNER; i++)
+      if (((volatile unsigned char *)(buf + 2048))[i] != patb(i))
+        valid[9] = 0xBAD10009;
   }
 
   /* [10] copy_rot: [strb_post; ldrb_post], the same pair across the wrap. */
@@ -305,7 +354,22 @@ int main() {
     t1 = TC;
     results[10] = t1 - t0;
     valid[10] = (ps == (unsigned char *)buf + INNER &&
-                   pd == (unsigned char *)(buf + 2048) + INNER) ? 1 : 0xBAD0000A;
+                 pd == (unsigned char *)(buf + 2048) + INNER &&
+                 d == patb(INNER - 1))
+                    ? 1
+                    : 0xBAD0000A;
+    /* The rotated body stores the byte loaded ONE ITERATION EARLIER across
+       the wrap: the final pass leaves dst shifted by one, with dst[0] being
+       the LAST byte loaded on the previous pass. A stale or dropped
+       cross-wrap delivery breaks the shift pattern. */
+    {
+      volatile unsigned char *dst = (volatile unsigned char *)(buf + 2048);
+      if (dst[0] != patb(INNER - 1))
+        valid[10] = 0xBAD1000A;
+      for (unsigned i = 1; i < INNER; i++)
+        if (dst[i] != patb(i - 1))
+          valid[10] = 0xBAD2000A;
+    }
   }
 
   /* [11] load2: two independent back-to-back loads -- does the AHB/DFETCH
@@ -315,6 +379,9 @@ int main() {
     volatile unsigned *p, *p2;
     INIT0(d);
     INIT0(d2);
+    init_words();
+    for (unsigned i = 0; i < INNER; i++)
+      buf[2048 + i] = patw(i) ^ 0x00A50000u;
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       p = buf;
@@ -329,7 +396,11 @@ int main() {
     }
     t1 = TC;
     results[11] = t1 - t0;
-    valid[11] = (p == buf + INNER && p2 == buf + 2048 + INNER) ? 1 : 0xBAD0000B;
+    valid[11] = (p == buf + INNER && p2 == buf + 2048 + INNER &&
+                 d == patw(INNER - 1) &&
+                 d2 == (patw(INNER - 1) ^ 0x00A50000u))
+                    ? 1
+                    : 0xBAD0000B;
   }
 
   /* [12..14] ORDINARY software loops (backedge inside one asm block, so
@@ -338,7 +409,7 @@ int main() {
   {
     unsigned d, c;
     volatile unsigned *p;
-    INIT0(d);
+    d = 0x3C99u;
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       p = buf;
@@ -349,12 +420,16 @@ int main() {
     t1 = TC;
     results[12] = t1 - t0;
     valid[12] = (p == buf + INNER && c == 0) ? 1 : 0xBAD0000C;
+    for (unsigned i = 0; i < INNER; i++)
+      if (buf[i] != 0x3C99u)
+        valid[12] = 0xBAD1000C;
   }
   {
     unsigned a, d, c;
     volatile unsigned *p;
     INIT0(a);
     INIT0(d);
+    init_words();
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       p = buf;
@@ -364,12 +439,16 @@ int main() {
     }
     t1 = TC;
     results[13] = t1 - t0;
-    valid[13] = (p == buf + INNER && c == 0) ? 1 : 0xBAD0000D;
+    valid[13] = (p == buf + INNER && c == 0 &&
+                 a == OUTER * wordsum(0, INNER - 1) && d == patw(INNER - 1))
+                    ? 1
+                    : 0xBAD0000D;
   }
   {
     unsigned d, c;
     volatile unsigned char *ps, *pd;
     INIT0(d);
+    init_bytes();
     t0 = TC;
     for (k = 0; k < OUTER; k++) {
       ps = (volatile unsigned char *)buf;
@@ -381,6 +460,9 @@ int main() {
     t1 = TC;
     results[14] = t1 - t0;
     valid[14] = (ps == (unsigned char *)buf + INNER && c == 0) ? 1 : 0xBAD0000E;
+    for (unsigned i = 0; i < INNER; i++)
+      if (((volatile unsigned char *)(buf + 2048))[i] != patb(i))
+        valid[14] = 0xBAD1000E;
   }
 
   /* [15] perload_only: back-to-back loads from a PERIPHERAL (CTIMER0 TC on

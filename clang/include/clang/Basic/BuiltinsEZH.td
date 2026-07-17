@@ -23,12 +23,13 @@ def EZHHold : TargetBuiltin {
   let Prototype = "void()";
 }
 
-// The tight_loop (OP_LOOP) hardware loop: re-executes the code between this
-// point and the address rend (normally `&&label` right after the body) a total
-// of rcount+1 times -- ONLY when each iteration holds on an armed bitslice
-// event; a free-running loop executes the body ZERO times. Expert primitive --
-// see IntrinsicsEZH.td for the body contract (side-effecting straight-line ops
-// only, no operations that may lower to a libcall).
+// The tight_loop (OP_LOOP) hardware loop: a FREE-RUNNING counted loop. The
+// instruction immediately after it is a run-once slot (executed once, not
+// repeated; conventionally a nop); the repeated block starts one instruction
+// later, ends at rend (normally `&&label` right after the body), and runs
+// rcount+1 times with no event pacing. Expert primitive -- see
+// IntrinsicsEZH.td for the body contract and layout hazards, and
+// ezh/TIGHT_LOOP_TIMING.md for measured timing and the hand-code checklist.
 def EZHTightLoop : TargetBuiltin {
   let Spellings = ["__builtin_ezh_tight_loop"];
   let Attributes = [NoThrow];
