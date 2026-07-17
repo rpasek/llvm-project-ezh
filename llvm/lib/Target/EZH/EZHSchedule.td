@@ -37,7 +37,8 @@
 // available; a post-increment is address arithmetic, so the ALU-path
 // assumption is the natural reading. Either way the choice is
 // correctness-neutral: the documented hardware interlock stalls any early
-// consumer, so scheduling latencies here only shape performance. The blanket defaultDefLatency fallback would give BOTH
+// consumer, so scheduling latencies here only shape performance. The
+// blanket defaultDefLatency fallback would give BOTH
 // defs the 2-cycle load latency, inserting phantom stalls on the pointer
 // recurrence that is the critical path of tight_loop pump bodies
 // (ldr_post/str_post chains). Everything else stays UNBOUND on purpose:
@@ -64,7 +65,8 @@ def EZHSchedModel : SchedMachineModel {
   // Extra cycles for a mispredicted branch. [default = -1]
   let MispredictPenalty = 10;
 
-  // No per-opcode data; every opcode falls back to default latencies.
+  // Almost no per-opcode data: everything except the indexed loads (bound
+  // via InstRW below) falls back to default latencies.
   let CompleteModel = 0;
 
   // The post-RA scheduler is placed explicitly by EZHPassConfig

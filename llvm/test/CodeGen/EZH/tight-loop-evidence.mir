@@ -59,7 +59,7 @@ body: |
 # its flags prove nothing about the counter -- no conversion.
 # CHECK-LABEL: name: guard_predicated
 # CHECK-NOT: TIGHT_LOOP
-# CHECK: GOTO_CC %bb.1
+# CHECK: GOTO_CC %bb.1, 2
 name:            guard_predicated
 tracksRegLiveness: true
 liveins:
@@ -88,7 +88,7 @@ body: |
 # value -- no conversion.
 # CHECK-LABEL: name: guard_cnt_redef
 # CHECK-NOT: TIGHT_LOOP
-# CHECK: GOTO_CC %bb.1
+# CHECK: GOTO_CC %bb.1, 2
 name:            guard_cnt_redef
 tracksRegLiveness: true
 liveins:
@@ -116,10 +116,13 @@ body: |
 ---
 # The loop chain is reached via the guard's TAKEN zero-branch (the guard
 # falls through elsewhere): on this path the counter IS zero-or-below -- no
-# conversion.
+# conversion. NOTE the printer RENUMBERS blocks (input bb.3 -> output bb.2,
+# loop bb.2 -> output bb.3): the check below pins the loop BACKEDGE (pred
+# imm 2) so the CHECK-NOT region spans the whole body -- matching the guard
+# branch instead would end the region before TIGHT_LOOP could appear.
 # CHECK-LABEL: name: guard_taken_path
 # CHECK-NOT: TIGHT_LOOP
-# CHECK: GOTO_CC %bb.2
+# CHECK: GOTO_CC %bb.3, 2
 name:            guard_taken_path
 tracksRegLiveness: true
 liveins:
@@ -212,7 +215,7 @@ body: |
 # conversion.
 # CHECK-LABEL: name: init_predicated
 # CHECK-NOT: TIGHT_LOOP
-# CHECK: GOTO_CC %bb.1
+# CHECK: GOTO_CC %bb.1, 2
 name:            init_predicated
 tracksRegLiveness: true
 liveins:
