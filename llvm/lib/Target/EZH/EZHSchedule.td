@@ -55,6 +55,14 @@ def EZHWriteWB : SchedWrite;   // pointer writeback: ALU path, 1 cycle
 
 def EZHSchedModel : SchedMachineModel {
   // Cycles for a load result to become usable (SRAM access).
+  //
+  // Silicon note (ezh/TIGHT_LOOP_TIMING.md): a load really occupies the
+  // core for 2 issue slots with data usable 3 cycles after issue start --
+  // but 2 is still the right value HERE by exact cancellation: the
+  // scheduler models the load as single-slot issue, so "latency 2" makes
+  // it prefer one filler instruction between load and use, and one filler
+  // is precisely what the hardware absorbs for free. A "truer" 3 would
+  // chase a second filler for zero measured gain.
   let LoadLatency = 2;
 
   // Strictly in-order, single-issue core.

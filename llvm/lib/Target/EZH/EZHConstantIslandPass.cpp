@@ -340,6 +340,17 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
         JTPseudos.push_back(&MI);
       } else if (MI.getOpcode() == EZH::BRIND_LDR) {
         BrindPseudos.push_back(&MI);
+      } else if (MI.getOpcode() == EZH::TIGHT_LOOP) {
+        // Register EVERY block containing a TIGHT_LOOP as a no-water zone,
+        // not just the ones EZHTightLoopFormation created: a hand-written
+        // __builtin_ezh_tight_loop has the same layout contract (the
+        // hardware repeats everything from the instruction after the slot
+        // up to the Rend address, typically the next block's label), but
+        // never registers itself. Silicon incident: an island plus its
+        // branch-around goto landed between a one-instruction hand-written
+        // body and its label; the taken goto inside the repeated region
+        // killed the loop after a single iteration.
+        AFI->addTightLoopBody(&MBB);
       }
     }
   }
@@ -1116,8 +1127,13 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
   // pass guarantees a layout predecessor that is not itself a loop body,
   // and caps body size so this spot is always in range of the setup load.
   if (MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(UserMBB)) {
-    assert(UserMBB->getIterator() != MF->begin() &&
-           "tight_loop body with no layout predecessor");
+    // Formation-created bodies always have a setup predecessor; a
+    // hand-written intrinsic loop in the entry block would not. Refuse
+    // loudly rather than fall into std::prev(begin()) in release builds.
+    if (UserMBB->getIterator() == MF->begin())
+      report_fatal_error(
+          "EZH tight_loop: constant-pool water needed before a tight_loop "
+          "in the entry block; hoist the loop out of the entry block");
     MachineBasicBlock *Prev = &*std::prev(UserMBB->getIterator());
     if (MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(Prev))
       report_fatal_error(

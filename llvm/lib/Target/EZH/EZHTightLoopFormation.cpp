@@ -68,6 +68,18 @@
 //   repeated region) between the body and the exit label, and never splits
 //   the body block.
 //
+//   DELIBERATELY NOT DONE -- loop rotation into the run-once slot: rotating
+//   a [load; use] pump to [use; load] (slot or prologue holding the first
+//   load, epilogue consuming the last) moves the load-use pair from issue
+//   distance 1 inside the block to distance 1 across the loop-back.
+//   Silicon timing (ezh/TIGHT_LOOP_TIMING.md) shows the wrap is free
+//   (w = 0) and the interlock tracks the pending load across block
+//   re-entry exactly (s_wrap == s_in == 2 cycles): both arrangements run
+//   at identical speed, on the store-consumer copy pump too. Rotation
+//   would buy nothing and cost an epilogue clone plus an n >= 2 guard.
+//   The nop kept in the run-once slot costs 1 cycle per loop ENTRY, not
+//   per iteration; filling it is not worth the same machinery either.
+//
 // Copied From:
 //   Newly authored custom file for the EZH (SmartDMA) target architecture.
 //
