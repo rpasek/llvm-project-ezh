@@ -73,27 +73,18 @@ public:
   // -post-RA-scheduler and -misched-postra options (a subtarget
   // enablePostRAScheduler override is bypassable by both).
   //
-  // This pin is CORRECTNESS-CRITICAL, not a performance choice. The
-  // condition flags are not modelled as a register, so the only thing
-  // keeping a flag-setting (S-form) producer adjacent to its predicated
-  // consumer is that no instruction-motion pass runs after the if-converter
-  // creates predicated instances. Descriptor flags do NOT protect this:
-  // while the immediate materializers, GOTO/TCRETURN, and the EZHInstALU
-  // formats carry hasSideEffects=1, tablegen infers PURE descriptors from
-  // the ISel patterns of the shift, bit-op, ANDOR, and memory formats -- 254
-  // predicable descriptors have no side-effect flag. A reachable example
-  // after if-conversion is "SUB_IMM_s ...; LSL ..., 2, 1": the predicated
-  // LSL reads flags but its descriptor gives a scheduler no dependence on
-  // the producer, and marking only the producer side-effecting creates no
-  // edge to a pure consumer. (An earlier note here claimed the pin was
-  // droppable; that conclusion came from observing a side-effecting
-  // consumer, mov_cc, and was wrong for the pure-descriptor forms.)
-  //
-  // Dropping the pin therefore first requires closing the modeling gap:
-  // either model the flags as an implicit physical register (ARM-CPSR
-  // style), or give every reachable predicated-consumer and flag-writer
-  // form an honest descriptor (_CC-twin splits or hasSideEffects on the
-  // remaining formats). See ezh/OPT_BACKLOG.md for the full analysis.
+  // History: this pin used to be CORRECTNESS-CRITICAL -- the condition flags
+  // were invisible to the machine layer, so hundreds of predicable pure
+  // descriptors (shift/bit-op/ANDOR/memory formats; tablegen infers purity
+  // from their ISel patterns) had no modeled dependence on their S-form flag
+  // producers, and only pass ordering kept "SUB_IMM_s; LSL ..., 2, 1"-style
+  // pairs adjacent. The flags are NOW modeled as the reserved CFS register
+  // (S-forms Defs=[CFS]; predicated instances and carry readers use it), so
+  // every such pair carries a true register dependence. The pin is retained
+  // as defense-in-depth and because scheduling is pure churn under
+  // NoSchedModel; dropping it is worthwhile only together with a real
+  // SchedModel to hide the load-use latency -- a separate, silicon-validated
+  // effort. See ezh/OPT_BACKLOG.md.
   bool targetSchedulesPostRAScheduling() const override { return true; }
 
   TargetLoweringObjectFile *getObjFileLowering() const override {

@@ -215,13 +215,16 @@ class ShiftInfo<bits<3> val, string name, string asm_name, SDPatternOperator nod
   bit Flip = flip;
 }
 
-class EZHShiftAluOpInfo<bits<3> op, string name, string upper_name, SDPatternOperator node, bit rev = 0, bit has_pat = 1> {
+class EZHShiftAluOpInfo<bits<3> op, string name, string upper_name, SDPatternOperator node, bit rev = 0, bit has_pat = 1, bit reads_carry = 0> {
   bits<3> AluOp = op;
   string Name = name;
   string UpperName = upper_name;
   SDPatternOperator Node = node;
   bit Rev = rev;
   bit HasPat = has_pat;
+  // adc/sbc consume the carry flag as data; the combined shift-ALU forms
+  // inherit that and must carry an implicit use of CFS.
+  bit ReadsCarry = reads_carry;
 }
 
 def EZHShiftAluOp_AND : EZHShiftAluOpInfo<FLIP_AND, "and", "AND", and>;
@@ -229,8 +232,8 @@ def EZHShiftAluOp_OR  : EZHShiftAluOpInfo<FLIP_OR,  "or",  "OR",  or>;
 def EZHShiftAluOp_XOR : EZHShiftAluOpInfo<FLIP_XOR, "xor", "XOR", xor>;
 def EZHShiftAluOp_ADD : EZHShiftAluOpInfo<FLIP_ADD, "add", "ADD", add>;
 def EZHShiftAluOp_SUB : EZHShiftAluOpInfo<FLIP_SUB, "sub", "SUB", sub, 1>;
-def EZHShiftAluOp_ADC : EZHShiftAluOpInfo<FLIP_ADC, "adc", "ADC", null_frag, 0, 0>;
-def EZHShiftAluOp_SBC : EZHShiftAluOpInfo<FLIP_SBC, "sbc", "SBC", null_frag, 0, 0>;
+def EZHShiftAluOp_ADC : EZHShiftAluOpInfo<FLIP_ADC, "adc", "ADC", null_frag, 0, 0, 1>;
+def EZHShiftAluOp_SBC : EZHShiftAluOpInfo<FLIP_SBC, "sbc", "SBC", null_frag, 0, 0, 1>;
 
 defvar EZHShiftAluOpsList = [
   EZHShiftAluOp_AND, EZHShiftAluOp_OR, EZHShiftAluOp_XOR,
@@ -352,6 +355,7 @@ multiclass RegShiftALUOps<bits<2> shift_type, string shift_name, SDPatternOperat
       defvar selected_pat = !if(is_post, post_pat, pre_pat);
       defvar pat = !if(alu.HasPat, [(set i32:$Rd, selected_pat)], []<dag>);
 
+      let Uses = !if(alu.ReadsCarry, [CFS], []<Register>) in
       def "_" # alu.UpperName # inv_suffix # !if(!empty(sf_suffix), "", "_" # sf_suffix)
         : EZHInstRegShiftALU<alu.AluOp, shift_type, is_post, is_inv, (outs GPR:$Rd), ins_alu_pred,
                              !if(is_post,
@@ -404,6 +408,7 @@ multiclass ShiftOps<bits<2> basic_shift_type, bits<2> reg_shift_type, string shi
 
   // Shift-ALU: LSL_AND, LSL_OR ... generated dynamically
   foreach alu = EZHShiftAluOpsList in {
+    let Uses = !if(alu.ReadsCarry, [CFS], []<Register>) in
     def "_" # alu.UpperName # !if(!empty(sf_suffix), "", "_" # sf_suffix)
       : EZHInstShiftALU<alu.AluOp, reg_shift_type, (outs GPR:$Rd), ins_shift_alu_pred,
                         shift_name#"_"#alu.Name#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $ShAmt",
@@ -592,7 +597,7 @@ def LOAD_CONSTANT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm), "", []>;
 // fodder). It is only ever created by the constant-island pass's
 // conditional-branch fixup (post-RA, after all instruction motion), so this
 // is descriptor honesty rather than an active-bug fix.
-let mayLoad = 1, hasSideEffects = 1 in
+let mayLoad = 1, hasSideEffects = 1, Uses = [CFS] in
 def LOAD_CONSTANT_COND : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm, pred:$Cond), "", []>;
 // Not isBarrier: this pseudo is emitted as data at the end of the function, so
 // the block that holds it "falls off the end" and -verify-machineinstrs rejects
@@ -619,16 +624,22 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1, mayLoad
 def BRIND_LDR : EZHPseudo<(outs), (ins GPR:$Rn, imms8_word_offset:$Offset, pred:$Cond),
                           "# BRIND_LDR $Rn, $Offset", []>;
 
-let usesCustomInserter = 1, hasSideEffects = 1 in {
+// The compare pseudos write the condition flags and the BR_CC/SELECT_CC
+// pseudos read them. Declaring that here keeps the pseudo layer honest and,
+// critically, keeps InstrEmitter from falsely marking a glued flag producer's
+// CFS def dead: setPhysRegsDeadExcept collects used physregs from the glued
+// consumer's implicit_uses, and without Uses=[CFS] on these pseudos it found
+// none -- the wrong dead flag then defeated ClobbersPredicate's SkipDead path.
+let usesCustomInserter = 1, hasSideEffects = 1, Defs = [CFS] in {
   def PseudoCMP : EZHPseudo<(outs), (ins GPR:$lhs, GPR:$rhs), "", [(EZHcmp i32:$lhs, i32:$rhs)]>;
   def PseudoCMPi : EZHPseudo<(outs), (ins GPR:$lhs, imms12:$rhs), "", [(EZHcmp i32:$lhs, imms12:$rhs)]>;
 }
 
-let usesCustomInserter = 1, isTerminator = 1, isBranch = 1 in {
+let usesCustomInserter = 1, isTerminator = 1, isBranch = 1, Uses = [CFS] in {
   def PseudoBR_CC : EZHPseudo<(outs), (ins brtarget:$dest, i32imm:$cc), "", [(EZHbrcc bb:$dest, timm:$cc)]>;
 }
 
-let usesCustomInserter = 1 in {
+let usesCustomInserter = 1, Uses = [CFS] in {
   def PseudoSELECT_CC : EZHPseudo<(outs GPR:$dst), (ins GPR:$truev, GPR:$falsev, i32imm:$cc), "", [(set i32:$dst, (EZHselectcc i32:$truev, i32:$falsev, timm:$cc))]>;
 }
 
@@ -805,7 +816,11 @@ defvar ins_Shift_f = (ins GPR:$Rs2, imm5:$ShAmt); // Flip shifts expect Rs2!
 
 foreach sf = SetFlags in {
   defvar sf_suffix = sf.Suffix;
-  let S = sf.Value in {
+  // Every S-form (the _s suffix, encoding bit S=1) architecturally writes the
+  // condition flags; model that as an implicit def of CFS so schedulers see a
+  // true dependence from each flag producer to its predicated / carry-reading
+  // consumers. !if yields [CFS] for the S=1 iteration, [] for S=0.
+  let S = sf.Value, Defs = !if(sf.Value, [CFS], []<Register>) in {
     // ALU
     defm ADD : ALUOps<ALU_ADD, FLIP_ADD, "add", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, add, null_frag>;
     defm SUB : ALUOps<ALU_SUB, FLIP_SUB, "sub", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, sub, null_frag>;
@@ -813,13 +828,20 @@ foreach sf = SetFlags in {
     // Post-Shifted ALU
     defm ADD : ALUShiftedOps<ALU_ADD, "add", sf_suffix>;
     defm SUB : ALUShiftedOps<ALU_SUB, "sub", sf_suffix>;
-    defm ADC : ALUShiftedOps<ALU_ADC, "adc", sf_suffix>;
-    defm SBC : ALUShiftedOps<ALU_SBC, "sbc", sf_suffix>;
+    // adc/sbc read the carry flag as data (not merely via predication), so
+    // every form carries an implicit use of CFS in addition to the loop-wide
+    // implicit def on their _s variants.
+    let Uses = [CFS] in {
+      defm ADC : ALUShiftedOps<ALU_ADC, "adc", sf_suffix>;
+      defm SBC : ALUShiftedOps<ALU_SBC, "sbc", sf_suffix>;
+    }
     defm OR  : ALUShiftedOps<ALU_OR,  "or",  sf_suffix>;
     defm AND : ALUShiftedOps<ALU_AND, "and", sf_suffix>;
     defm XOR : ALUShiftedOps<ALU_XOR, "xor", sf_suffix>;
-    defm ADC : ALUOps<ALU_ADC, FLIP_ADC, "adc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, adde>;
-    defm SBC : ALUOps<ALU_SBC, FLIP_SBC, "sbc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, sube>;
+    let Uses = [CFS] in {
+      defm ADC : ALUOps<ALU_ADC, FLIP_ADC, "adc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, adde>;
+      defm SBC : ALUOps<ALU_SBC, FLIP_SBC, "sbc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, sube>;
+    }
     defm OR  : ALUOps<ALU_OR,  FLIP_OR,  "or",  sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, or, null_frag>;
     defm AND : ALUOps<ALU_AND, FLIP_AND, "and", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, and, null_frag>;
     defm XOR : ALUOps<ALU_XOR, FLIP_XOR, "xor", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, xor, null_frag>;
@@ -868,7 +890,7 @@ foreach sf = SetFlags in {
 // encoding and asm syntax; isCodeGenOnly keeps the disassembler on the base
 // opcode, so emitted bytes and printed asm are unchanged. (Mirrors the
 // LOAD_CONSTANT / LOAD_CONSTANT_COND split, which is already separate.)
-let hasSideEffects = 1, isPredicable = 0, isCodeGenOnly = 1 in {
+let hasSideEffects = 1, isPredicable = 0, isCodeGenOnly = 1, Uses = [CFS] in {
   def LOAD_IMM_CC : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd),
                                 (ins imms11:$Imm, pred:$Cond),
                                 "load_imm$Cond $Rd, $Imm", []> {
@@ -931,7 +953,7 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, isCodeGenOnly = 1 in
                          [(br bb:$addr)]> {
     let Cond = 0;
   }
-let isBranch = 1, isTerminator = 1 in
+let isBranch = 1, isTerminator = 1, Uses = [CFS] in
   def GOTO_CC : EZHInstGoto<0, (outs), (ins brtarget:$addr, pred:$Cond),
                             "goto$Cond $addr", []>;
 
@@ -943,7 +965,7 @@ let isBranch = 1, isTerminator = 1 in
 // descriptor; the handler is register-transparent, so RA is its only
 // modelled clobber (like OUTLINE_CALL). Inserted only after RA, so isCall
 // has no allocation effect.
-let isCall = 1, hasSideEffects = 1, Defs = [RA] in
+let isCall = 1, hasSideEffects = 1, Defs = [RA], Uses = [CFS] in
   def GOTOL : EZHInstGoto<1, (outs), (ins brtarget:$addr, pred:$Cond), "gotol$Cond $addr", []>;
 
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in {
@@ -1173,7 +1195,7 @@ let isCall = 1, isReturn = 1, isTerminator = 1, isBarrier = 1,
 // never coexists with the bitslice poll. Same encoding and asm as the base
 // (isCodeGenOnly), so emitted bytes are unchanged.
 let isCall = 1, isTerminator = 1, isCodeGenOnly = 1, isPredicable = 0,
-    Uses = [SP] in {
+    Uses = [SP, CFS] in {
   def TCRETURN_CC : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),
                                 "goto$Cond $addr", []>;
   def TCRETURNExt_CC : EZHInstGoto<0, (outs),

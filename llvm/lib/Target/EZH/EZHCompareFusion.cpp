@@ -234,6 +234,12 @@ bool EZHCompareFusion::tryFuse(MachineBasicBlock &MBB, MachineInstr &Cmp) {
   }
 
   Producer->setDesc(TII->get(Twin));
+  // The _s twin's descriptor carries Defs=[CFS] (S-forms write the condition
+  // flags); setDesc does not materialize the new descriptor's implicit
+  // operands, so add the flag def by hand.
+  if (!Producer->definesRegister(EZH::CFS, /*TRI=*/nullptr))
+    Producer->addOperand(MachineOperand::CreateReg(EZH::CFS, /*isDef=*/true,
+                                                   /*isImp=*/true));
   Cmp.eraseFromParent();
   return true;
 }

@@ -384,7 +384,24 @@ an earlier session and MISCOMPILED the C++ SjLj exception dispatch (reverted;
 generic passes rely on barrier-ness of unconditional branches). The split is
 the only sound shape for this fix -- do not retry the flip.
 
-## [KNOWN ISSUE] [materializers/GOTO/TCRETURN DONE; general predicated-consumer modeling OPEN] Predicated and unpredicated encodings share opcodes and descriptors
+## [KNOWN ISSUE] [CLOSED: flags modeled as CFS] Predicated and unpredicated encodings share opcodes and descriptors
+
+CLOSED 2026-07-16 by implementing closure path (a) below -- the condition
+flags are now modeled as the reserved CFS register: every S-form carries an
+implicit Defs=[CFS], the adc/sbc carry-reader families and every
+always-predicated opcode carry Uses=[CFS], PredicateInstruction adds the
+implicit use when predicating a shared-opcode instruction, and the
+compare/branch/select pseudos are flag-honest so InstrEmitter cannot
+falsely mark a producer's CFS def dead. The predicated instances of the
+~247 pure descriptors now carry a true register dependence on their flag
+producer, per-instance. Implementing ClobbersPredicate on top of the model
+also FIXED A LIVE WRONG-CODE BUG: the if-converter used to predicate blocks
+containing S-forms (an i64 add in a triangle arm became sub_imms; adds_ze;
+adc_ze -- the executed adds_ze overwrites the flags and adc_ze tests the
+addition's condition instead of the compare's); such arms now stay behind a
+real branch (regression test ifcvt-flag-clobber.ll). The post-RA scheduling
+pin is retained as defense-in-depth but is no longer the sole correctness
+mechanism; dropping it pairs with the SchedModel item below.
 
 DONE 2026-07-16 (b87fb16382a5) for the IMMEDIATE MATERIALIZERS -- the load-bearing
 case this item is about (load_imm / load_simm want honest movable descriptors so
@@ -403,6 +420,12 @@ format class does not set the flag: EZHInstALU/ALUI set hasSideEffects=1
 formats do not. Ground truth from EZHGenInstrInfo.inc: 254 predicable
 descriptors have NO UnmodeledSideEffects flag (LSL, BSET, ANDOR, LDR, STR,
 the RROR family, ... including flag-WRITING _s shift forms like LSL_s).
+Of those, 7 are base opcodes that PredicateInstruction rewrites to honest
+_CC twins at predication time (the four materializers plus
+TCRETURN/TCRETURNExt/TCRETURN_REG; TCRETURN_MEM is pattern-less and already
+side-effecting), so at most 247 remain unresolved before reachability
+filtering -- the raw count overstates the gap slightly, but the reachable
+predicated LSL below proves the hazard independently of the exact number.
 Reachable predicated example after if-conversion:
     SUB_IMM_s ..., 0        ; flag producer (side-effecting descriptor)
     LSL ..., 2, 1           ; predicated flag READER with a PURE descriptor
@@ -438,8 +461,9 @@ the remat/CSE-relevant cases this item's original prescription targeted: the
 four materializers (b87fb16, MIR tests pin the rewrite), LOAD_CONSTANT_COND's
 inherited-flag fix (0b7d8aa), and the GOTO/TCRETURN barrier splits (sibling
 item above). OPEN for the general predicated-consumer modeling gap described
-above: 254 predicable pure descriptors whose predicated instances rely solely
-on pass ordering plus the scheduler pin. This is a latent-hazard item, not an
+above: up to 247 predicable pure descriptors (254 raw minus the 7 rewritten
+to _CC twins at predication) whose predicated instances rely solely on pass
+ordering plus the scheduler pin. This is a latent-hazard item, not an
 active bug, and it only becomes load-bearing if the pin is ever dropped (e.g.
 for the SchedModel optimization) or a new post-if-conversion motion pass
 appears. Closing it requires one of:
@@ -457,8 +481,9 @@ appears. Closing it requires one of:
       are insufficient -- a pure-descriptor flag WRITER (lsl_s) could still be
       scheduled between a producer and its boundary-frozen consumer, so
       writers must be marked too.
-Until then the pin stays and is documented as correctness-critical
-(EZHTargetMachine.h).
+RESOLUTION: path (a) was implemented (see the CLOSED note at the top of this
+item); the pin is now defense-in-depth rather than the sole correctness
+mechanism, and dropping it pairs with the SchedModel optimization.
 
 ## [DEFERRED - unsafe minimal fixes] Jump-table dispatch clobbers RA as scratch, forcing pushd ra in leaf switch functions
 

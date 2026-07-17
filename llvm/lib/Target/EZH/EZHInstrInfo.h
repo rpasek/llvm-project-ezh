@@ -89,6 +89,8 @@ public:
   bool isReMaterializableImpl(const MachineInstr &MI) const override;
   bool isPredicable(const MachineInstr &MI) const override;
   bool canPredicatePredicatedInstr(const MachineInstr &MI) const override;
+  bool ClobbersPredicate(MachineInstr &MI, std::vector<MachineOperand> &Pred,
+                         bool SkipDead) const override;
   bool PredicateInstruction(MachineInstr &MI,
                             ArrayRef<MachineOperand> Pred) const override;
   bool isProfitableToIfCvt(MachineBasicBlock &MBB, unsigned NumCycles,

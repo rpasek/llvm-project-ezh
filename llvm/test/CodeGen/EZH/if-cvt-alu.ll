@@ -3,9 +3,8 @@
 define i32 @test_select_add(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_add:
 ; CHECK:       sub_imms r0, r0, 0
-; CHECK:       add_ze r1, r1, r2
-; CHECK:       mov r0, r1
-; CHECK:       mov pc, ra
+; CHECK:       add_ze r0, r0, r2
+; CHECK-NEXT:  mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
   br i1 %tobool, label %if.true, label %if.end
@@ -22,9 +21,8 @@ if.end:
 define i32 @test_select_sub(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_sub:
 ; CHECK:       sub_imms r0, r0, 0
-; CHECK:       sub_ze r1, r1, r2
-; CHECK:       mov r0, r1
-; CHECK:       mov pc, ra
+; CHECK:       sub_ze r0, r0, r2
+; CHECK-NEXT:  mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
   br i1 %tobool, label %if.true, label %if.end
@@ -41,9 +39,8 @@ if.end:
 define i32 @test_select_and(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_and:
 ; CHECK:       sub_imms r0, r0, 0
-; CHECK:       and_ze r1, r1, r2
-; CHECK:       mov r0, r1
-; CHECK:       mov pc, ra
+; CHECK:       and_ze r0, r0, r2
+; CHECK-NEXT:  mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
   br i1 %tobool, label %if.true, label %if.end
@@ -60,9 +57,8 @@ if.end:
 define i32 @test_select_or(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_or:
 ; CHECK:       sub_imms r0, r0, 0
-; CHECK:       or_ze r1, r1, r2
-; CHECK:       mov r0, r1
-; CHECK:       mov pc, ra
+; CHECK:       or_ze r0, r0, r2
+; CHECK-NEXT:  mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
   br i1 %tobool, label %if.true, label %if.end
@@ -79,9 +75,8 @@ if.end:
 define i32 @test_select_xor(i32 %cond, i32 %a, i32 %b) {
 ; CHECK-LABEL: test_select_xor:
 ; CHECK:       sub_imms r0, r0, 0
-; CHECK:       xor_ze r1, r1, r2
-; CHECK:       mov r0, r1
-; CHECK:       mov pc, ra
+; CHECK:       xor_ze r0, r0, r2
+; CHECK-NEXT:  mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
   br i1 %tobool, label %if.true, label %if.end
@@ -98,9 +93,8 @@ if.end:
 define i32 @test_select_shl(i32 %cond, i32 %a) {
 ; CHECK-LABEL: test_select_shl:
 ; CHECK:       sub_imms r0, r0, 0
-; CHECK:       lsl_ze r1, r1, 2
-; CHECK:       mov r0, r1
-; CHECK:       mov pc, ra
+; CHECK:       lsl_ze r0, r0, 2
+; CHECK-NEXT:  mov pc, ra
 entry:
   %tobool = icmp eq i32 %cond, 0
   br i1 %tobool, label %if.true, label %if.end

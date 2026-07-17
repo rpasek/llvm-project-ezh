@@ -341,6 +341,29 @@ bool EZHInstrInfo::canPredicatePredicatedInstr(const MachineInstr &MI) const {
   return false;
 }
 
+// Any instruction that writes the condition flags (defs CFS -- the S-forms,
+// and the compare pseudos that lower to them) clobbers the predicate. Without
+// this hook the if-converter believed nothing clobbered the predicate and
+// would happily predicate a block CONTAINING an S-form: e.g. an i64 add in a
+// triangle arm became "sub_imms; adds_ze; adc_ze", where the executed adds_ze
+// overwrites the flags and the following adc_ze tests the condition on the
+// ADDITION's flags instead of the compare's -- a silent wrong-code bug. With
+// the flags modelled as CFS, the honest answer is one query.
+bool EZHInstrInfo::ClobbersPredicate(MachineInstr &MI,
+                                     std::vector<MachineOperand> &Pred,
+                                     bool SkipDead) const {
+  bool Found = false;
+  for (const MachineOperand &MO : MI.operands()) {
+    if (!MO.isReg() || !MO.isDef() || MO.getReg() != EZH::CFS)
+      continue;
+    if (SkipDead && MO.isDead())
+      continue;
+    Pred.push_back(MO);
+    Found = true;
+  }
+  return Found;
+}
+
 bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
                                         ArrayRef<MachineOperand> Pred) const {
   assert(!Pred.empty() && "Empty predicate!");
@@ -352,6 +375,11 @@ bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
   if (MI.getOpcode() == EZH::GOTO) {
     MI.setDesc(get(EZH::GOTO_CC));
     MI.addOperand(MachineOperand::CreateImm(CC));
+    // GOTO_CC's descriptor carries Uses=[CFS] (the predicate reads the
+    // condition flags); setDesc does not materialize the new descriptor's
+    // implicit operands, so add the flag use by hand.
+    MI.addOperand(MachineOperand::CreateReg(EZH::CFS, /*isDef=*/false,
+                                            /*isImp=*/true));
     return true;
   }
 
@@ -413,6 +441,14 @@ bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
         MI.addOperand(
             MachineOperand::CreateReg(RdReg, /*isDef=*/false, /*isImp=*/true));
       }
+      // A predicated instance reads the condition flags: add an implicit use
+      // of CFS so schedulers see the dependence on the flag-setting (S-form)
+      // producer. For the opcodes rewritten to a *_CC twin above this also
+      // materializes the twin's static Uses=[CFS], which setDesc alone does
+      // not (skip the add if a CFS use is somehow already present).
+      if (!MI.readsRegister(EZH::CFS, /*TRI=*/nullptr))
+        MI.addOperand(MachineOperand::CreateReg(EZH::CFS, /*isDef=*/false,
+                                                /*isImp=*/true));
       return true;
     }
     return false; // Malformed instruction, cannot predicate
