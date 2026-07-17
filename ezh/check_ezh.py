@@ -43,6 +43,7 @@ TESTS = [
     "llvm/test/CodeGen/EZH/tight-loop-evidence.mir",
     "llvm/test/CodeGen/EZH/indexed-load-latency.test",
     "llvm/test/CodeGen/EZH/tight-loop-intrinsic-island.ll",
+    "llvm/test/CodeGen/EZH/tight-loop-region-water.mir",
     "llvm/test/CodeGen/EZH/indexed-memref.ll",
     "llvm/test/CodeGen/EZH/spill-memref.ll",
     "llvm/test/CodeGen/EZH/frame.ll",

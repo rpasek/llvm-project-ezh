@@ -25,6 +25,7 @@
 #include "EZHBasicBlockInfo.h"
 #include "EZHCondCode.h"
 #include "EZHConstantPoolValue.h"
+#include "llvm/InitializePasses.h"
 #include "EZHInstrInfo.h"
 #include "EZHMachineFunctionInfo.h"
 #include "EZHSubtarget.h"
@@ -64,6 +65,10 @@
 #include <vector>
 
 using namespace llvm;
+
+namespace llvm {
+void initializeEZHConstantIslandsPass(PassRegistry &);
+} // end namespace llvm
 
 #define DEBUG_TYPE "ezh-cp-islands"
 
@@ -206,7 +211,9 @@ class EZHConstantIslands : public MachineFunctionPass {
 public:
   static char ID;
 
-  EZHConstantIslands() : MachineFunctionPass(ID) {}
+  EZHConstantIslands() : MachineFunctionPass(ID) {
+    initializeEZHConstantIslandsPass(*PassRegistry::getPassRegistry());
+  }
 
   bool runOnMachineFunction(MachineFunction &MF) override;
 
@@ -356,50 +363,43 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   // hand-written body and its Rend label; the taken goto inside the
   // repeated region killed the loop after a single iteration.
   //
-  // The region can span several fall-through blocks before the Rend label,
-  // so resolve Rend statically where possible: trace the Rend register to
-  // its constant-pool load in the same block and map the entry (formation
-  // loops carry the exit MachineBasicBlock, intrinsic loops the IR
-  // blockaddress) to its target block, then mark every layout block up to
-  // it. When Rend is not statically recoverable (hoisted or computed), only
-  // the TIGHT_LOOP's own block is marked -- the region beyond a block that
-  // does not fall through is broken on hardware regardless.
+  // INVARIANT: the marked set must be a SUPERSET of every possible legal
+  // repeated region. A legal region is straight-line by contract -- any
+  // branch inside it breaks the hardware loop -- so no legal region ever
+  // extends past a block that does not fall through. Two cases:
+  //
+  //  - Rend resolvable from the SAME-BLOCK reaching def (the nearest def
+  //    of the Rend register before the TIGHT_LOOP -- exact, no multi-def
+  //    ambiguity) as a constant-pool load of an exit MachineBasicBlock
+  //    (formation loops) or an IR blockaddress (intrinsic loops): mark
+  //    exactly [body .. Target). If the layout hits a non-fallthrough
+  //    block or the function end before reaching Target, the straight-line
+  //    contract is already broken -- fail loudly instead of leaving later
+  //    region blocks unmarked.
+  //
+  //  - Anything else (def hoisted out of the block, or not a recognizable
+  //    pool load): mark the body's entire maximal fall-through chain,
+  //    which contains every legal region by the invariant above. This
+  //    over-approximation only forfeits island spots past the real Rend.
+  //
+  // Neither walk is capped: both are bounded by the function's block list.
   const TargetRegisterInfo *TRI = STI->getRegisterInfo();
   for (MachineInstr *TL : TightLoops) {
     MachineBasicBlock *Body = TL->getParent();
     AFI->addTightLoopBody(Body);
 
-    // Find the def of the Rend register: scan backward from the TIGHT_LOOP,
-    // then up the dominator chain -- the materialization is commonly
-    // CSE-hoisted out of the loop block when the same blockaddress has
-    // other uses. A def found in a dominator when a non-dominating block
-    // redefines the register on some path could over- or under-mark, but
-    // both directions are safe: marked blocks are only no-water zones, and
-    // an unresolved/short region falls back to today's single-block
-    // coverage.
-    const MachineBasicBlock *Target = nullptr;
     const MachineInstr *Def = nullptr;
-    {
-      Register EndReg = TL->getOperand(0).getReg();
-      MachineBasicBlock *Scan = Body;
-      MachineBasicBlock::iterator I = TL->getIterator();
-      for (unsigned Depth = 0; !Def && Depth != 8; ++Depth) {
-        while (I != Scan->begin()) {
-          --I;
-          if (I->definesRegister(EndReg, TRI)) {
-            Def = &*I;
-            break;
-          }
-        }
-        if (Def)
-          break;
-        MachineDomTreeNode *N = DT->getNode(Scan);
-        if (!N || !N->getIDom())
-          break;
-        Scan = N->getIDom()->getBlock();
-        I = Scan->end();
+    Register EndReg = TL->getOperand(0).getReg();
+    for (MachineBasicBlock::iterator I = TL->getIterator();
+         I != Body->begin();) {
+      --I;
+      if (I->definesRegister(EndReg, TRI)) {
+        Def = &*I;
+        break;
       }
     }
+
+    const MachineBasicBlock *Target = nullptr;
     if (Def) {
       for (const MachineOperand &MO : Def->operands()) {
         if (!MO.isCPI())
@@ -426,13 +426,27 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
       }
     }
 
-    if (Target) {
-      MachineBasicBlock *X = Body;
-      for (unsigned N = 0; N != 16; ++N) {
+    if (Target && Target != Body) {
+      for (MachineBasicBlock *X = Body;;) {
         if (!BBHasFallthrough(X))
-          break;
+          report_fatal_error(
+              "EZH tight_loop: the layout between the loop and its Rend "
+              "label is not straight-line; the hardware-repeated region "
+              "cannot be protected (or executed)");
         MachineFunction::iterator Next = std::next(X->getIterator());
-        if (Next == MF->end() || &*Next == Target)
+        if (Next == MF->end())
+          report_fatal_error(
+              "EZH tight_loop: Rend label not reachable by fall-through "
+              "from the loop");
+        if (&*Next == Target)
+          break;
+        X = &*Next;
+        AFI->addTightLoopBody(X);
+      }
+    } else if (!Target) {
+      for (MachineBasicBlock *X = Body; BBHasFallthrough(X);) {
+        MachineFunction::iterator Next = std::next(X->getIterator());
+        if (Next == MF->end())
           break;
         X = &*Next;
         AFI->addTightLoopBody(X);
@@ -1219,7 +1233,7 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
     // function's first address would be executed): refuse loudly rather
     // than fall into std::prev(begin()) in release builds.
     MachineBasicBlock *First = UserMBB;
-    for (unsigned N = 0;; ++N) {
+    for (;;) {
       if (First->getIterator() == MF->begin())
         report_fatal_error(
             "EZH tight_loop: constant-pool water needed before a tight_loop "
@@ -1228,9 +1242,6 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
       if (!MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(P))
         break;
       First = P;
-      if (N == 16)
-        report_fatal_error(
-            "EZH tight_loop: runaway hardware-loop region walk");
     }
     MachineBasicBlock *Prev = &*std::prev(First->getIterator());
     if (BBHasFallthrough(Prev)) {
@@ -1577,6 +1588,12 @@ bool EZHConstantIslands::fixupConditionalBr(ImmBranch &Br) {
   return true;
 }
 
+
+INITIALIZE_PASS_BEGIN(EZHConstantIslands, DEBUG_TYPE,
+                      "EZH constant island placement", false, false)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
+INITIALIZE_PASS_END(EZHConstantIslands, DEBUG_TYPE,
+                    "EZH constant island placement", false, false)
 
 namespace llvm {
 FunctionPass *createEZHConstantIslandPass() {

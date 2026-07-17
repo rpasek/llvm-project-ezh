@@ -71,6 +71,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeEZHTarget() {
   // Register machine passes with the PassRegistry so -run-pass/-stop-after
   // can name them (used by the MIR regression tests).
   initializeEZHTightLoopFormationPass(*PassRegistry::getPassRegistry());
+  initializeEZHConstantIslandsPass(*PassRegistry::getPassRegistry());
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {

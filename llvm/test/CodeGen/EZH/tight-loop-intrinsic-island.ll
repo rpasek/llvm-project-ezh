@@ -278,13 +278,13 @@ ex:
 
 ; The repeated region spans TWO fall-through blocks (%loop, %mid) before the
 ; Rend label, with pool-free filler stranding %mid's own pool user on both
-; sides. This locks the composite protection for multi-block regions: the
-; region registration walk resolves Rend through the constant pool and marks
-; %mid, and any water needed by an in-region user is created before the
-; region. (Today the loop block's own Rend load is processed first and its
-; guarded island also shields the region -- the region walk is
-; defense-in-depth for Rend materializations hoisted out of the loop block,
-; where that shield disappears.)
+; sides. This locks the composite protection for multi-block regions built
+; from ordinary IR: Rend resolves from the loop block's own constant-pool
+; load, %mid is marked, and any water needed by an in-region user is created
+; before the region. (In this shape the loop block's Rend load is processed
+; first and its guarded island also shields the region; the walk itself is
+; exercised directly, without that shield, by the unresolved-Rend MIR test
+; tight-loop-region-water.mir.)
 ; CHECK-LABEL: g:
 ; CHECK: tight_loop
 ; CHECK-NOT: .LCPI{{[0-9_]+}}:
