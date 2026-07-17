@@ -282,9 +282,14 @@ bool EZHTightLoopFormation::tryConvertLoop(MachineLoop *L,
         if (I->definesRegister(Cnt, TRI))
           break;
         if (I->definesRegister(EZH::CFS, TRI)) {
+          // The compare must be UNCONDITIONAL: S-forms share their opcode
+          // with predicated instances (no _CC twin), and a predicated
+          // sub_imms only conditionally executes -- its flags prove nothing
+          // about Cnt on the untaken path.
           if (I->getOpcode() == EZH::SUB_IMM_s && I->getOperand(1).isReg() &&
               I->getOperand(1).getReg() == Cnt && I->getOperand(2).isImm() &&
-              I->getOperand(2).getImm() == 0)
+              I->getOperand(2).getImm() == 0 && I->getOperand(3).isImm() &&
+              I->getOperand(3).getImm() == EZHCC::ICC_EU)
             CountIsPositive = true;
           break;
         }
@@ -304,8 +309,13 @@ bool EZHTightLoopFormation::tryConvertLoop(MachineLoop *L,
       if (!I->definesRegister(Cnt, TRI))
         continue;
       DefinedHere = true;
+      // Predicated materializers carry the LOAD_IMM_CC opcode (the
+      // materializer split), so LOAD_IMM is unconditional by construction;
+      // enforce the EU predicate directly anyway rather than relying on
+      // that distant invariant.
       if (I->getOpcode() == EZH::LOAD_IMM && I->getOperand(1).isImm() &&
-          I->getOperand(1).getImm() >= 1)
+          I->getOperand(1).getImm() >= 1 && I->getOperand(2).isImm() &&
+          I->getOperand(2).getImm() == EZHCC::ICC_EU)
         CountIsPositive = true;
       break;
     }
