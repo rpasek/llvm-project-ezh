@@ -393,7 +393,7 @@ always-predicated opcode carry Uses=[CFS], PredicateInstruction adds the
 implicit use when predicating a shared-opcode instruction, and the
 compare/branch/select pseudos are flag-honest so InstrEmitter cannot
 falsely mark a producer's CFS def dead. The predicated instances of the
-~247 pure descriptors now carry a true register dependence on their flag
+~246 pure descriptors now carry a true register dependence on their flag
 producer, per-instance. Implementing ClobbersPredicate on top of the model
 also FIXED A LIVE WRONG-CODE BUG: the if-converter used to predicate blocks
 containing S-forms (an i64 add in a triangle arm became sub_imms; adds_ze;
@@ -426,11 +426,11 @@ format class does not set the flag: EZHInstALU/ALUI set hasSideEffects=1
 formats do not. Ground truth from EZHGenInstrInfo.inc: 254 predicable
 descriptors have NO UnmodeledSideEffects flag (LSL, BSET, ANDOR, LDR, STR,
 the RROR family, ... including flag-WRITING _s shift forms like LSL_s).
-Of those, 7 are base opcodes that PredicateInstruction rewrites to honest
-_CC twins at predication time (the four materializers plus
+Of those, 8 are base opcodes that PredicateInstruction rewrites to honest
+_CC twins at predication time (GOTO, the four materializers, and
 TCRETURN/TCRETURNExt/TCRETURN_REG; TCRETURN_MEM is pattern-less and already
-side-effecting), so at most 247 remain unresolved before reachability
-filtering -- the raw count overstates the gap slightly, but the reachable
+side-effecting so it sits outside the 254), so at most 246 remain unresolved
+before reachability filtering -- the raw count overstates the gap slightly, but the reachable
 predicated LSL below proves the hazard independently of the exact number.
 Reachable predicated example after if-conversion:
     SUB_IMM_s ..., 0        ; flag producer (side-effecting descriptor)
@@ -467,7 +467,7 @@ the remat/CSE-relevant cases this item's original prescription targeted: the
 four materializers (b87fb16, MIR tests pin the rewrite), LOAD_CONSTANT_COND's
 inherited-flag fix (0b7d8aa), and the GOTO/TCRETURN barrier splits (sibling
 item above). OPEN for the general predicated-consumer modeling gap described
-above: up to 247 predicable pure descriptors (254 raw minus the 7 rewritten
+above: up to 246 predicable pure descriptors (254 raw minus the 8 rewritten
 to _CC twins at predication) whose predicated instances rely solely on pass
 ordering plus the scheduler pin. This is a latent-hazard item, not an
 active bug, and it only becomes load-bearing if the pin is ever dropped (e.g.

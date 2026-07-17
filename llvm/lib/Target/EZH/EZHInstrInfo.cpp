@@ -342,21 +342,30 @@ bool EZHInstrInfo::canPredicatePredicatedInstr(const MachineInstr &MI) const {
 }
 
 // Any instruction that writes the condition flags (defs CFS -- the S-forms,
-// and the compare pseudos that lower to them) clobbers the predicate. Without
-// this hook the if-converter believed nothing clobbered the predicate and
-// would happily predicate a block CONTAINING an S-form: e.g. an i64 add in a
-// triangle arm became "sub_imms; adds_ze; adc_ze", where the executed adds_ze
-// overwrites the flags and the following adc_ze tests the condition on the
-// ADDITION's flags instead of the compare's -- a silent wrong-code bug. With
-// the flags modelled as CFS, the honest answer is one query.
+// WRITE_CFS, and the compare pseudos that lower to them) clobbers the
+// predicate. Without this hook the if-converter believed nothing clobbered
+// the predicate and would happily predicate a block CONTAINING an S-form:
+// e.g. an i64 add in a triangle arm became "sub_imms; adds_ze; adc_ze",
+// where the executed adds_ze overwrites the flags and the following adc_ze
+// tests the condition on the ADDITION's flags instead of the compare's -- a
+// silent wrong-code bug. With the flags modelled as CFS, the honest answer
+// is one query.
+//
+// Deliberately IGNORE SkipDead: the contract allows skipping a dead
+// predicate def only when the instruction is guaranteed to be removed after
+// PredicateInstruction, and EZH removes nothing -- a predicated CFS writer
+// still executes and still writes the flags. A def that was correctly dead
+// BEFORE if-conversion (e.g. "mov cfs, x" from llvm.ezh.write.cfs whose
+// flags nothing read yet) gains readers DURING predication: every following
+// predicated instruction in the merged region evaluates its condition
+// against the clobbered flags ("sub_imms; mov_ze cfs; add_ze" tests the
+// user-written flags instead of the compare's).
 bool EZHInstrInfo::ClobbersPredicate(MachineInstr &MI,
                                      std::vector<MachineOperand> &Pred,
-                                     bool SkipDead) const {
+                                     bool /*SkipDead*/) const {
   bool Found = false;
   for (const MachineOperand &MO : MI.operands()) {
     if (!MO.isReg() || !MO.isDef() || MO.getReg() != EZH::CFS)
-      continue;
-    if (SkipDead && MO.isDead())
       continue;
     Pred.push_back(MO);
     Found = true;

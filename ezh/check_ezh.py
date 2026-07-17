@@ -38,6 +38,7 @@ TESTS = [
     "llvm/test/CodeGen/EZH/reg-offset.ll",
     "llvm/test/CodeGen/EZH/reg-shift.ll",
     "llvm/test/CodeGen/EZH/if-cvt-alu.ll",
+    "llvm/test/CodeGen/EZH/ifcvt-flag-clobber.ll",
     "llvm/test/CodeGen/EZH/indexed-memref.ll",
     "llvm/test/CodeGen/EZH/spill-memref.ll",
     "llvm/test/CodeGen/EZH/frame.ll",
