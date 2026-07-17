@@ -34,6 +34,7 @@ include "llvm/Target/Target.td"
 include "EZHRegisterInfo.td"
 include "EZHCallingConv.td"
 include "EZHInstrInfo.td"
+include "EZHSchedule.td"
 
 defm : RemapAllTargetPseudoPointerOperands<GPR>;
 
@@ -50,8 +51,12 @@ def FeatureBitSliceInterrupts : SubtargetFeature<"bitslice-interrupts", "HasBitS
 // EZH processors supported.
 //===----------------------------------------------------------------------===//
 
-def : ProcessorModel<"generic", NoSchedModel, [FeatureBitSliceInterrupts]>;
-def : ProcessorModel<"v11", NoSchedModel, [FeatureBitSliceInterrupts]>;
+// EZHSchedModel: in-order, IssueWidth=1, LoadLatency=2. With no per-opcode
+// SchedRW bindings (CompleteModel=0), latencies come from defaultDefLatency:
+// mayLoad instructions get LoadLatency, everything else 1 cycle -- enough for
+// the post-RA scheduler to hoist loads away from their first use.
+def : ProcessorModel<"generic", EZHSchedModel, [FeatureBitSliceInterrupts]>;
+def : ProcessorModel<"v11", EZHSchedModel, [FeatureBitSliceInterrupts]>;
 
 def EZHInstPrinter : AsmWriter {
   string AsmWriterClassName  = "InstPrinter";

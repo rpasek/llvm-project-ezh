@@ -164,8 +164,16 @@ void EZHPassConfig::addPreSched2() {
 }
 
 void EZHPassConfig::addPreEmitPass() {
-  if (getOptLevel() != CodeGenOptLevel::None)
+  if (getOptLevel() != CodeGenOptLevel::None) {
     addPass(createEZHCompareFusionPass());
+    // Post-RA list scheduling, placed AFTER compare fusion so fusion sees the
+    // unscheduled adjacent pairs, and after the if-converter so predicated
+    // instances exist -- their implicit CFS operands (flags-as-physreg model)
+    // carry the dependences that make reordering here sound. The generic
+    // pipeline's insertion point is suppressed by
+    // targetSchedulesPostRAScheduling; this is the target-owned placement.
+    addPass(&PostRASchedulerID);
+  }
 }
 
 void EZHPassConfig::addPreEmitPass2() {

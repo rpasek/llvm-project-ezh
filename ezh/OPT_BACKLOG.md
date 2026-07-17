@@ -401,7 +401,13 @@ adc_ze -- the executed adds_ze overwrites the flags and adc_ze tests the
 addition's condition instead of the compare's); such arms now stay behind a
 real branch (regression test ifcvt-flag-clobber.ll). The post-RA scheduling
 pin is retained as defense-in-depth but is no longer the sole correctness
-mechanism; dropping it pairs with the SchedModel item below.
+mechanism; the SchedModel + post-RA scheduler LANDED as the follow-up: the
+coarse EZHSchedModel (LoadLatency=2) is attached, pre-RA MISched is pinned
+to register pressure only, and the post-RA list scheduler runs after
+EZHCompareFusion -- corpus load-use stall adjacencies dropped 12% at zero
+size cost, 3078/3078 on silicon. The targetSchedulesPostRAScheduling
+override is retained to keep the generic insertion point (pre-fusion)
+suppressed; the target owns the scheduler's placement.
 
 DONE 2026-07-16 (b87fb16382a5) for the IMMEDIATE MATERIALIZERS -- the load-bearing
 case this item is about (load_imm / load_simm want honest movable descriptors so
@@ -483,7 +489,7 @@ appears. Closing it requires one of:
       writers must be marked too.
 RESOLUTION: path (a) was implemented (see the CLOSED note at the top of this
 item); the pin is now defense-in-depth rather than the sole correctness
-mechanism, and dropping it pairs with the SchedModel optimization.
+mechanism; the SchedModel optimization has since landed (see above).
 
 ## [DEFERRED - unsafe minimal fixes] Jump-table dispatch clobbers RA as scratch, forcing pushd ra in leaf switch functions
 
