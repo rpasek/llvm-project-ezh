@@ -177,6 +177,12 @@ void EZHPassConfig::addPreEmitPass() {
 }
 
 void EZHPassConfig::addPreEmitPass2() {
+  // Hardware-loop formation runs after the post-RA scheduler (the repeated
+  // block keeps its final schedule) and before the bitslice injection and
+  // constant-island passes; it self-gates on optlevel, optsize, and the
+  // bitslice-interrupts feature.
+  if (getOptLevel() != CodeGenOptLevel::None)
+    addPass(createEZHTightLoopFormationPass());
   addPass(createEZHBitSliceInjectionPass());
   addPass(createEZHConstantIslandPass());
 }

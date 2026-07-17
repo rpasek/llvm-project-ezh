@@ -1109,6 +1109,38 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
   BBInfoVector &BBInfo = BBUtils->getBBInfo();
   const BasicBlockInfo &UserBBI = BBInfo[UserMBB->getNumber()];
 
+  // A tight_loop body must never gain an island at its end (the island's
+  // data and branch-around goto would sit inside the hardware-repeated
+  // region, which ends only at the next block's label) and must never be
+  // split. Make water immediately BEFORE the loop instead: the formation
+  // pass guarantees a layout predecessor that is not itself a loop body,
+  // and caps body size so this spot is always in range of the setup load.
+  if (MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(UserMBB)) {
+    assert(UserMBB->getIterator() != MF->begin() &&
+           "tight_loop body with no layout predecessor");
+    MachineBasicBlock *Prev = &*std::prev(UserMBB->getIterator());
+    if (MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(Prev))
+      report_fatal_error(
+          "EZH tight_loop: cannot place constant-pool water before loop");
+    if (BBHasFallthrough(Prev)) {
+      // The island will sit between Prev and UserMBB; Prev must branch
+      // around it (same bookkeeping as the split-at-end path below).
+      BuildMI(Prev, DebugLoc(), TII->get(EZH::GOTO)).addMBB(UserMBB);
+      unsigned MaxDisp = 8 * 1024 * 1024;
+      ImmBranches.push_back(
+          ImmBranch(&Prev->back(), MaxDisp, false, EZH::GOTO));
+      BBUtils->computeBlockSize(Prev);
+      BBUtils->adjustBBOffsetsAfter(Prev);
+    }
+    // handleConstantPoolUser inserts the island BEFORE NewMBB, so NewMBB is
+    // the block that FOLLOWS the water point: the loop block itself. (An
+    // earlier version returned Prev here, which put the island on the far
+    // side of Prev -- before a block whose fall-through was then unprotected
+    // -- and invoked UB when Prev was the entry block.)
+    NewMBB = UserMBB;
+    return;
+  }
+
   // If the block does not end in an unconditional branch already, and if the
   // end of the block is within range, make new water there by adding an
   // unconditional branch (4 bytes on EZH).

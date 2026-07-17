@@ -1,7 +1,11 @@
-; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 < %s | FileCheck %s
+; Tight-loop formation is disabled here: it would (correctly) convert the
+; canonical latch these checks pin into a tight_loop hardware loop, and this
+; test's subject is the compare fusion itself (hardware-loop coverage lives
+; in tight-loop.ll).
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 -ezh-tight-loops=false < %s | FileCheck %s
 ; Debug info must not change the generated code: the pass skips DBG_VALUEs
 ; in its walk-back window and its dead-register scan.
-; RUN: opt -passes=debugify -S < %s | llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 | FileCheck %s
+; RUN: opt -passes=debugify -S < %s | llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -O3 -ezh-tight-loops=false | FileCheck %s
 
 ; The EZHCompareFusion pass folds a compare-with-zero (sub_imms rD, rS, 0
 ; with rD dead) into the flag-setting twin of the adjacent instruction that

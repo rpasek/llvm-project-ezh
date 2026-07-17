@@ -723,12 +723,17 @@ def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs GPR:$Rd), (ins GPR
 def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold_nra$Cond $Rd, $table, $vectors", []>;
 def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $Rd, $table, $vectors", []>;
 
-// Tight Loop. The pattern makes the OP_LOOP hardware loop reachable from C as
-// __builtin_ezh_tight_loop(rend, rcount) -- an expert, event-paced primitive
-// (see IntrinsicsEZH.td for the body contract). Silicon-validated: Rcount+1
-// iterations of the single straight-line body ending at the address in Rend
-// when each iteration holds on an armed bitslice event; a free-running loop
-// executes the body zero times.
+// Tight Loop (AN14650 E_TIGHT_LOOP), the zero-overhead hardware loop. The
+// instruction immediately AFTER tight_loop executes exactly once (a run-once
+// slot); the block from the next instruction up to (but excluding) the
+// address in Rend then executes Rcount+1 times total, free-running -- no
+// event pacing is required (silicon-validated for counts 0/4/7/9; an earlier
+// "body runs zero times when free-running" observation came from
+// one-instruction bodies swallowed whole by the then-unknown run-once slot).
+// Rend and Rcount are latched at execution; the block may clobber both
+// registers. Reachable from C as __builtin_ezh_tight_loop(rend, rcount)
+// (see IntrinsicsEZH.td for the body contract) and formed automatically
+// from canonical counted loops by EZHTightLoopFormation.
 def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Cond), "tight_loop$Cond $Rend, $Rcount", [(int_ezh_tight_loop GPR:$Rend, GPR:$Rcount)]>;
 
 // Reg Offset Load/Store. address = Rn + Rm (Rm is a byte offset), validated on

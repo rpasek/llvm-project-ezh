@@ -50,6 +50,7 @@ add_llvm_target(EZHCodeGen
   EZHSelectionDAGInfo.cpp
   EZHSubtarget.cpp
   EZHTargetMachine.cpp
+  EZHTightLoopFormation.cpp
 
 
   LINK_COMPONENTS

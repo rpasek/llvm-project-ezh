@@ -33,6 +33,7 @@ class PassRegistry;
 FunctionPass *createEZHISelDag(EZHTargetMachine &TM);
 
 FunctionPass *createEZHConstantIslandPass();
+FunctionPass *createEZHTightLoopFormationPass();
 FunctionPass *createEZHBitSliceInjectionPass();
 FunctionPass *createEZHCompareFusionPass();
 
