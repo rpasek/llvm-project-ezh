@@ -34,6 +34,7 @@ FunctionPass *createEZHISelDag(EZHTargetMachine &TM);
 
 FunctionPass *createEZHConstantIslandPass();
 FunctionPass *createEZHTightLoopFormationPass();
+void initializeEZHTightLoopFormationPass(PassRegistry &);
 FunctionPass *createEZHBitSliceInjectionPass();
 FunctionPass *createEZHCompareFusionPass();
 

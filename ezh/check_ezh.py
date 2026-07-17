@@ -40,6 +40,7 @@ TESTS = [
     "llvm/test/CodeGen/EZH/if-cvt-alu.ll",
     "llvm/test/CodeGen/EZH/ifcvt-flag-clobber.ll",
     "llvm/test/CodeGen/EZH/tight-loop.ll",
+    "llvm/test/CodeGen/EZH/tight-loop-evidence.mir",
     "llvm/test/CodeGen/EZH/indexed-memref.ll",
     "llvm/test/CodeGen/EZH/spill-memref.ll",
     "llvm/test/CodeGen/EZH/frame.ll",

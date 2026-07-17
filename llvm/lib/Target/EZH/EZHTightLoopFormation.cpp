@@ -91,9 +91,14 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/IR/Type.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
+
+namespace llvm {
+void initializeEZHTightLoopFormationPass(PassRegistry &);
+} // namespace llvm
 
 #define DEBUG_TYPE "ezh-tight-loop"
 
@@ -115,7 +120,9 @@ namespace {
 class EZHTightLoopFormation : public MachineFunctionPass {
 public:
   inline static char ID = 0;
-  EZHTightLoopFormation() : MachineFunctionPass(ID) {}
+  EZHTightLoopFormation() : MachineFunctionPass(ID) {
+    initializeEZHTightLoopFormationPass(*PassRegistry::getPassRegistry());
+  }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<MachineLoopInfoWrapperPass>();
@@ -452,6 +459,12 @@ bool EZHTightLoopFormation::tryConvertLoop(MachineLoop *L,
   ++NumTightLoops;
   return true;
 }
+
+INITIALIZE_PASS_BEGIN(EZHTightLoopFormation, DEBUG_TYPE,
+                      "EZH tight_loop hardware loop formation", false, false)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfoWrapperPass)
+INITIALIZE_PASS_END(EZHTightLoopFormation, DEBUG_TYPE,
+                    "EZH tight_loop hardware loop formation", false, false)
 
 namespace llvm {
 FunctionPass *createEZHTightLoopFormationPass() {
