@@ -21,4 +21,10 @@
 
 # CHECK: { 2, 0}, // #1 EZHWriteLoad
 # CHECK-NEXT: { 1, 0} // #2 EZHWriteWB
-# CHECK: LDRBS_POST_LDRBS_PRE_LDRB_POST_LDRB_PRE_LDR_POST_LDR_PRE{{.*}} 1, 2, 0, 0}, // #1
+# The class name is the sorted concatenation of the bound opcodes, and the
+# terminators make the membership EXACT: the name ends at "*/" in the sched
+# class table and at "\0" in the name-table string, so a member appended
+# after LDR_PRE in sort order changes the text before the terminator and
+# fails the match (a bare {{.*}} after the name would absorb it).
+# CHECK: LDRBS_POST_LDRBS_PRE_LDRB_POST_LDRB_PRE_LDR_POST_LDR_PRE*/{{.*}} 1, 2, 0, 0}, // #1
+# CHECK: "LDRBS_POST_LDRBS_PRE_LDRB_POST_LDRB_PRE_LDR_POST_LDR_PRE\0"

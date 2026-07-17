@@ -112,6 +112,7 @@ def run_lines(path, B, tmp):
         (r"%S", os.path.dirname(path)),
         (r"%t", tmp),
         (r"\bllvm-mc\b", f'"{B}/llvm-mc"'),
+        (r"\bllvm-tblgen\b", f'"{B}/llvm-tblgen"'),
         (r"^not\b|(?<=[|;&] )not\b", f'"{B}/not"'),
         (r"\bllc\b", f'"{B}/llc"'),
         (r"\bopt\b", f'"{B}/opt"'),
