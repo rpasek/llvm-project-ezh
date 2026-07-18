@@ -2,8 +2,8 @@
 
 Supersedes the v1 note (which described the first 8-commit stack; that stack
 was never merged and is now the base of this branch). Current state:
-`ezh-port` carries **110 commits over `origin/main` (`cf402fe`)**, all
-silicon-validated. Net compiler payload: **82 files, +8,690 / −734** across
+`ezh-port` carries **110 work commits over `origin/main` (`cf402fe`)** plus
+planning commits like this one, all silicon-validated. Net compiler payload: **82 files, +8,690 / −734** across
 `llvm/`, `clang/`, `lld/`, `lldb/` including **37 new in-tree test files**.
 The other ~58 files (demos, JTAG harness, timing docs, 29 validation-artifact
 commits) are fork-side evidence, not PR payload.
@@ -24,8 +24,11 @@ commits) are fork-side evidence, not PR payload.
    the pre-scheduler no-post-RA pin, later replaced by the scheduler series)
    simply disappears from the net carving.
 2. **Every series tip must**: build clean (`-Werror`), pass all in-tree EZH
-   lit tests present at that point, pass the hermetic portable runner, and
-   get one full three-config silicon suite run. Bisectability is the promise
+   lit tests present at that point, pass the hermetic portable runner ON THE
+   PER-SERIES MANIFEST (the full 41-test manifest hardcodes tests that later
+   series introduce and reports missing files as failures -- each series
+   carries the subset of the manifest that exists at its tip), and get one
+   full three-config silicon suite run. Bisectability is the promise
    reviewers pay for.
 3. Tests travel with their feature. Validation artifacts stay on the fork;
    PR descriptions summarize the evidence and link the fork commits.
@@ -39,22 +42,25 @@ commits) are fork-side evidence, not PR payload.
 | 1 | **Build & hygiene** | PassManagerBase forward-decl fix; `-Werror`-clean backend and lldb plugin; dead STATISTIC removal; predicated pushd/popd alias printing | `7e766844`, `3c233b24`, `e4ed4d91`, `932b3386`, `13d76eb0` |
 | 2 | **MC diagnostics** | Silent mis-assembly → hard errors: symbol-immediate window, branch/call alignment, imm5 range; negative MC tests | `9b093d5f` |
 | 3 | **Memory correctness** | Register-offset load/store ISel + the silicon-derived `Inst{29}` sign-extend fix; MachineMemOperands on indexed/spill accesses; NXP-confirmed R0-R7 operand enforcement | `00b6281c`, `cd3f47b1`, `e3eb277a` |
-| 4 | **Intrinsic/builtin surface** | Full `__builtin_ezh_*` layer: GPIO, event fabric, CFM/CFS, GPO, vectored holds (incl. the hardware-writes-RA `Defs=[RA]` fact), `tight_loop`; the `getArchTypePrefix` fix that unblocks all of it; Sema immediate ranges; the silicon-corrected contract docs | `8753a819`, `7fd4b74f`, `1dd6cd5b`, `009c6d35`, `1b04f9e3`, `4ecd0901`, `2307e872`, `c22824c4`, `149a0350` |
+| 4 | **Intrinsic/builtin surface** | Full `__builtin_ezh_*` layer: GPIO, event fabric, CFM/CFS, GPO, vectored holds (incl. the hardware-writes-RA `Defs=[RA]` fact), `tight_loop`; the `getArchTypePrefix` fix that unblocks all of it; Sema immediate ranges; the silicon-corrected public contract (the IntrinsicsEZH/BuiltinsEZH rewrite from `ad00de20` -- ship the TRUE semantics from the start, never the disproven event-paced text) | `8753a819`, `7fd4b74f`, `1dd6cd5b`, `009c6d35`, `1b04f9e3`, `4ecd0901`, `2307e872`, `c22824c4`, `149a0350`, contract part of `ad00de20` |
 | 5 | **Codegen quality I** | Frame elision (no phantom FP), EZHCompareFusion (+ -g/optnone hardening), constant-multiply decomposition + shift-add chains, sign-bias compare fold, 0/1 boolean contents | `d075e8b0`, `f4f39ab9`, `934017f5`, `8233d8d8`, `2623fa72`, `ed6c60f1` |
-| 6 | **Calls** | Sibling calls, musttail perfect forwarding (stack args, varargs, indirect), the 4-register indirect hole, memory-form tail-call slot pinning, return-position libcall tail calls, conditional tail calls, bitslice-starvation guard + RA-save elision | `3edb8a58`, `ccd3fe13`, `13a3e4cb`, `b884ab4d`, `30242f79`, `4cada17c`, `8d4c5674`, part of `f44c4db5` |
+| 6 | **Calls** | Sibling calls, musttail perfect forwarding (stack args, varargs, indirect), the 4-register indirect hole, memory-form tail-call slot pinning, return-position libcall tail calls, conditional tail calls WITH the `TCRETURN_CC` opcode split (a conditional tail return sharing the unconditional descriptor is model-invalid -- `isBarrier`/`isReturn` on a maybe-taken exit -- so the split must land with the feature, not later), bitslice-starvation guard + RA-save elision | `3edb8a58`, `ccd3fe13`, `13a3e4cb`, `b884ab4d`, `30242f79`, `4cada17c`, `8d4c5674`, `9fcf6be8`, part of `f44c4db5` |
 | 7 | **Codegen quality II** | Stack-address folding; zero-compare/`load_simmn`/global-offset folds; i64 carry chain, inline variable shifts, ordered compares via borrow; LSR post-increment preference with honest cost model; pool-load + immediate rematerialization (honest descriptors); SjLj receiver clobbers; select-of-constants fold; GlobalMerge at addPreISel; the clang `va_arg` over-alignment fix | `205380a0`, rest of `f44c4db5`, `e3b4c244`, `222f8f47`, `5dfec349`, `2341fef2`, `5c6aecb2`, `dadf3cd8`, `2a97553f`, `4cd99235`, `69fadd44`, `c7c36a66`, `cb42ac92` |
 | 8 | **MachineOutliner** | Whitelist-closed classifier port | `0c0627ab` |
-| 9 | **Predication & flags** | Sound conditional-branch modeling + `-verify-machineinstrs`; the GOTO/materializer/TCRETURN `_CC` opcode splits with MIR coverage; condition flags modeled as the CFS physreg (fixes a live if-converter wrong-code bug); `ClobbersPredicate` SkipDead fix | `725f496a`, `b87fb163`, `9fcf6be8`, `f5f53f70`, `0b7d8aa8`, `9df5cf7f`, `e1b8b875` |
-| 10 | **Machine model & scheduler** | Coarse SchedModel (the load-bearing omissions documented), post-RA scheduler wiring (−12% load-use stalls, size-neutral), per-def indexed-load latencies with the exact/hermetic tblgen-oracle test | `89b6cf64`, half of `42476f38`, `6f4481aa`, parts of `4bd729f4` |
-| 11 | **tight_loop hardware loops** | EZHTightLoopFormation (n≥1 evidence rules, CFS discipline, budgets) with .ll + MIR evidence tests; constant-island superset-invariant region protection (+ `-run-pass` registration, unresolved-Rend MIR test); the silicon-true intrinsic contract; the rotation-is-worthless verdict comment | `8a0c9102`, `cbe16be3`, rest of `42476f38`, `cd371f75`, `e7de9d49`, `ad00de20`, `7be2cbf8`, `59e46c5c` |
+| 9 | **Predication & flags** | Sound conditional-branch modeling + `-verify-machineinstrs`; the GOTO/materializer `_CC` opcode splits with MIR coverage (`TCRETURN_CC` travels with series 6); condition flags modeled as the CFS physreg (fixes a live if-converter wrong-code bug); `ClobbersPredicate` SkipDead fix | `725f496a`, `b87fb163`, `f5f53f70`, `0b7d8aa8`, `9df5cf7f`, `e1b8b875` |
+| 10 | **Machine model & scheduler** | Coarse SchedModel (the load-bearing omissions documented), the surviving `targetSchedulesPostRAScheduling()` override, post-RA scheduler wiring (−12% load-use stalls, size-neutral), per-def indexed-load latencies with the exact/hermetic tblgen-oracle test | `3aa5d899` (surviving override), `89b6cf64`, half of `42476f38`, `6f4481aa`, `168fcb84`, sched-doc part of `4bd729f4` |
+| 11 | **tight_loop hardware loops** | EZHTightLoopFormation (n≥1 evidence rules, CFS discipline, budgets) with .ll + MIR evidence tests (incl. the de-vacuated `guard_taken_path` from `4bd729f4`); constant-island superset-invariant region protection (+ `-run-pass` registration, unresolved-Rend MIR test); the rotation-is-worthless verdict comment | `8a0c9102`, `cbe16be3`, rest of `42476f38`, `cd371f75`, evidence-test part of `4bd729f4`, `e7de9d49`, island/timing parts of `ad00de20`, `7be2cbf8`, `59e46c5c` |
 
-Dependency notes: 9 requires 6 (the `TCRETURN_CC` split targets the tail-call
-returns) and supersedes nothing before it; 10 requires 9 (the post-RA
-scheduler is only sound once predicated instances have distinct opcodes —
-the "scheduler pin is correctness-critical" finding); 11 requires 9 and 10
-(CFS-based evidence scans; bodies keep their post-RA schedule). 1–8 are
-mutually independent of 9–11 and mostly of each other; land 1–4 first since
-they are small and unblock everything semantically.
+Dependency notes: 10 requires 9, and the mechanism matters: post-RA
+scheduling soundness comes from the CFS PHYSICAL-REGISTER dependencies
+(S-forms define CFS; predicated and carry-consuming instructions use it) --
+most predicated ALU/memory instances still share their opcodes, so distinct
+`_CC` opcodes alone would not constrain the scheduler. The opcode splits
+contribute descriptor/barrier/rematerialization honesty, not the scheduling
+edges. 11 requires 9 and 10 (CFS-based evidence scans; bodies keep their
+post-RA schedule). 1–8 are mutually independent of 9–11 and mostly of each
+other; land 1–4 first since they are small and unblock everything
+semantically.
 
 ## Not PR payload (stays on the fork, offered separately if wanted)
 
