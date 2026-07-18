@@ -51,7 +51,12 @@ done
 if [ "$SKIP_BUILD" = false ]; then
     BITSLICE_FLAGS=""
     if [ "$DISABLE_BITSLICE_INTERRUPTS" -eq 1 ]; then
-        echo "=== Disabling bitslice interrupts (-mno-ezh-bitslice-interrupts) ==="
+        echo "=== Disabling bitslice interrupts for TEST code (-mno-ezh-bitslice-interrupts) ==="
+        # Applies to the TESTS only, never to crt0: the prebuilt runtimes
+        # (libc/libm/libc++/builtins) are bitslice-built and reference
+        # bitslice_handler throughout, so an image linking them must keep the
+        # standard bitslice-model crt0 that defines it. A -mno crt0 fails to
+        # link with ~2000 undefined bitslice_handler references.
         BITSLICE_FLAGS="-mno-ezh-bitslice-interrupts"
     fi
 
@@ -59,7 +64,7 @@ if [ "$SKIP_BUILD" = false ]; then
     mkdir -p ${EZH_TEST_DIR}/out
 
     # Recompile crt0.o with correct complete cross-compiler includes and flags!
-    ${ROOT_DIR}/build/bin/clang -target ezh-none-elf ${BITSLICE_FLAGS} -g -O0 -ffunction-sections -fdata-sections -Wall -Wextra -Werror -isystem ${ROOT_DIR}/build/libc/libc/include -I ${ROOT_DIR}/lldb/source/Plugins/Process/EZH/ -D__TEST__ -DSTACK_SIZE_WORDS=262144 -DPRINTF_BUF_SIZE=2048 ${EZH_TEST_DIR}/../crt0.c -c -o ${EZH_TEST_DIR}/out/crt0.o -fno-builtin
+    ${ROOT_DIR}/build/bin/clang -target ezh-none-elf -g -O0 -ffunction-sections -fdata-sections -Wall -Wextra -Werror -isystem ${ROOT_DIR}/build/libc/libc/include -I ${ROOT_DIR}/lldb/source/Plugins/Process/EZH/ -D__TEST__ -DSTACK_SIZE_WORDS=262144 -DPRINTF_BUF_SIZE=2048 ${EZH_TEST_DIR}/../crt0.c -c -o ${EZH_TEST_DIR}/out/crt0.o -fno-builtin
 
     echo "=== 2. Temporarily Bypassing Unsupported/Hardware-Incompatible Tests ==="
     # We dynamically bypass unsupported tests by moving them to a local gitignored out/ folder
