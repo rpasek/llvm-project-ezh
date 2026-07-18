@@ -40,7 +40,6 @@
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
-#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -205,7 +204,6 @@ class EZHConstantIslands : public MachineFunctionPass {
   const EZHInstrInfo *TII;
   const EZHSubtarget *STI;
   EZHMachineFunctionInfo *AFI;
-  MachineDominatorTree *DT = nullptr;
   bool isPositionIndependentOrROPI;
 
 public:
@@ -218,7 +216,6 @@ public:
   bool runOnMachineFunction(MachineFunction &MF) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<MachineDominatorTreeWrapperPass>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 
@@ -329,7 +326,6 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   isPositionIndependentOrROPI =
       STI->getTargetLowering()->isPositionIndependent();
   AFI = MF->getInfo<EZHMachineFunctionInfo>();
-  DT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
 
   // Renumber all of the machine basic blocks in the function, guaranteeing
   // that the numbers agree with the position of the block in the function.
@@ -399,8 +395,11 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
       }
     }
 
+    // Only the pool-load pseudo is a trustworthy Rend producer; any other
+    // defining opcode (or a future CPI-bearing instruction with different
+    // semantics) falls through to the chain over-approximation.
     const MachineBasicBlock *Target = nullptr;
-    if (Def) {
+    if (Def && Def->getOpcode() == EZH::LOAD_CONSTANT) {
       for (const MachineOperand &MO : Def->operands()) {
         if (!MO.isCPI())
           continue;
@@ -1591,7 +1590,6 @@ bool EZHConstantIslands::fixupConditionalBr(ImmBranch &Br) {
 
 INITIALIZE_PASS_BEGIN(EZHConstantIslands, DEBUG_TYPE,
                       "EZH constant island placement", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
 INITIALIZE_PASS_END(EZHConstantIslands, DEBUG_TYPE,
                     "EZH constant island placement", false, false)
 
