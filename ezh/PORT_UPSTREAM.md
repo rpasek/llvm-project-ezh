@@ -94,3 +94,13 @@ off `origin/main`, each rebased-and-squashed from the source commits above.
 Gate each tip per ground rule 2 (one board-day total for 11 silicon runs).
 Open PRs in dependency order; keep `ezh-port` untouched as the evidence
 branch that PR descriptions link into.
+
+## Carving status
+
+- `series/1` — CARVED AND GATED (pushed to the fork): 5 commits, cold build
+  clean (no EZH warnings), 5/5 tip manifest incl. the new mutation-verified
+  MC printer test, full three-config silicon suite 4,617/4,617 with the
+  series-tip compiler via the harness EZH_BIN override. Gate note for later
+  series: the test-suite cmake requires llvm-size next to the compiler --
+  build `llvm-size llvm-readelf llvm-ar llvm-nm` along with the core tools.
+- `series/2` … `series/11` — pending.
