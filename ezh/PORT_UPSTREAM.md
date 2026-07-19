@@ -97,10 +97,13 @@ branch that PR descriptions link into.
 
 ## Carving status
 
-- `series/1` — CARVED AND GATED (pushed to the fork): 5 commits, cold build
-  clean (no EZH warnings), 5/5 tip manifest incl. the new mutation-verified
-  MC printer test, full three-config silicon suite 4,617/4,617 with the
-  series-tip compiler via the harness EZH_BIN override. Gate note for later
-  series: the test-suite cmake requires llvm-size next to the compiler --
-  build `llvm-size llvm-readelf llvm-ar llvm-nm` along with the core tools.
+- `series/1` — CARVED AND GATED (pushed to the fork, HEAD `49b5f622`):
+  5 commits, cold build clean (no EZH warnings); tip manifest 5/5 through
+  the committed mechanism (`ezh/series_manifests/series1.txt` + the
+  check_ezh.py --tree/--manifest options; exact invocation in the manifest
+  header); full three-config silicon suite 4,617/4,617 with the series-tip
+  compiler via the harness EZH_BIN override -- artifact committed with
+  provenance in `c8eed45c`. Gate note for later series: the test-suite
+  cmake requires llvm-size next to the compiler -- build
+  `llvm-size llvm-readelf llvm-ar llvm-nm` along with the core tools.
 - `series/2` … `series/11` — pending.
