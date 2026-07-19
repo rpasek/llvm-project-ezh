@@ -34,6 +34,16 @@ def SDT_EZHCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 def SDT_EZHCallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 def SDT_EZHCall : SDTypeProfile<0, -1, [SDTCisVT<0, i32>]>;
 def EZH_call : SDNode<"EZHISD::CALL", SDT_EZHCall, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+def EZH_tcret : SDNode<"EZHISD::TC_RETURN", SDT_EZHCall, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
+
+// 64-bit carry chain (see ReplaceNodeResults): the low half sets the carry
+// (glue out), the high half consumes it (glue in); glue keeps each pair
+// adjacent through scheduling.
+def EZH_adds : SDNode<"EZHISD::ADDS", SDTIntBinOp, [SDNPCommutative, SDNPOutGlue]>;
+def EZH_subs : SDNode<"EZHISD::SUBS", SDTIntBinOp, [SDNPOutGlue]>;
+def EZH_adc  : SDNode<"EZHISD::ADC",  SDTIntBinOp, [SDNPCommutative, SDNPInGlue]>;
+def EZH_sbc  : SDNode<"EZHISD::SBC",  SDTIntBinOp, [SDNPInGlue]>;
+def EZH_sbcs : SDNode<"EZHISD::SBCS", SDTIntBinOp, [SDNPInGlue, SDNPOutGlue]>;
 def EZH_adjcallstackdown : SDNode<"ISD::CALLSEQ_START", SDT_EZHCallSeqStart, [SDNPHasChain, SDNPOutGlue]>;
 def EZH_adjcallstackup : SDNode<"ISD::CALLSEQ_END", SDT_EZHCallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def EZH_ret_glue_node : SDNode<"EZHISD::RET_GLUE_INTERNAL", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
@@ -65,6 +75,15 @@ def calltarget : Operand<i32>, ImmLeaf<i32, [{ return (Imm & 3) == 0; }]> {
 }
 
 def brtarget : Operand<OtherVT> {
+  let PrintMethod = "printBranchTarget";
+  let EncoderMethod = "getBranchTargetOpValue";
+  let DecoderMethod = "decodeSimm21";
+}
+
+// Symbol target in a goto's 21-bit address field (tail calls): same
+// encoding and fixup as brtarget, but i32-typed so it can match
+// tglobaladdr/texternalsym in patterns.
+def tcalltarget : Operand<i32> {
   let PrintMethod = "printBranchTarget";
   let EncoderMethod = "getBranchTargetOpValue";
   let DecoderMethod = "decodeSimm21";
@@ -103,8 +122,19 @@ def imms8 : Operand<i32>, ImmLeaf<i32, [{ return isInt<8>(Imm); }]> {
   let DecoderMethod = "decodeSimm8";
 }
 
-def imm5 : Operand<i32>, ImmLeaf<i32, [{ return isInt<5>(Imm) || isUInt<5>(Imm); }]> {
+def imm5 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<5>(Imm); }]> {
   let PrintMethod = "printImmOperand";
+  // Range-check the 5-bit field at encode time (bit positions / shift amounts).
+  let EncoderMethod = "getImm5OpValue";
+}
+
+// Unsigned 8-bit mask fields (the acc_vectored_hold dispatch-enable mask and
+// the modify_gpo_byte AND/OR/XOR masks). Distinct from imms8: the field is a
+// bit mask, so it decodes and prints unsigned (0xFF is 255, not -1) and the
+// encoder range-checks [0,255].
+def uimm8 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<8>(Imm); }]> {
+  let PrintMethod = "printImmOperand";
+  let EncoderMethod = "getUimm8OpValue";
 }
 
 def imm16 : Operand<i32>, ImmLeaf<i32, [{ return isUInt<16>(Imm); }]> {
@@ -185,13 +215,16 @@ class ShiftInfo<bits<3> val, string name, string asm_name, SDPatternOperator nod
   bit Flip = flip;
 }
 
-class EZHShiftAluOpInfo<bits<3> op, string name, string upper_name, SDPatternOperator node, bit rev = 0, bit has_pat = 1> {
+class EZHShiftAluOpInfo<bits<3> op, string name, string upper_name, SDPatternOperator node, bit rev = 0, bit has_pat = 1, bit reads_carry = 0> {
   bits<3> AluOp = op;
   string Name = name;
   string UpperName = upper_name;
   SDPatternOperator Node = node;
   bit Rev = rev;
   bit HasPat = has_pat;
+  // adc/sbc consume the carry flag as data; the combined shift-ALU forms
+  // inherit that and must carry an implicit use of CFS.
+  bit ReadsCarry = reads_carry;
 }
 
 def EZHShiftAluOp_AND : EZHShiftAluOpInfo<FLIP_AND, "and", "AND", and>;
@@ -199,8 +232,8 @@ def EZHShiftAluOp_OR  : EZHShiftAluOpInfo<FLIP_OR,  "or",  "OR",  or>;
 def EZHShiftAluOp_XOR : EZHShiftAluOpInfo<FLIP_XOR, "xor", "XOR", xor>;
 def EZHShiftAluOp_ADD : EZHShiftAluOpInfo<FLIP_ADD, "add", "ADD", add>;
 def EZHShiftAluOp_SUB : EZHShiftAluOpInfo<FLIP_SUB, "sub", "SUB", sub, 1>;
-def EZHShiftAluOp_ADC : EZHShiftAluOpInfo<FLIP_ADC, "adc", "ADC", null_frag, 0, 0>;
-def EZHShiftAluOp_SBC : EZHShiftAluOpInfo<FLIP_SBC, "sbc", "SBC", null_frag, 0, 0>;
+def EZHShiftAluOp_ADC : EZHShiftAluOpInfo<FLIP_ADC, "adc", "ADC", null_frag, 0, 0, 1>;
+def EZHShiftAluOp_SBC : EZHShiftAluOpInfo<FLIP_SBC, "sbc", "SBC", null_frag, 0, 0, 1>;
 
 defvar EZHShiftAluOpsList = [
   EZHShiftAluOp_AND, EZHShiftAluOp_OR, EZHShiftAluOp_XOR,
@@ -226,13 +259,19 @@ multiclass MemOps<bits<5> major_op, bit is_store, bit is_word, bit is_signed,
                  opc_name#"$Cond "#asm_ops_normal,
                  pattern> {}
 
-  // Pre-indexed
+  // Pre-indexed. Selected manually in EZHISelDAGToDAG (empty pattern), so
+  // tablegen cannot infer mayLoad/mayStore as it does for the plain form above;
+  // set it explicitly or these are marked with conservative unmodeled side
+  // effects and machine AA / scheduling treat them as non-memory. (The
+  // base-register write-back is modeled by the $Rn_wb def.)
   def _PRE
     : EZHInstMem<major_op, is_store, is_word, is_signed, 0, 1,
                  outs_wb, ins_normal_pred,
                  opc_name#"_pre$Cond "#asm_ops_pre,
                  []> {
     let Constraints = "$Rn = $Rn_wb";
+    let mayLoad = !if(is_store, 0, 1);
+    let mayStore = is_store;
   }
 
   // Post-indexed
@@ -242,6 +281,8 @@ multiclass MemOps<bits<5> major_op, bit is_store, bit is_word, bit is_signed,
                  opc_name#"_post$Cond "#asm_ops_post,
                  []> {
     let Constraints = "$Rn = $Rn_wb";
+    let mayLoad = !if(is_store, 0, 1);
+    let mayStore = is_store;
   }
 }
 
@@ -314,6 +355,7 @@ multiclass RegShiftALUOps<bits<2> shift_type, string shift_name, SDPatternOperat
       defvar selected_pat = !if(is_post, post_pat, pre_pat);
       defvar pat = !if(alu.HasPat, [(set i32:$Rd, selected_pat)], []<dag>);
 
+      let Uses = !if(alu.ReadsCarry, [CFS], []<Register>) in
       def "_" # alu.UpperName # inv_suffix # !if(!empty(sf_suffix), "", "_" # sf_suffix)
         : EZHInstRegShiftALU<alu.AluOp, shift_type, is_post, is_inv, (outs GPR:$Rd), ins_alu_pred,
                              !if(is_post,
@@ -366,6 +408,7 @@ multiclass ShiftOps<bits<2> basic_shift_type, bits<2> reg_shift_type, string shi
 
   // Shift-ALU: LSL_AND, LSL_OR ... generated dynamically
   foreach alu = EZHShiftAluOpsList in {
+    let Uses = !if(alu.ReadsCarry, [CFS], []<Register>) in
     def "_" # alu.UpperName # !if(!empty(sf_suffix), "", "_" # sf_suffix)
       : EZHInstShiftALU<alu.AluOp, reg_shift_type, (outs GPR:$Rd), ins_shift_alu_pred,
                         shift_name#"_"#alu.Name#sf_suffix#"$Cond $Rd, $Rs1, $Rs2, $ShAmt",
@@ -470,6 +513,19 @@ multiclass UnaryALUOps<bits<5> op, string opc_str, string sf_suffix, bit is_mvn 
 multiclass LoadImmOps<string opc_str, string sf_suffix, bit is_immn = 0> {
   defvar ins_imm_pred = (ins imms11:$Imm, pred:$Cond);
 
+  // The plain (non-flag-setting) form is safely rematerializable: pure
+  // immediate, flag-transparent. hasSideEffects must be 0 for that to
+  // work: LiveRangeEdit gates remat on MachineInstr::isSafeToMove, which
+  // rejects unmodelled side effects with no target override. This movable
+  // descriptor is valid because the base opcode only ever carries the
+  // unconditional (EU) form: predicating one rewrites it to its codegen-only
+  // *_CC twin (defined after this foreach loop; hasSideEffects=1, not
+  // rematerializable) via EZHInstrInfo::PredicateInstruction, so no
+  // predicated instance -- which reads the unmodelled condition flags --
+  // ever wears this descriptor.
+  let isReMaterializable = !empty(sf_suffix),
+      isAsCheapAsAMove = !empty(sf_suffix),
+      hasSideEffects = !if(!empty(sf_suffix), 0, 1) in
   def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
     : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd), ins_imm_pred,
                   opc_str#sf_suffix#"$Cond $Rd, $Imm",
@@ -487,6 +543,9 @@ multiclass LoadSimmOps<string opc_str, string sf_suffix, bit invert_val> {
   defvar ins_simm_pred = (ins shifted_imms11:$Imm, imm5:$ShAmt, pred:$Cond);
 
   let AsmMatchConverter = "cvtShiftedImm" in {
+    let isReMaterializable = !empty(sf_suffix),
+        isAsCheapAsAMove = !empty(sf_suffix),
+        hasSideEffects = !if(!empty(sf_suffix), 0, 1) in
     def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
       : EZHInstALUIShifted<OP_MOV, invert_val, (outs GPR:$Rd), ins_simm_pred,
                            opc_str#sf_suffix#"$Cond $Rd, $Imm",
@@ -514,7 +573,10 @@ multiclass BitOps<bits<2> op_type, bit s_bit, string opc_str, string sf_suffix> 
 }
 
 multiclass AndOrOps<string sf_suffix> {
-  defvar ins_andor_pred = (ins GPR:$Rs1, GPR:$Rs2, GPR:$Rs3, pred:$Cond);
+  // Rs3 (the rotate amount, bits[27:24]) accepts only R0-R7 on silicon --
+  // NXP-confirmed, same restriction family as the 0x19 rshift and the 0x1D
+  // index register.
+  defvar ins_andor_pred = (ins GPR:$Rs1, GPR:$Rs2, GPR3Bit:$Rs3, pred:$Cond);
 
   def "" # !if(!empty(sf_suffix), "", "_" # sf_suffix)
     : EZHInstAndOr<(outs GPR:$Rd), ins_andor_pred,
@@ -525,12 +587,28 @@ multiclass AndOrOps<string sf_suffix> {
 //===----------------------------------------------------------------------===//
 // Pseudo Instructions
 //===----------------------------------------------------------------------===//
-let mayLoad = 1 in {
-  def LOAD_CONSTANT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm), "", []>;
-  def LOAD_CONSTANT_COND : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm, pred:$Cond), "", []>;
-}
-let isNotDuplicable = 1, isBarrier = 1, hasSideEffects = 1 in
-def CONSTPOOL_ENTRY : EZHPseudo<(outs), (ins unknown:$sym, unknown:$val), "$sym:\n\t.long $val", []>;
+// Reading the constant pool is invariant (the lowering attaches an
+// invariant MMO), so the unconditional load can be rematerialized instead
+// of spilled and CSEd across blocks.
+let mayLoad = 1, hasSideEffects = 0, isReMaterializable = 1 in
+def LOAD_CONSTANT : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm), "", []>;
+// The predicated form reads the unmodelled condition flags, so like every
+// other *_CC twin it must carry hasSideEffects=1 (and not be remat/CSE
+// fodder). It is only ever created by the constant-island pass's
+// conditional-branch fixup (post-RA, after all instruction motion), so this
+// is descriptor honesty rather than an active-bug fix.
+let mayLoad = 1, hasSideEffects = 1, Uses = [CFS] in
+def LOAD_CONSTANT_COND : EZHPseudo<(outs GPR:$Rd), (ins i32imm:$imm, pred:$Cond), "", []>;
+// Not isBarrier: this pseudo is emitted as data at the end of the function, so
+// the block that holds it "falls off the end" and -verify-machineinstrs rejects
+// a barrier as the last instruction of a fall-through block (ARM's equivalent is
+// likewise not a barrier). isNotDuplicable/hasSideEffects keep the labeled entry
+// from being cloned or deleted.
+// $size is consumed by the Constant Islands pass for layout (and ignored by the
+// custom emitInstruction lowering); it must still be a declared operand so the
+// three-operand BuildMI does not trip -verify-machineinstrs.
+let isNotDuplicable = 1, hasSideEffects = 1 in
+def CONSTPOOL_ENTRY : EZHPseudo<(outs), (ins unknown:$sym, unknown:$val, i32imm:$size), "$sym:\n\t.long $val", []>;
 
 let isCall = 1, Defs = [R0, R1, R2, R3, RA], isCodeGenOnly = 1 in {
   def CALL_INDIRECT : EZHInstGotoReg<1, (outs), (ins GPRNoFPBP:$raddr), "goto_regl $raddr", [(EZH_call i32:$raddr)]> {
@@ -546,16 +624,22 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1, mayLoad
 def BRIND_LDR : EZHPseudo<(outs), (ins GPR:$Rn, imms8_word_offset:$Offset, pred:$Cond),
                           "# BRIND_LDR $Rn, $Offset", []>;
 
-let usesCustomInserter = 1, hasSideEffects = 1 in {
+// The compare pseudos write the condition flags and the BR_CC/SELECT_CC
+// pseudos read them. Declaring that here keeps the pseudo layer honest and,
+// critically, keeps InstrEmitter from falsely marking a glued flag producer's
+// CFS def dead: setPhysRegsDeadExcept collects used physregs from the glued
+// consumer's implicit_uses, and without Uses=[CFS] on these pseudos it found
+// none -- the wrong dead flag then defeated ClobbersPredicate's SkipDead path.
+let usesCustomInserter = 1, hasSideEffects = 1, Defs = [CFS] in {
   def PseudoCMP : EZHPseudo<(outs), (ins GPR:$lhs, GPR:$rhs), "", [(EZHcmp i32:$lhs, i32:$rhs)]>;
   def PseudoCMPi : EZHPseudo<(outs), (ins GPR:$lhs, imms12:$rhs), "", [(EZHcmp i32:$lhs, imms12:$rhs)]>;
 }
 
-let usesCustomInserter = 1, isTerminator = 1, isBranch = 1 in {
+let usesCustomInserter = 1, isTerminator = 1, isBranch = 1, Uses = [CFS] in {
   def PseudoBR_CC : EZHPseudo<(outs), (ins brtarget:$dest, i32imm:$cc), "", [(EZHbrcc bb:$dest, timm:$cc)]>;
 }
 
-let usesCustomInserter = 1 in {
+let usesCustomInserter = 1, Uses = [CFS] in {
   def PseudoSELECT_CC : EZHPseudo<(outs GPR:$dst), (ins GPR:$truev, GPR:$falsev, i32imm:$cc), "", [(set i32:$dst, (EZHselectcc i32:$truev, i32:$falsev, timm:$cc))]>;
 }
 
@@ -566,6 +650,16 @@ let isPseudo = 1, hasSideEffects = 1 in {
   def ADJCALLSTACKUP : EZHPseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
     "",
     [(EZH_adjcallstackup timm:$amt1, timm:$amt2)]>;
+
+  // Materializes the register state at a setjmp / exception receiver: an
+  // abnormal entry (longjmp, SjLj dispatch) provides no register contents
+  // beyond what the receiver code itself restores, so every allocatable
+  // register is clobbered here -- without this, a value CSEd or scheduled
+  // to live in a register across the receiver reads garbage on the
+  // abnormal path. Zero size; erased after register allocation.
+  let hasSideEffects = 1,
+      Defs = [R0, R1, R2, R3, R4, R5, R6, R7, RA] in
+  def SJLJ_RECEIVER_CLOBBER : EZHPseudo<(outs), (ins), "", []>;
 
   let usesCustomInserter = 1 in {
     let Defs = [R0, R1, R2, R3, R4, R5, R6, R7, RA], isBarrier = 1 in {
@@ -588,7 +682,7 @@ let isPseudo = 1, hasSideEffects = 1 in {
 //===----------------------------------------------------------------------===//
 
 // HOLD family
-def HOLD : EZHCondInst<(outs), (ins pred:$Cond), "hold$Cond", []> {
+def HOLD : EZHCondInst<(outs), (ins pred:$Cond), "hold$Cond", [(int_ezh_hold)]> {
   let Opcode = OP_HOLD;
   let Inst{13-10} = REG_PC; // PC
   let Inst{14} = 0;
@@ -596,24 +690,72 @@ def HOLD : EZHCondInst<(outs), (ins pred:$Cond), "hold$Cond", []> {
   let Inst{31-16} = 0;
   let Inst{9} = 0; // Force S bit to 0
 }
-def VECTORED_HOLD : EZHInstVectoredHold<0, 0, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold$Cond $table", []>;
-def VECTORED_HOLD_NRA : EZHInstVectoredHold<1, 0, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_nra$Cond $table", []>;
-def VECTORED_HOLD_LV : EZHInstVectoredHold<0, 1, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_lv$Cond $table", []>;
-def VECTORED_HOLD_LV_NRA : EZHInstVectoredHold<1, 1, (outs), (ins GPR:$table, pred:$Cond), "vectored_hold_lv_nra$Cond $table", []>;
-def ACC_VECTORED_HOLD : EZHInstAccVectoredHold<0, 0, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold$Cond $table, $vectors", []>;
-def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_nra$Cond $table, $vectors", []>;
-def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv$Cond $table, $vectors", []>;
-def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs), (ins GPR:$table, imms8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $table, $vectors", []>;
+// Vectored holds. Two distinct register roles (see EZHInstrFormats.td): $Rd
+// receives the hardware-computed vector (table + 4 + 4*slice) on a
+// dispatching wake, $table is the jump-table base. The plain (non-ACC) forms
+// encode an empty dispatch-enable mask and never dispatch -- they wake and
+// resume inline; only the acc_* forms (with a nonzero $vectors mask) vector.
+// __builtin_ezh_acc_vectored_hold exposes the base ACC form: it returns the
+// vector address, which the caller dispatches through (e.g. mov pc). All
+// silicon-validated; the _lv bit semantics remain unconfirmed, so those
+// variants stay assembler-only.
+//
+// The base (non-_nra) forms hardware-write RA with the resume address on a
+// dispatching wake -- NVIC-style linkage so a dispatched handler can return.
+// That is what the _nra ("no RA") variants opt out of. Model it: without
+// Defs = [RA] the allocator assumes RA survives the hold, and any function
+// that returns after using the builtin jumps back into its own loop instead
+// (found on silicon: the vectored two-source demo never exited main).
+let Defs = [RA] in {
+def VECTORED_HOLD : EZHInstVectoredHold<0, 0, (outs GPR:$Rd), (ins GPR:$table, pred:$Cond), "vectored_hold$Cond $Rd, $table", []>;
+def VECTORED_HOLD_LV : EZHInstVectoredHold<0, 1, (outs GPR:$Rd), (ins GPR:$table, pred:$Cond), "vectored_hold_lv$Cond $Rd, $table", []>;
+}
+def VECTORED_HOLD_NRA : EZHInstVectoredHold<1, 0, (outs GPR:$Rd), (ins GPR:$table, pred:$Cond), "vectored_hold_nra$Cond $Rd, $table", []>;
+def VECTORED_HOLD_LV_NRA : EZHInstVectoredHold<1, 1, (outs GPR:$Rd), (ins GPR:$table, pred:$Cond), "vectored_hold_lv_nra$Cond $Rd, $table", []>;
+// @earlyclobber: the hardware writes $Rd while still needing the value in
+// $table (silicon: the same-register form does not deliver a usable vector),
+// so the allocator must not coalesce them.
+let Defs = [RA] in {
+let Constraints = "@earlyclobber $Rd" in
+def ACC_VECTORED_HOLD : EZHInstAccVectoredHold<0, 0, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold$Cond $Rd, $table, $vectors", [(set i32:$Rd, (int_ezh_acc_vectored_hold GPR:$table, timm:$vectors))]>;
+def ACC_VECTORED_HOLD_LV : EZHInstAccVectoredHold<0, 1, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold_lv$Cond $Rd, $table, $vectors", []>;
+}
+def ACC_VECTORED_HOLD_NRA : EZHInstAccVectoredHold<1, 0, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold_nra$Cond $Rd, $table, $vectors", []>;
+def ACC_VECTORED_HOLD_LV_NRA : EZHInstAccVectoredHold<1, 1, (outs GPR:$Rd), (ins GPR:$table, uimm8:$vectors, pred:$Cond), "acc_vectored_hold_lv_nra$Cond $Rd, $table, $vectors", []>;
 
-// Tight Loop
-def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Cond), "tight_loop$Cond $Rend, $Rcount", []>;
+// Tight Loop (AN14650 E_TIGHT_LOOP), the zero-overhead hardware loop. The
+// instruction immediately AFTER tight_loop executes exactly once (a run-once
+// slot); the block from the next instruction up to (but excluding) the
+// address in Rend then executes Rcount+1 times total, free-running -- no
+// event pacing is required (silicon-validated for counts 0/4/7/9; an earlier
+// "body runs zero times when free-running" observation came from
+// one-instruction bodies swallowed whole by the then-unknown run-once slot).
+// Rend and Rcount are latched at execution; the block may clobber both
+// registers. Reachable from C as __builtin_ezh_tight_loop(rend, rcount)
+// (see IntrinsicsEZH.td for the body contract) and formed automatically
+// from canonical counted loops by EZHTightLoopFormation.
+def TIGHT_LOOP : EZHInstTightLoop<(outs), (ins GPR:$Rend, GPR:$Rcount, pred:$Cond), "tight_loop$Cond $Rend, $Rcount", [(int_ezh_tight_loop GPR:$Rend, GPR:$Rcount)]>;
 
-// Reg Offset Load/Store
-def LDR_REG : EZHInstMemReg<OP_MEM_REG, 0, 1, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_reg$Cond $Rd, $Rn, $Rm", []>;
-def LDR_REGB : EZHInstMemReg<OP_MEM_REG, 0, 0, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regb$Cond $Rd, $Rn, $Rm", []>;
-def LDR_REGBS : EZHInstMemReg<OP_MEM_REG, 0, 0, 1, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm, pred:$Cond), "ldr_regbs$Cond $Rd, $Rn, $Rm", []>;
-def STR_REG : EZHInstMemReg<OP_MEM_REG, 1, 1, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_reg$Cond $Rn, $Rd, $Rm", []>;
-def STR_REGB : EZHInstMemReg<OP_MEM_REG, 1, 0, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR:$Rm, pred:$Cond), "str_regb$Cond $Rn, $Rd, $Rm", []>;
+// Reg Offset Load/Store. address = Rn + Rm (Rm is a byte offset), validated on
+// silicon. The patterns fold a runtime-indexed access (a[i]) into one
+// instruction; they sit below the immediate-offset LDR/STR above, so a constant
+// in-range offset still prefers ldr/str. The pred:$Cond operand is auto-filled
+// with the "always" predicate for these unconditional patterns.
+// The index register Rm (bits[27:24]) accepts only R0-R7 on silicon --
+// NXP-confirmed operand restriction (same field carries the same restriction
+// on the 0x19 register-shift rshift and the 0x16 andor ror operand). GPR3Bit
+// makes the assembler reject specials instead of silently mis-encoding them;
+// codegen was already safe (the specials are reserved from allocation).
+def LDR_REG : EZHInstMemReg<OP_MEM_REG, 0, 1, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "ldr_reg$Cond $Rd, $Rn, $Rm",
+                            [(set i32:$Rd, (load (add i32:$Rn, i32:$Rm)))]>;
+def LDR_REGB : EZHInstMemReg<OP_MEM_REG, 0, 0, 0, (outs GPR:$Rd), (ins GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "ldr_regb$Cond $Rd, $Rn, $Rm",
+                             [(set i32:$Rd, (zextloadi8 (add i32:$Rn, i32:$Rm)))]>;
+def LDR_REGBS : EZHInstMemReg<OP_MEM_REG, 0, 0, 1, (outs GPR:$Rd), (ins GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "ldr_regbs$Cond $Rd, $Rn, $Rm",
+                              [(set i32:$Rd, (sextloadi8 (add i32:$Rn, i32:$Rm)))]>;
+def STR_REG : EZHInstMemReg<OP_MEM_REG, 1, 1, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "str_reg$Cond $Rn, $Rd, $Rm",
+                            [(store i32:$Rd, (add i32:$Rn, i32:$Rm))]>;
+def STR_REGB : EZHInstMemReg<OP_MEM_REG, 1, 0, 0, (outs), (ins GPR:$Rd, GPR:$Rn, GPR3Bit:$Rm, pred:$Cond), "str_regb$Cond $Rn, $Rd, $Rm",
+                             [(truncstorei8 i32:$Rd, (add i32:$Rn, i32:$Rm))]>;
 
 // Push / Pop (Upward Stack)
 def PUSH : EZHInstMem<OP_STR, 1, 1, 0, 1, 1, (outs), (ins GPR:$Rd, pred:$Cond), "push$Cond $Rd", []> {
@@ -679,7 +821,11 @@ defvar ins_Shift_f = (ins GPR:$Rs2, imm5:$ShAmt); // Flip shifts expect Rs2!
 
 foreach sf = SetFlags in {
   defvar sf_suffix = sf.Suffix;
-  let S = sf.Value in {
+  // Every S-form (the _s suffix, encoding bit S=1) architecturally writes the
+  // condition flags; model that as an implicit def of CFS so schedulers see a
+  // true dependence from each flag producer to its predicated / carry-reading
+  // consumers. !if yields [CFS] for the S=1 iteration, [] for S=0.
+  let S = sf.Value, Defs = !if(sf.Value, [CFS], []<Register>) in {
     // ALU
     defm ADD : ALUOps<ALU_ADD, FLIP_ADD, "add", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, add, null_frag>;
     defm SUB : ALUOps<ALU_SUB, FLIP_SUB, "sub", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, sub, null_frag>;
@@ -687,13 +833,20 @@ foreach sf = SetFlags in {
     // Post-Shifted ALU
     defm ADD : ALUShiftedOps<ALU_ADD, "add", sf_suffix>;
     defm SUB : ALUShiftedOps<ALU_SUB, "sub", sf_suffix>;
-    defm ADC : ALUShiftedOps<ALU_ADC, "adc", sf_suffix>;
-    defm SBC : ALUShiftedOps<ALU_SBC, "sbc", sf_suffix>;
+    // adc/sbc read the carry flag as data (not merely via predication), so
+    // every form carries an implicit use of CFS in addition to the loop-wide
+    // implicit def on their _s variants.
+    let Uses = [CFS] in {
+      defm ADC : ALUShiftedOps<ALU_ADC, "adc", sf_suffix>;
+      defm SBC : ALUShiftedOps<ALU_SBC, "sbc", sf_suffix>;
+    }
     defm OR  : ALUShiftedOps<ALU_OR,  "or",  sf_suffix>;
     defm AND : ALUShiftedOps<ALU_AND, "and", sf_suffix>;
     defm XOR : ALUShiftedOps<ALU_XOR, "xor", sf_suffix>;
-    defm ADC : ALUOps<ALU_ADC, FLIP_ADC, "adc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, adde>;
-    defm SBC : ALUOps<ALU_SBC, FLIP_SBC, "sbc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, sube>;
+    let Uses = [CFS] in {
+      defm ADC : ALUOps<ALU_ADC, FLIP_ADC, "adc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, adde>;
+      defm SBC : ALUOps<ALU_SBC, FLIP_SBC, "sbc", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, null_frag, sube>;
+    }
     defm OR  : ALUOps<ALU_OR,  FLIP_OR,  "or",  sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, or, null_frag>;
     defm AND : ALUOps<ALU_AND, FLIP_AND, "and", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, and, null_frag>;
     defm XOR : ALUOps<ALU_XOR, FLIP_XOR, "xor", sf_suffix, ins_ALU_rr, ins_ALU_ri, GPR, xor, null_frag>;
@@ -731,6 +884,40 @@ foreach sf = SetFlags in {
   }
 }
 
+// Predicated encodings of the rematerializable immediate materializers. The
+// base opcodes above (plain, non-flag-setting) carry an honest movable
+// descriptor -- hasSideEffects=0, isReMaterializable -- which is only valid for
+// the unconditional (EU) form; a predicated instance reads the unmodelled
+// condition flags. PredicateInstruction therefore rewrites the base opcode to
+// its *_CC twin here (hasSideEffects=1, not rematerializable) rather than only
+// setting the predicate operand, so no generic pass ever sees a predicated
+// materializer wearing the movable descriptor. The twins share the base
+// encoding and asm syntax; isCodeGenOnly keeps the disassembler on the base
+// opcode, so emitted bytes and printed asm are unchanged. (Mirrors the
+// LOAD_CONSTANT / LOAD_CONSTANT_COND split, which is already separate.)
+let hasSideEffects = 1, isPredicable = 0, isCodeGenOnly = 1, Uses = [CFS] in {
+  def LOAD_IMM_CC : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd),
+                                (ins imms11:$Imm, pred:$Cond),
+                                "load_imm$Cond $Rd, $Imm", []> {
+    let Rs1 = 0;
+    let Inst{31} = 0;
+  }
+  def LOAD_IMMN_CC : EZHInstALUI<OP_MOV, 0, (outs GPR:$Rd),
+                                 (ins imms11:$Imm, pred:$Cond),
+                                 "load_immn$Cond $Rd, $Imm", []> {
+    let Rs1 = 0;
+    let Inst{31} = 1;
+  }
+  let AsmMatchConverter = "cvtShiftedImm" in {
+    def LOAD_SIMM_CC : EZHInstALUIShifted<OP_MOV, 0, (outs GPR:$Rd),
+                          (ins shifted_imms11:$Imm, imm5:$ShAmt, pred:$Cond),
+                          "load_simm$Cond $Rd, $Imm", []>;
+    def LOAD_SIMMN_CC : EZHInstALUIShifted<OP_MOV, 1, (outs GPR:$Rd),
+                           (ins shifted_imms11:$Imm, imm5:$ShAmt, pred:$Cond),
+                           "load_simmn$Cond $Rd, $Imm", []>;
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Predicated Memory Instructions
 //===----------------------------------------------------------------------===//
@@ -759,27 +946,191 @@ defm STRB : MemOps<OP_STR, 1, 0, 0, "strb",  imms8,
 // Predicated Branch Instructions
 //===----------------------------------------------------------------------===//
 
+// GOTO is unconditional -- a true block terminator and barrier. GOTO_CC is
+// the conditional form, which can fall through, so it is a terminator but
+// NOT a barrier (the static isBarrier on a shared opcode was what made
+// -verify-machineinstrs reject every conditional branch, and a bare flip
+// on the shared opcode previously miscompiled the SjLj dispatch, which uses
+// only the unconditional form). Same encoding; GOTO_CC is the assembler /
+// disassembler opcode and GOTO is codegen-only for the always case.
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isCodeGenOnly = 1 in
+  def GOTO : EZHInstGoto<0, (outs), (ins brtarget:$addr), "goto $addr",
+                         [(br bb:$addr)]> {
+    let Cond = 0;
+  }
+let isBranch = 1, isTerminator = 1, Uses = [CFS] in
+  def GOTO_CC : EZHInstGoto<0, (outs), (ins brtarget:$addr, pred:$Cond),
+                            "goto$Cond $addr", []>;
+
+// gotol is a conditional goto-and-link: when its predicate holds it calls
+// the target (the bitslice handler) which returns via RA, otherwise it
+// falls through. It is therefore neither a terminator nor a barrier -- it
+// is a conditional subroutine call sitting mid-block (see
+// EZHBitSliceInjection). isCall makes that description honest to the
+// descriptor; the handler is register-transparent, so RA is its only
+// modelled clobber (like OUTLINE_CALL). Inserted only after RA, so isCall
+// has no allocation effect.
+let isCall = 1, hasSideEffects = 1, Defs = [RA], Uses = [CFS] in
+  def GOTOL : EZHInstGoto<1, (outs), (ins brtarget:$addr, pred:$Cond), "gotol$Cond $addr", []>;
+
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in {
-  def GOTO : EZHInstGoto<0, (outs), (ins brtarget:$addr, pred:$Cond), "goto$Cond $addr", [(br bb:$addr)]>;
-  def GOTOL : EZHInstGoto<1, (outs), (ins brtarget:$addr, pred:$Cond), "gotol$Cond $addr", []> { let Defs = [RA]; }
   def GOTO_REG : EZHInstGotoReg<0, (outs), (ins GPR:$raddr, pred:$Cond), "goto_reg$Cond $raddr", [(brind i32:$raddr)]>;
   def GOTO_REGL : EZHInstGotoReg<1, (outs), (ins GPR:$raddr, pred:$Cond), "goto_regl$Cond $raddr", []> { let Defs = [RA]; }
 }
 
 // Unconditional instructions
-def NOP : EZHInstSingle<OP_NOP, (outs), (ins), "nop", []> { let Inst{31-5} = 0; }
-def INT_TRIGGER : EZHInstSingle<OP_INT_TRIGGER, (outs), (ins imm24:$Imm), "int_trigger $Imm", []> { bits<24> Imm; let Inst{31-8} = Imm; let Inst{7-5} = 0; }
-def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins imms8:$AndMask, imms8:$OrMask, imms8:$XorMask),
-                        "modify_gpo_byte $AndMask, $OrMask, $XorMask", []>;
+def NOP : EZHInstSingle<OP_NOP, (outs), (ins), "nop", [(int_ezh_nop)]> { let Inst{31-5} = 0; }
+def INT_TRIGGER : EZHInstSingle<OP_INT_TRIGGER, (outs), (ins imm24:$Imm), "int_trigger $Imm", [(int_ezh_int_trigger timm:$Imm)]> { bits<24> Imm; let Inst{31-8} = Imm; let Inst{7-5} = 0; }
+let Defs = [GPO], Uses = [GPO] in
+def MODIFY_GPO_BYTE : EZHInstModifyGPOByte<(outs), (ins uimm8:$AndMask, uimm8:$OrMask, uimm8:$XorMask),
+                        "modify_gpo_byte $AndMask, $OrMask, $XorMask",
+                        [(int_ezh_modify_gpo_byte timm:$AndMask, timm:$OrMask, timm:$XorMask)]>;
 
-def HEART_RYTHM_IMM : EZHInstSingle<OP_NOP, (outs), (ins imm16:$Imm), "heart_rythm_imm $Imm", []> {
+// GPIO intrinsic instructions. These are the first defs that select LLVM
+// intrinsics; the matching __builtin_ezh_* are wired automatically through the
+// ClangBuiltin association (no manual CodeGen). GPI and GPD are reserved from
+// allocation (EZHRegisterInfo.cpp), so they are hardwired here. EZHInstALU /
+// EZHInstBit already carry hasSideEffects = 1, which matches the intrinsics'
+// IntrHasSideEffects -- the GPIO state is invisible to the optimizer otherwise.
+
+// These hardwire a reserved special register into an otherwise-generic mov /
+// bit-op, so they exist only for instruction selection: the assembler and
+// disassembler round-trip them through the generic form with the register name
+// (mov $Rd, gpi == this READ_GPI). isCodeGenOnly keeps them out of the matcher
+// and decoder, where they would otherwise collide with the generic mov/bset_imm.
+// Side-effect ordering comes from the IntrHasSideEffects on their intrinsic
+// patterns (TableGen infers hasSideEffects = 1 from the pattern).
+let isCodeGenOnly = 1 in {
+
+// Read the GPI input register (special reg 14): mov $Rd, gpi.
+let Uses = [GPI] in
+def READ_GPI : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, gpi", [(set i32:$Rd, (int_ezh_read_gpi))]> {
+  let Rs1 = REG_GPI;
+  let Rs2 = 0;
+  let Inst{31} = 0; // matches mov (is_mvn = 0)
+}
+
+// Read the GPD drive-enable register (special reg 9): mov $Rd, gpd.
+let Uses = [GPD] in
+def READ_GPD : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, gpd", [(set i32:$Rd, (int_ezh_read_gpd))]> {
+  let Rs1 = REG_GPD;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+
+// Open-drain line control via the GPD drive-enable register: set bit N to pull
+// the pin low, clear bit N to release it. GPD is hardwired as both source and
+// destination of a single bit-op. The bit position is a 0..31 immediate.
+let Defs = [GPD], Uses = [GPD] in {
+def GPD_DRIVE_LOW : EZHInstBit<2, (outs), (ins imm5:$Bit5, pred:$Cond),
+                               "bset_imm$Cond gpd, gpd, $Bit5",
+                               [(int_ezh_gpd_drive_low timm:$Bit5)]> {
+  let Rd = REG_GPD;
+  let Rs = REG_GPD;
+  let S_bit = 1; // matches bset_imm
+}
+def GPD_RELEASE : EZHInstBit<1, (outs), (ins imm5:$Bit5, pred:$Cond),
+                             "bclr_imm$Cond gpd, gpd, $Bit5",
+                             [(int_ezh_gpd_release timm:$Bit5)]> {
+  let Rd = REG_GPD;
+  let Rs = REG_GPD;
+  let S_bit = 0; // matches bclr_imm
+}
+}
+
+// Full-width GPO output register (special reg 8): mov to/from. The runtime,
+// all-32-bit counterpart of MODIFY_GPO_BYTE (whose masks are constant and
+// limited to GPO[7:0]); this is the parallel-bus output path.
+let Uses = [GPO] in
+def READ_GPO : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, gpo", [(set i32:$Rd, (int_ezh_read_gpo))]> {
+  let Rs1 = REG_GPO;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+let Defs = [GPO] in
+def WRITE_GPO : EZHInstALU<OP_MOV, 0, (outs), (ins GPR:$Rs1, pred:$Cond),
+                           "mov$Cond gpo, $Rs1", [(int_ezh_write_gpo i32:$Rs1)]> {
+  let Rd = REG_GPO;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+
+// Full-width GPD drive-enable write (special reg 9): atomic multi-line
+// open-drain update with a runtime mask; complements the constant-bit
+// GPD_DRIVE_LOW/GPD_RELEASE pair and the existing READ_GPD.
+let Defs = [GPD] in
+def WRITE_GPD : EZHInstALU<OP_MOV, 0, (outs), (ins GPR:$Rs1, pred:$Cond),
+                           "mov$Cond gpd, $Rs1", [(int_ezh_write_gpd i32:$Rs1)]> {
+  let Rd = REG_GPD;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+
+// CFM single-bit set/clear: the 1-instruction slice arm/disarm. Same
+// hardwired bit-op shape as the GPD pair above. Silicon note: a CFM bit-op
+// does NOT clear the sticky bitslice flags -- only a full mov-to-CFM write
+// (WRITE_CFM) does.
+let Defs = [CFM], Uses = [CFM] in {
+def CFM_BSET : EZHInstBit<2, (outs), (ins imm5:$Bit5, pred:$Cond),
+                          "bset_imm$Cond cfm, cfm, $Bit5",
+                          [(int_ezh_cfm_bset timm:$Bit5)]> {
+  let Rd = REG_CFM;
+  let Rs = REG_CFM;
+  let S_bit = 1; // matches bset_imm
+}
+def CFM_BCLR : EZHInstBit<1, (outs), (ins imm5:$Bit5, pred:$Cond),
+                          "bclr_imm$Cond cfm, cfm, $Bit5",
+                          [(int_ezh_cfm_bclr timm:$Bit5)]> {
+  let Rd = REG_CFM;
+  let Rs = REG_CFM;
+  let S_bit = 0; // matches bclr_imm
+}
+}
+
+// Bitslice config/status registers CFM (special reg 11) and CFS (special reg
+// 10): readable and writable as a mov to/from the reserved special register.
+let Uses = [CFM] in
+def READ_CFM : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, cfm", [(set i32:$Rd, (int_ezh_read_cfm))]> {
+  let Rs1 = REG_CFM;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+let Defs = [CFM] in
+def WRITE_CFM : EZHInstALU<OP_MOV, 0, (outs), (ins GPR:$Rs1, pred:$Cond),
+                           "mov$Cond cfm, $Rs1", [(int_ezh_write_cfm i32:$Rs1)]> {
+  let Rd = REG_CFM;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+let Uses = [CFS] in
+def READ_CFS : EZHInstALU<OP_MOV, 0, (outs GPR:$Rd), (ins pred:$Cond),
+                          "mov$Cond $Rd, cfs", [(set i32:$Rd, (int_ezh_read_cfs))]> {
+  let Rs1 = REG_CFS;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+let Defs = [CFS] in
+def WRITE_CFS : EZHInstALU<OP_MOV, 0, (outs), (ins GPR:$Rs1, pred:$Cond),
+                           "mov$Cond cfs, $Rs1", [(int_ezh_write_cfs i32:$Rs1)]> {
+  let Rd = REG_CFS;
+  let Rs2 = 0;
+  let Inst{31} = 0;
+}
+
+} // isCodeGenOnly = 1 (hardwired special-register mov/bit-op forms)
+
+def HEART_RYTHM_IMM : EZHInstSingle<OP_NOP, (outs), (ins imm16:$Imm), "heart_rythm_imm $Imm", [(int_ezh_heart_rythm_imm timm:$Imm)]> {
   bits<16> Imm;
   let Inst{31-16} = Imm;
   let Inst{15-6} = 0;
   let Inst{5} = 1;
 }
 
-def HEART_RYTHM : EZHInstSingle<OP_NOP, (outs), (ins GPR:$Rs), "heart_rythm $Rs", []> {
+def HEART_RYTHM : EZHInstSingle<OP_NOP, (outs), (ins GPR:$Rs), "heart_rythm $Rs", [(int_ezh_heart_rythm i32:$Rs)]> {
   bits<4> Rs;
   let Inst{31-18} = 0;
   let Inst{17-14} = Rs;
@@ -789,14 +1140,14 @@ def HEART_RYTHM : EZHInstSingle<OP_NOP, (outs), (ins GPR:$Rs), "heart_rythm $Rs"
   let Inst{5} = 1;
 }
 
-def WAIT_FOR_BEAT : EZHInstSingle<OP_NOP, (outs), (ins), "wait_for_beat", []> {
+def WAIT_FOR_BEAT : EZHInstSingle<OP_NOP, (outs), (ins), "wait_for_beat", [(int_ezh_wait_for_beat)]> {
   let Inst{31-7} = 0;
   let Inst{6} = 1;
   let Inst{5} = 1;
   let Inst{4-0} = OP_NOP;
 }
 
-def SYNCH_ALL_TO_BEAT : EZHInstSingle<OP_NOP, (outs), (ins imm1:$Imm), "synch_all_to_beat $Imm", []> {
+def SYNCH_ALL_TO_BEAT : EZHInstSingle<OP_NOP, (outs), (ins imm1:$Imm), "synch_all_to_beat $Imm", [(int_ezh_synch_all_to_beat timm:$Imm)]> {
   bits<1> Imm;
   let Inst{31} = Imm;
   let Inst{30-7} = 0;
@@ -806,6 +1157,74 @@ def SYNCH_ALL_TO_BEAT : EZHInstSingle<OP_NOP, (outs), (ins imm1:$Imm), "synch_al
 }
 
 // Call instructions
+// Tail call: a plain goto (no RA write) in return position, so the callee
+// returns directly to this function's caller. Same 21-bit encoding and
+// fixup as any direct goto. EZHBitSliceInjection places the tail call's
+// interrupt poll BEFORE the epilogue rather than before the goto itself:
+// by the goto, the epilogue has restored the live return address into RA,
+// which the injected gotol_bs would clobber.
+let isCall = 1, isReturn = 1, isTerminator = 1, isBarrier = 1,
+    isCodeGenOnly = 1, Uses = [SP] in {
+  def TCRETURN : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),
+                             "goto$Cond $addr", [(EZH_tcret tglobaladdr:$addr)]>;
+  def TCRETURNExt : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),
+                                "goto$Cond $addr", [(EZH_tcret texternalsym:$addr)]>;
+  // Indirect form (function-pointer tail calls, e.g. interpreter dispatch).
+  // The address register is restricted to GPRTC because the epilogue's pops
+  // execute before the goto_reg.
+  def TCRETURN_REG : EZHInstGotoReg<0, (outs), (ins GPRTC:$raddr, pred:$Cond),
+                                    "goto_reg$Cond $raddr",
+                                    [(EZH_tcret i32:$raddr)]>;
+  // Memory form, for a musttail indirect call whose arguments occupy all
+  // four GPRTC registers: the target is parked in a stack slot before the
+  // epilogue and loaded straight into PC after the frame is gone -- the
+  // same load-into-PC mechanism the jump-table dispatch uses -- so it
+  // needs no register at all. eliminateFrameIndex resolves the slot
+  // against the restored entry SP (a small negative offset); selected
+  // manually in EZHISelDAGToDAG when TC_RETURN's target is a FrameIndex.
+  let mayLoad = 1 in
+  def TCRETURN_MEM : EZHInstMem<OP_LDR, 0, 1, 0, 0, 0, (outs),
+                                (ins GPR:$Rd, GPR:$Rn,
+                                     imms8_word_offset:$Offset, pred:$Cond),
+                                "ldr$Cond $Rd, $Rn, $Offset", []>;
+}
+
+// Conditional (predicated) twins of the tail-call returns. A predicated tail
+// call keeps a fall-through successor (the not-taken path), so -- unlike the
+// unconditional forms above -- it is NOT a barrier and does not unconditionally
+// return (isReturn/isBarrier are cleared). PredicateInstruction rewrites the
+// base opcode to its _CC twin so those flags stay honest, the same split as
+// GOTO / GOTO_CC. These arise only under -mno-ezh-bitslice-interrupts in leaf
+// functions: bitslice mode force-saves RA and emits a predicated return
+// (popd_cc pc) plus an unconditional goto instead, so a predicated tail call
+// never coexists with the bitslice poll. Same encoding and asm as the base
+// (isCodeGenOnly), so emitted bytes are unchanged.
+let isCall = 1, isTerminator = 1, isCodeGenOnly = 1, isPredicable = 0,
+    Uses = [SP, CFS] in {
+  def TCRETURN_CC : EZHInstGoto<0, (outs), (ins tcalltarget:$addr, pred:$Cond),
+                                "goto$Cond $addr", []>;
+  def TCRETURNExt_CC : EZHInstGoto<0, (outs),
+                                   (ins tcalltarget:$addr, pred:$Cond),
+                                   "goto$Cond $addr", []>;
+  def TCRETURN_REG_CC : EZHInstGotoReg<0, (outs),
+                                       (ins GPRTC:$raddr, pred:$Cond),
+                                       "goto_reg$Cond $raddr", []>;
+  let mayLoad = 1 in
+  def TCRETURN_MEM_CC : EZHInstMem<OP_LDR, 0, 1, 0, 0, 0, (outs),
+                                   (ins GPR:$Rd, GPR:$Rn,
+                                        imms8_word_offset:$Offset, pred:$Cond),
+                                   "ldr$Cond $Rd, $Rn, $Offset", []>;
+}
+
+// MachineOutliner call: a gosub whose only modelled def is RA (the
+// hardware gosub writes only the link register). Unlike CALL it must NOT
+// claim R0-R3, so the framework's per-candidate liveness stays the sole
+// authority on general registers -- a value live through R0-R3 that the
+// outlined body does not write is correctly preserved.
+let isCall = 1, Defs = [RA], isCodeGenOnly = 1 in
+  def OUTLINE_CALL : EZHInstCall<OP_GOSUB, (outs), (ins calltarget:$addr),
+                                 "gosub $addr", []>;
+
 let isCall = 1, Defs = [R0, R1, R2, R3, RA] in {
   def CALL : EZHInstCall<OP_GOSUB, (outs), (ins calltarget:$addr), "gosub $addr", [(EZH_call tglobaladdr:$addr)]>;
   let isCodeGenOnly = 1 in
@@ -826,8 +1245,19 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
 //===----------------------------------------------------------------------===//
 def : Pat<(EZHbtog i32:$Rs, (i32 imm:$Bit)), (BTOG_IMM GPR:$Rs, imm:$Bit, 0)>;
 
-// Memory Patterns (Words and Bytes)
-// 16-bit access is handled by the Legalizer's Expand mechanism into bytes.
+// 64-bit carry chain: low halves in the flag-setting forms, high halves in
+// the carry-consuming forms. Immediate variants cover i64 +/- constant.
+def : Pat<(EZH_adds i32:$a, i32:$b), (ADD_s GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_adds i32:$a, imms12:$b), (ADD_IMM_s GPR:$a, imms12:$b, 0)>;
+def : Pat<(EZH_subs i32:$a, i32:$b), (SUB_s GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_subs i32:$a, imms12:$b), (SUB_IMM_s GPR:$a, imms12:$b, 0)>;
+def : Pat<(EZH_adc i32:$a, i32:$b), (ADC GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_adc i32:$a, imms12:$b), (ADC_IMM GPR:$a, imms12:$b, 0)>;
+def : Pat<(EZH_sbc i32:$a, i32:$b), (SBC GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_sbc i32:$a, imms12:$b), (SBC_IMM GPR:$a, imms12:$b, 0)>;
+def : Pat<(EZH_sbcs i32:$a, i32:$b), (SBC_s GPR:$a, GPR:$b, 0)>;
+def : Pat<(EZH_sbcs i32:$a, imms12:$b), (SBC_IMM_s GPR:$a, imms12:$b, 0)>;
+
 // Memory Patterns (Words and Bytes)
 // 16-bit access is handled by the Legalizer's Expand mechanism into bytes.
 def : Pat<(i32 (load GPR:$Rn)), (LDR GPR:$Rn, 0, 0)>;
@@ -840,6 +1270,17 @@ def : Pat<(truncstorei8 GPR:$Rd, GPR:$Rn), (STRB GPR:$Rd, GPR:$Rn, 0, 0)>;
 
 def : Pat<(i32 (extloadi1 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
 def : Pat<(i32 (zextloadi1 GPR:$Rn)), (LDRB GPR:$Rn, 0, 0)>;
+
+// Stack-object addressing: a FrameIndex (plus optional constant offset) is
+// folded straight into the memory operand -- instead of materializing the
+// address with a separate add_imm -- by tryFrameLoadStore in EZHISelDAGToDAG.
+// This is done in C++ rather than a ComplexPattern-based Pat because such a
+// pattern fills two separate instruction operands (base register and offset)
+// followed by the defaulted predicate operand, a shape the DAG-ISel emitter
+// miscounts: it appends a phantom second predicate that -verify-machineinstrs
+// rejects ("Extra explicit operand"). eliminateFrameIndex range-checks the
+// final SP-relative offset and scavenges when it does not fit, exactly as it
+// already does for spill slots.
 
 //===----------------------------------------------------------------------===//
 // Instruction Selection Patterns (ISel lowering)

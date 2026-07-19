@@ -12,9 +12,24 @@
 
 #include "EZH.h"
 #include "clang/Basic/MacroBuilder.h"
+#include "clang/Basic/TargetBuiltins.h"
 
 using namespace clang;
 using namespace clang::targets;
+
+static constexpr int NumBuiltins =
+    clang::EZH::LastTSBuiltin - Builtin::FirstTSBuiltin;
+
+#define GET_BUILTIN_STR_TABLE
+#include "clang/Basic/BuiltinsEZH.inc"
+#undef GET_BUILTIN_STR_TABLE
+
+static constexpr Builtin::Info BuiltinInfos[] = {
+#define GET_BUILTIN_INFOS
+#include "clang/Basic/BuiltinsEZH.inc"
+#undef GET_BUILTIN_INFOS
+};
+static_assert(std::size(BuiltinInfos) == NumBuiltins);
 
 const char *const EZHTargetInfo::GCCRegNames[] = {
     "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
@@ -36,4 +51,9 @@ void EZHTargetInfo::getTargetDefines(const LangOptions &Opts,
   if (HasBitsliceInterrupts) {
     Builder.defineMacro("__EZH_BITSLICE_INTERRUPTS__");
   }
+}
+
+llvm::SmallVector<Builtin::InfosShard>
+EZHTargetInfo::getTargetBuiltins() const {
+  return {{&BuiltinStrings, BuiltinInfos}};
 }

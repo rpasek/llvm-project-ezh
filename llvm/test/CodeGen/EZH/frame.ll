@@ -1,31 +1,31 @@
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -frame-pointer=all -O3 < %s | FileCheck %s --check-prefix=FP
-; RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -frame-pointer=none -O3 < %s | FileCheck %s --check-prefix=NOFP
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -frame-pointer=all -O3 < %s | FileCheck %s --check-prefix=FP
+; RUN: llc -verify-machineinstrs -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -frame-pointer=none -O3 < %s | FileCheck %s --check-prefix=NOFP
 
-; Leaf function
+; Leaf function: no locals, no calls -> no frame at all without FP. The
+; emergency scavenging slot is only created when the estimated stack size
+; approaches the load/store offset range, so small frames stay empty.
 define void @test_leaf() {
 ; FP-LABEL: test_leaf:
 ; FP:       pushd r7
 ; FP:       mov r7, sp
-; FP:       sub_imm sp, sp, 4
 ; FP:       mov sp, r7
 ; FP:       popd r7
 ; FP:       mov pc, ra
 
 ; NOFP-LABEL: test_leaf:
-; NOFP:       sub_imm sp, sp, 4
-; NOFP:       add_imm sp, sp, 4
+; NOFP-NOT:   sub_imm sp
+; NOFP-NOT:   pushd
 ; NOFP:       mov pc, ra
 entry:
   ret void
 }
 
-; Non-leaf function
+; Non-leaf function: RA save only, no local frame.
 define void @test_non_leaf() {
 ; FP-LABEL: test_non_leaf:
 ; FP:       pushd ra
 ; FP:       pushd r7
 ; FP:       mov r7, sp
-; FP:       sub_imm sp, sp, 4
 ; FP:       gosub use_fp
 ; FP:       mov sp, r7
 ; FP:       popd r7
@@ -33,9 +33,9 @@ define void @test_non_leaf() {
 
 ; NOFP-LABEL: test_non_leaf:
 ; NOFP:       pushd ra
-; NOFP:       sub_imm sp, sp, 4
+; NOFP-NOT:   sub_imm sp
 ; NOFP:       gosub use_fp
-; NOFP:       add_imm sp, sp, 4
+; NOFP-NOT:   add_imm sp
 ; NOFP:       popd pc
 entry:
   call void @use_fp()
@@ -52,7 +52,6 @@ define void @test_csr() {
 ; FP:       pushd r5
 ; FP:       pushd r4
 ; FP:       add_imm r7, sp, 8
-; FP:       sub_imm sp, sp, 4
 ; ...
 ; FP:       sub_imm sp, r7, 8
 ; FP:       popd r4
@@ -71,20 +70,31 @@ entry:
 declare i32 @get_val()
 declare void @use_vals(i32, i32, i32)
 
-; VarArg function with FP
+; VarArg function. The 4-byte local is the va_list alloca, which is a real
+; stack object and must survive.
 define void @test_vararg(i32 %a, ...) {
 ; FP-LABEL: test_vararg:
 ; FP:       sub_imm sp, sp, 12
 ; FP:       pushd ra
 ; FP:       pushd r7
 ; FP:       mov r7, sp
-; FP:       sub_imm sp, sp, 8
+; FP:       sub_imm sp, sp, 4
 ; ...
 ; FP:       mov sp, r7
 ; FP:       popd r7
 ; FP:       popd ra
 ; FP:       add_imm sp, sp, 12
 ; FP:       mov pc, ra
+
+; NOFP-LABEL: test_vararg:
+; NOFP:       sub_imm sp, sp, 12
+; NOFP:       pushd ra
+; NOFP:       sub_imm sp, sp, 4
+; NOFP:       gosub use_val
+; NOFP:       add_imm sp, sp, 4
+; NOFP:       popd ra
+; NOFP:       add_imm sp, sp, 12
+; NOFP:       mov pc, ra
 entry:
   %ap = alloca ptr, align 4
   call void @llvm.va_start(ptr %ap)

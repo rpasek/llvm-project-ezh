@@ -1,0 +1,30 @@
+# RUN: llvm-tblgen -gen-subtarget -I %S/../../../lib/Target/EZH -I %S/../../../include -I %S/../../../lib/Target %S/../../../lib/Target/EZH/EZH.td -o - | FileCheck %s
+
+# Pins the per-def latency model for the indexed loads directly in the
+# generated subtarget tables, because scheduler-output tests cannot: in
+# minimal MIR shapes the post-RA list scheduler's tie-break dominates and the
+# emitted ORDER is identical for load latencies 1, 2, and 10 (verified by
+# experiment); the latencies' effect is only visible macroscopically (the
+# corpus load-use stall proxy) and via direct dependence-edge observation.
+#
+# What this pins:
+#  - the two write resources and their latencies: loaded data = 2 cycles
+#    (AN14650 E_LDR: submit 1, data valid >= 2, consumer interlock), pointer
+#    writeback = 1 cycle (an INFERENCE -- address arithmetic on the ALU path
+#    -- not a documented number; correctness-neutral either way because the
+#    hardware interlock stalls early consumers);
+#  - the InstRW regex expansion: exactly the six indexed load opcodes (the
+#    class name below is the sorted concatenation -- any membership change
+#    changes it);
+#  - the per-def mapping: the class carries 2 write-latency entries starting
+#    at table index 1, i.e. def0 (data) -> 2 cycles, def1 (writeback) -> 1.
+
+# CHECK: { 2, 0}, // #1 EZHWriteLoad
+# CHECK-NEXT: { 1, 0} // #2 EZHWriteWB
+# The class name is the sorted concatenation of the bound opcodes, and the
+# terminators make the membership EXACT: the name ends at "*/" in the sched
+# class table and at "\0" in the name-table string, so a member appended
+# after LDR_PRE in sort order changes the text before the terminator and
+# fails the match (a bare {{.*}} after the name would absorb it).
+# CHECK: LDRBS_POST_LDRBS_PRE_LDRB_POST_LDRB_PRE_LDR_POST_LDR_PRE*/{{.*}} 1, 2, 0, 0}, // #1
+# CHECK: "LDRBS_POST_LDRBS_PRE_LDRB_POST_LDRB_PRE_LDR_POST_LDR_PRE\0"

@@ -41,7 +41,7 @@ using namespace llvm;
 
 namespace {
 class EZHMCCodeEmitter : public MCCodeEmitter {
-  const MCInstrInfo &MCII;
+  [[maybe_unused]] const MCInstrInfo &MCII;
   MCContext &Ctx;
 
 public:
@@ -79,6 +79,14 @@ public:
   unsigned getPerAddrOpValue(const MCInst &MI, unsigned OpNo,
                              SmallVectorImpl<MCFixup> &Fixups,
                              const MCSubtargetInfo &STI) const;
+
+  unsigned getImm5OpValue(const MCInst &MI, unsigned OpNo,
+                          SmallVectorImpl<MCFixup> &Fixups,
+                          const MCSubtargetInfo &STI) const;
+
+  unsigned getUimm8OpValue(const MCInst &MI, unsigned OpNo,
+                           SmallVectorImpl<MCFixup> &Fixups,
+                           const MCSubtargetInfo &STI) const;
 };
 } // end anonymous namespace
 
@@ -99,7 +107,10 @@ EZHMCCodeEmitter::getBranchTargetOpValue(const MCInst &MI, unsigned OpNo,
     return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
   if (MO.isImm()) {
     uint32_t val = static_cast<uint32_t>(MO.getImm());
-    assert((val & 3) == 0 && "Branch target not 4-byte aligned!");
+    if (val & 3) {
+      Ctx.reportError(MI.getLoc(), "branch target must be 4-byte aligned");
+      return 0;
+    }
     return val >> 2;
   }
 
@@ -117,7 +128,10 @@ EZHMCCodeEmitter::getCallTargetOpValue(const MCInst &MI, unsigned OpNo,
     return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
   if (MO.isImm()) {
     uint32_t val = static_cast<uint32_t>(MO.getImm());
-    assert((val & 3) == 0 && "Call offset not 4-byte aligned!");
+    if (val & 3) {
+      Ctx.reportError(MI.getLoc(), "call target must be 4-byte aligned");
+      return 0;
+    }
     return val >> 2;
   }
 
@@ -134,8 +148,8 @@ unsigned EZHMCCodeEmitter::getPerAddrOpValue(const MCInst &MI, unsigned OpNo,
     uint64_t Imm = MO.getImm();
 
     // If it is a full physical address (from assembler), convert to offset
-    if (Imm >= 0x40000000 && Imm <= 0x400FFFFF) {
-      Imm -= 0x40000000;
+    if (Imm >= EZHPeripheralBase && Imm <= EZHPeripheralEnd) {
+      Imm -= EZHPeripheralBase;
     }
 
     // Now Imm MUST be a valid 20-bit offset
@@ -170,7 +184,10 @@ EZHMCCodeEmitter::getWordOffsetOpValue(const MCInst &MI, unsigned OpNo,
   const MCOperand &MO = MI.getOperand(OpNo);
   if (MO.isImm()) {
     uint32_t val = static_cast<uint32_t>(MO.getImm());
-    assert((val & 3) == 0 && "Word offset not 4-byte aligned!");
+    if (val & 3) {
+      Ctx.reportError(MI.getLoc(), "word offset must be 4-byte aligned");
+      return 0;
+    }
     return val >> 2;
   }
 
@@ -180,6 +197,51 @@ EZHMCCodeEmitter::getWordOffsetOpValue(const MCInst &MI, unsigned OpNo,
     return 0;
   }
 
+  return getMachineOpValue(MI, MO, Fixups, STI);
+}
+
+unsigned
+EZHMCCodeEmitter::getImm5OpValue(const MCInst &MI, unsigned OpNo,
+                                 SmallVectorImpl<MCFixup> &Fixups,
+                                 const MCSubtargetInfo &STI) const {
+  // Encoder for the shared 5-bit immediate (imm5): bit positions for the bit
+  // ops (bset/bclr/btog/btst_imm, gpd drives) and shift amounts for the
+  // shifted-ALU forms. The field is 5 bits, so an out-of-range value (e.g. a
+  // hand-written 40, or a negative literal that would two's-complement-wrap to
+  // the wrong bit) must be diagnosed rather than silently truncated.
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isImm()) {
+    int64_t Imm = MO.getImm();
+    if (!isUInt<5>(Imm)) {
+      Ctx.reportError(MI.getLoc(),
+                      "bit position / shift amount " + Twine(Imm) +
+                          " is out of range (requires 5-bit unsigned "
+                          "immediate, 0 to 31)");
+      return 0;
+    }
+    return static_cast<unsigned>(Imm);
+  }
+  return getMachineOpValue(MI, MO, Fixups, STI);
+}
+
+unsigned
+EZHMCCodeEmitter::getUimm8OpValue(const MCInst &MI, unsigned OpNo,
+                                  SmallVectorImpl<MCFixup> &Fixups,
+                                  const MCSubtargetInfo &STI) const {
+  // Encoder for the unsigned 8-bit mask fields (the acc_vectored_hold
+  // dispatch-enable mask, the modify_gpo_byte AND/OR/XOR masks). Out of range
+  // must be diagnosed rather than silently truncated.
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isImm()) {
+    int64_t Imm = MO.getImm();
+    if (!isUInt<8>(Imm)) {
+      Ctx.reportError(MI.getLoc(), "mask " + Twine(Imm) +
+                                       " is out of range (requires 8-bit "
+                                       "unsigned immediate, 0 to 255)");
+      return 0;
+    }
+    return static_cast<unsigned>(Imm);
+  }
   return getMachineOpValue(MI, MO, Fixups, STI);
 }
 
@@ -197,7 +259,7 @@ unsigned EZHMCCodeEmitter::getMachineOpValue(const MCInst &MI,
       if (!isInt<11>(Imm)) {
         Ctx.reportError(MI.getLoc(),
                         "immediate operand " + Twine(Imm) +
-                            " is out of range for e_load_imm (requires 11-bit "
+                            " is out of range for load_imm (requires 11-bit "
                             "signed immediate, -1024 to 1023)!");
         return 0;
       }
@@ -205,7 +267,7 @@ unsigned EZHMCCodeEmitter::getMachineOpValue(const MCInst &MI,
       if (!isInt<12>(Imm)) {
         Ctx.reportError(MI.getLoc(),
                         "immediate operand " + Twine(Imm) +
-                            " is out of range for e_add/sub_imm (requires "
+                            " is out of range for add_imm/sub_imm (requires "
                             "12-bit signed immediate, -2048 to 2047)!");
         return 0;
       }
@@ -224,13 +286,31 @@ unsigned EZHMCCodeEmitter::getMachineOpValue(const MCInst &MI,
 
   if (MO.isExpr()) {
     unsigned Opc = MI.getOpcode();
-    unsigned FixupKind = EZH::FIXUP_EZH_32;
-    if (Opc == EZH::LOAD_SIMM)
-      FixupKind = EZH::FIXUP_EZH_11;
-    else if (Opc == EZH::OR_IMM)
-      FixupKind = EZH::FIXUP_EZH_12;
-
-    Fixups.push_back(MCFixup::create(0, MO.getExpr(), MCFixupKind(FixupKind)));
+    // load_simm and or_imm keep their instruction-field relocations
+    // (FIXUP_EZH_11 / FIXUP_EZH_12), exactly as before. FIXUP_EZH_32 remains
+    // the fixup for DATA references and pointer literals (the constant-pool
+    // `.long sym` behind `ldr rX, pc, <off>`); it is no longer reachable from
+    // an instruction's immediate operand, where its write32le application
+    // would clobber the whole instruction word.
+    if (Opc == EZH::LOAD_SIMM) {
+      Fixups.push_back(
+          MCFixup::create(0, MO.getExpr(), MCFixupKind(EZH::FIXUP_EZH_11)));
+      return 0;
+    }
+    if (Opc == EZH::OR_IMM) {
+      Fixups.push_back(
+          MCFixup::create(0, MO.getExpr(), MCFixupKind(EZH::FIXUP_EZH_12)));
+      return 0;
+    }
+    // No other instruction has a field wide enough to hold a 32-bit symbol
+    // value -- load_imm in particular has only an 11-bit immediate. Emitting a
+    // 32-bit relocation here would silently clobber the entire instruction word
+    // at link time (R_EZH_32 is a plain write32le). Diagnose instead of
+    // mis-assembling, mirroring the out-of-range numeric immediate path above.
+    Ctx.reportError(MI.getLoc(),
+                    "symbol/relocation operand does not fit this instruction's "
+                    "immediate field; materialize the address via a literal "
+                    "pool (ldr rX, pc, <off>) or the load_simm/or_imm pair");
     return 0;
   }
 

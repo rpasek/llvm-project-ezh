@@ -85,8 +85,12 @@ public:
   bool
   reverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const override;
   bool isPredicated(const MachineInstr &MI) const override;
+
+  bool isReMaterializableImpl(const MachineInstr &MI) const override;
   bool isPredicable(const MachineInstr &MI) const override;
   bool canPredicatePredicatedInstr(const MachineInstr &MI) const override;
+  bool ClobbersPredicate(MachineInstr &MI, std::vector<MachineOperand> &Pred,
+                         bool SkipDead) const override;
   bool PredicateInstruction(MachineInstr &MI,
                             ArrayRef<MachineOperand> Pred) const override;
   bool isProfitableToIfCvt(MachineBasicBlock &MBB, unsigned NumCycles,
@@ -98,6 +102,34 @@ public:
                            BranchProbability Probability) const override;
   unsigned getInstSizeInBytes(const MachineInstr &MI) const override;
   int getJumpTableIndex(const MachineInstr &MI) const override;
+
+  // MachineOutliner support. The classification is whitelist-closed:
+  // getOutliningTypeImpl returns Illegal for everything except a small set
+  // of pure, unpredicated, flag-transparent, position-independent,
+  // register-only ALU instructions, so no position-dependent, flag-
+  // crossing, special-register, side-effecting, branch, call or RA-touching
+  // instruction can ever be outlined.
+  std::optional<std::unique_ptr<outliner::OutlinedFunction>>
+  getOutliningCandidateInfo(
+      const MachineModuleInfo &MMI,
+      std::vector<outliner::Candidate> &RepeatedSequenceLocs,
+      unsigned MinRepeats) const override;
+  outliner::InstrType
+  getOutliningTypeImpl(const MachineModuleInfo &MMI,
+                       MachineBasicBlock::iterator &MIT,
+                       unsigned Flags) const override;
+  bool isFunctionSafeToOutlineFrom(MachineFunction &MF,
+                                   bool OutlineFromLinkOnceODRs) const override;
+  bool shouldOutlineFromFunctionByDefault(MachineFunction &MF) const override;
+  void buildOutlinedFrame(MachineBasicBlock &MBB, MachineFunction &MF,
+                          const outliner::OutlinedFunction &OF) const override;
+  MachineBasicBlock::iterator
+  insertOutlinedCall(Module &M, MachineBasicBlock &MBB,
+                     MachineBasicBlock::iterator &It, MachineFunction &MF,
+                     outliner::Candidate &C) const override;
+
+private:
+  bool isOutlineWhitelisted(const MachineInstr &MI) const;
 };
 
 } // namespace llvm

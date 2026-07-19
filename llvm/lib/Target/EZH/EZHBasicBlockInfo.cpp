@@ -46,7 +46,7 @@ unsigned llvm::EZHBasicBlockUtils::getOffsetOf(MachineInstr *MI) const {
   const MachineBasicBlock *MBB = MI->getParent();
   unsigned Offset = BBInfo[MBB->getNumber()].Offset;
 
-  bool Found = false;
+  [[maybe_unused]] bool Found = false;
   for (const MachineInstr &I : *MBB) {
     if (&I == MI) {
       Found = true;

@@ -207,6 +207,8 @@ def run_ezh_lit(lit_args=None):
                 self.name = "test-suite-O0"
             elif '-Os' in exec_root:
                 self.name = "test-suite-Os"
+            elif '-O2nb' in exec_root:
+                self.name = "test-suite-O2nb"
     lit.TestingConfig.TestingConfig.finish = ezh_testing_config_finish
 
     # Monkey-patch lit.run.Run to bypass multiprocessing completely!

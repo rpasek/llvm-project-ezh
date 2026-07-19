@@ -1,0 +1,10 @@
+# Portable-runner manifest for the series/1 tip (upstream carving).
+# Exact gate invocation, from the fork checkout:
+#   python3 ezh/check_ezh.py <series-worktree>/build/bin \
+#       --tree <series-worktree> --manifest ezh/series_manifests/series1.txt
+# The subset = every EZH test file present at the series/1 tip.
+llvm/test/CodeGen/EZH/frame.ll
+llvm/test/CodeGen/EZH/if-cvt-alu.ll
+llvm/test/CodeGen/EZH/reg-shift.ll
+llvm/test/MC/EZH/instructions.s
+llvm/test/MC/EZH/predicated-pushd-popd.s

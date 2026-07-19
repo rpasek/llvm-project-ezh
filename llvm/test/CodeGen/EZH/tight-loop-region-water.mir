@@ -1,0 +1,247 @@
+# RUN: llc -mtriple=ezh-none-elf -run-pass=ezh-cp-islands -verify-machineinstrs %s -o - | FileCheck %s
+#
+# UNRESOLVED-Rend region protection: the TIGHT_LOOP's Rend register ($r3) is
+# live-in with NO def in the block, so the island pass cannot resolve the
+# repeated region's end. Soundness then demands marking the body's entire
+# maximal fall-through chain (a legal region can never span a
+# non-fallthrough boundary, so the chain contains every possible region).
+# The stranded pool user in bb.2 -- inside the chain, out of range of the
+# function-end pool behind 800 bytes of filler -- must get its island
+# placed BEFORE the loop block, never between chain blocks.
+#
+# CHECK: CONSTPOOL_ENTRY
+# CHECK: TIGHT_LOOP
+# CHECK-NOT: CONSTPOOL_ENTRY
+
+--- |
+  target datalayout = "e-m:e-p:32:32-i64:32-f64:32-n32-S32"
+  define void @f() { entry: ret void }
+...
+---
+name:            f
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2' }
+  - { reg: '$r3' }
+constants:
+  - id: 0
+    value: 'i32 2004318071'
+    alignment: 4
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2, $r3
+    $r0 = LOAD_IMM 1, 0
+  bb.1:
+    successors: %bb.2
+    liveins: $r2, $r3
+    TIGHT_LOOP killed $r3, killed $r2, 0
+    $r5 = LOAD_IMM 7, 0
+    $r6 = LOAD_IMM 9, 0
+  bb.2:
+    successors: %bb.3
+    $r4 = LOAD_CONSTANT %const.0
+    $r7 = LOAD_IMM 3, 0
+  bb.3:
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    $r1 = LOAD_IMM 5, 0
+    RET implicit $ra
+...

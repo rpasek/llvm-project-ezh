@@ -51,11 +51,27 @@ public:
   explicit EZHTTIImpl(const EZHTargetMachine *TM, const Function &F)
       : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
         TLI(ST->getTargetLowering()) {}
+
+  // Bias loop strength reduction toward post-increment addressing: the
+  // ldr_post/str_post forms fold the pointer bump into the access, which
+  // matters most in the byte-pump loops this core exists for. Without the
+  // preference LSR happily shares one induction variable between the
+  // address and a counter, paying a reg-offset access plus a separate
+  // increment every iteration.
+  TTI::AddressingModeKind
+  getPreferredAddressingMode(const Loop *L,
+                             ScalarEvolution *SE) const override {
+    return TTI::AMK_PostIndexed;
+  }
 };
 } // namespace
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeEZHTarget() {
   RegisterTargetMachine<EZHTargetMachine> registered_target(getTheEZHTarget());
+  // Register machine passes with the PassRegistry so -run-pass/-stop-after
+  // can name them (used by the MIR regression tests).
+  initializeEZHTightLoopFormationPass(*PassRegistry::getPassRegistry());
+  initializeEZHConstantIslandsPass(*PassRegistry::getPassRegistry());
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
@@ -76,6 +92,13 @@ EZHTargetMachine::EZHTargetMachine(const Target &T, const Triple &TT,
                 OptLevel),
       TLOF(std::make_unique<TargetLoweringObjectFileELF>()) {
   initAsmInfo();
+  // Opt into the target-default MachineOutliner: enable the pass and let it
+  // run by default when the function requests minimum size. The generic pass
+  // runs before addPreEmitPass2, so it never sees injected gotol_bs polls or
+  // materialized pc-relative island loads. EZHInstrInfo's whitelist-closed
+  // classification governs what may be outlined.
+  setMachineOutliner(true);
+  setSupportsDefaultOutlining(true);
 }
 
 TargetTransformInfo
@@ -100,6 +123,8 @@ public:
     return getTM<EZHTargetMachine>();
   }
 
+  void addIRPasses() override;
+  bool addPreISel() override;
   bool addInstSelector() override;
   void addPostRegAlloc() override;
   void addPreSched2() override;
@@ -111,6 +136,23 @@ public:
 TargetPassConfig *
 EZHTargetMachine::createPassConfig(PassManagerBase &PassManager) {
   return new EZHPassConfig(*this, &PassManager);
+}
+
+void EZHPassConfig::addIRPasses() { TargetPassConfig::addIRPasses(); }
+
+bool EZHPassConfig::addPreISel() {
+  // Merge small globals into one blob: every global otherwise costs its
+  // own constant-pool entry plus a pc-relative load per function that
+  // touches it, while a merged blob shares a single pooled base address
+  // whose member offsets fold straight into the load/store immediates.
+  // 508 is the word-offset addressing limit; byte accesses past 127 pay
+  // one add_imm but still save the pool slot and load. Placed in
+  // addPreISel like the other targets running GlobalMerge, after the
+  // generic IR pipeline and the input verifier.
+  if (TM->getOptLevel() != CodeGenOptLevel::None)
+    addPass(createGlobalMergePass(TM, 508, /*OnlyOptimizeForSize=*/false,
+                                  /*MergeExternalByDefault=*/true));
+  return false;
 }
 
 bool EZHPassConfig::addInstSelector() {
@@ -125,9 +167,26 @@ void EZHPassConfig::addPreSched2() {
     addPass(&IfConverterID);
 }
 
-void EZHPassConfig::addPreEmitPass() {}
+void EZHPassConfig::addPreEmitPass() {
+  if (getOptLevel() != CodeGenOptLevel::None) {
+    addPass(createEZHCompareFusionPass());
+    // Post-RA list scheduling, placed AFTER compare fusion so fusion sees the
+    // unscheduled adjacent pairs, and after the if-converter so predicated
+    // instances exist -- their implicit CFS operands (flags-as-physreg model)
+    // carry the dependences that make reordering here sound. The generic
+    // pipeline's insertion point is suppressed by
+    // targetSchedulesPostRAScheduling; this is the target-owned placement.
+    addPass(&PostRASchedulerID);
+  }
+}
 
 void EZHPassConfig::addPreEmitPass2() {
+  // Hardware-loop formation runs after the post-RA scheduler (the repeated
+  // block keeps its final schedule) and before the bitslice injection and
+  // constant-island passes; it self-gates on optlevel, optsize, and the
+  // bitslice-interrupts feature.
+  if (getOptLevel() != CodeGenOptLevel::None)
+    addPass(createEZHTightLoopFormationPass());
   addPass(createEZHBitSliceInjectionPass());
   addPass(createEZHConstantIslandPass());
 }

@@ -24,6 +24,7 @@
 
 #include "EZHInstPrinter.h"
 #include "../EZHCondCode.h"
+#include "EZHBaseInfo.h"
 #include "EZHMCTargetDesc.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
@@ -50,7 +51,12 @@ void EZHInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       MI->getOperand(0).isReg() && MI->getOperand(0).getReg() == EZH::SP &&
       MI->getOperand(2).isReg() && MI->getOperand(2).getReg() == EZH::SP &&
       MI->getOperand(3).isImm() && MI->getOperand(3).getImm() == -4) {
-    OS << "\tpushd" << Name.substr(7) << "\t";
+    OS << "\tpushd" << Name.substr(7);
+    // A predicated push (e.g. from the if-converter) must keep its
+    // condition suffix, or the printed text changes semantics.
+    if (MI->getNumOperands() >= 5 && MI->getOperand(4).isImm())
+      printPredicateOperand(MI, 4, OS);
+    OS << "\t";
     printOperand(MI, 1, OS);
     printAnnotation(OS, Annotation);
     return;
@@ -60,7 +66,10 @@ void EZHInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       MI->getOperand(1).isReg() && MI->getOperand(1).getReg() == EZH::SP &&
       MI->getOperand(2).isReg() && MI->getOperand(2).getReg() == EZH::SP &&
       MI->getOperand(3).isImm() && MI->getOperand(3).getImm() == 4) {
-    OS << "\tpopd" << Name.substr(8) << "\t";
+    OS << "\tpopd" << Name.substr(8);
+    if (MI->getNumOperands() >= 5 && MI->getOperand(4).isImm())
+      printPredicateOperand(MI, 4, OS);
+    OS << "\t";
     printOperand(MI, 0, OS);
     printAnnotation(OS, Annotation);
     return;
@@ -115,7 +124,7 @@ void EZHInstPrinter::printPerAddrOperand(const MCInst *MI, unsigned OpNo,
                                          raw_ostream &O) {
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isImm()) {
-    uint32_t PhysAddr = (uint32_t)Op.getImm() + 0x40000000;
+    uint32_t PhysAddr = (uint32_t)Op.getImm() + EZHPeripheralBase;
     O << format_hex(PhysAddr, 10); // Format as 0x400xxxxx
   } else {
     printOperand(MI, OpNo, O);

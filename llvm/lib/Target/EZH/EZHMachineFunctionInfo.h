@@ -26,6 +26,9 @@
 
 #include "EZHRegisterInfo.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/CallingConvLower.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/Allocator.h"
@@ -51,6 +54,24 @@ class EZHMachineFunctionInfo : public MachineFunctionInfo {
   // VarArgsRegIdx - The first register index that is spilled for varargs.
   unsigned VarArgsRegIdx;
 
+  // ForwardedMustTailRegParms - In a vararg function containing a musttail
+  // call, the entry values of the unnamed argument registers, captured so
+  // the tail call can forward the ellipsis.
+  SmallVector<ForwardedRegister, 4> ForwardedMustTailRegParms;
+
+  // TailCallSlot - Frame index and size of the memory-form tail-call target
+  // slot: a fixed object pinned at the very top of the frame (just below
+  // the vararg save area), so its offset from the restored entry SP is
+  // small and constant no matter how large the locals are.
+  int TailCallSlotFI = 0;
+  unsigned TailCallSlotSize = 0;
+
+  // Blocks whose tail is a tight_loop repeated region ending exactly at the
+  // next block's label (Rend). The constant-island pass must never place an
+  // island after such a block (the island's data and branch-around goto
+  // would fall inside the repeated region) and must never split it.
+  SmallPtrSet<const MachineBasicBlock *, 2> TightLoopBodies;
+
 public:
   EZHMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI)
       : VarArgsFrameIndex(0), VarArgsSaveSize(0), VarArgsRegIdx(0) {}
@@ -58,6 +79,13 @@ public:
   clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,
         const DenseMap<MachineBasicBlock *, MachineBasicBlock *> &Src2DstMBB)
       const override;
+
+  void addTightLoopBody(const MachineBasicBlock *MBB) {
+    TightLoopBodies.insert(MBB);
+  }
+  bool isTightLoopBody(const MachineBasicBlock *MBB) const {
+    return TightLoopBodies.count(MBB);
+  }
 
   Register getSRetReturnReg() const { return SRetReturnReg; }
   void setSRetReturnReg(Register Reg) { SRetReturnReg = Reg; }
@@ -70,6 +98,20 @@ public:
 
   unsigned getVarArgsRegIdx() const { return VarArgsRegIdx; }
   void setVarArgsRegIdx(unsigned Idx) { VarArgsRegIdx = Idx; }
+
+  SmallVectorImpl<ForwardedRegister> &getForwardedMustTailRegParms() {
+    return ForwardedMustTailRegParms;
+  }
+  const SmallVectorImpl<ForwardedRegister> &getForwardedMustTailRegParms() const {
+    return ForwardedMustTailRegParms;
+  }
+
+  int getTailCallSlotFI() const { return TailCallSlotFI; }
+  unsigned getTailCallSlotSize() const { return TailCallSlotSize; }
+  void setTailCallSlot(int FI, unsigned Size) {
+    TailCallSlotFI = FI;
+    TailCallSlotSize = Size;
+  }
 };
 
 } // namespace llvm

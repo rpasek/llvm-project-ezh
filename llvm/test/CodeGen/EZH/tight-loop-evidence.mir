@@ -1,0 +1,239 @@
+# RUN: llc -mtriple=ezh-none-elf -mattr=-bitslice-interrupts -run-pass=ezh-tight-loop -verify-machineinstrs %s -o - | FileCheck %s
+#
+# EZHTightLoopFormation's positive-count evidence: the conversion sets
+# Rcount = n-1 and the hardware always runs the block once, so the pass must
+# PROVE n >= 1 before converting. These shapes pin the proof rules at the
+# machine level (the C shapes in tight-loop.ll cannot reach them):
+#
+#  - the zero-guard compare must be UNCONDITIONAL (S-forms share their opcode
+#    with predicated instances -- a predicated sub_imms only conditionally
+#    writes the flags and proves nothing on the untaken path);
+#  - the counter must not be redefined between the compare and the guard
+#    branch (phi-elimination places init copies exactly there);
+#  - the proof is DIRECTIONAL: arriving at the loop via the guard's
+#    fall-through means the zero branch was not taken; arriving via the
+#    TAKEN zero-branch proves the opposite;
+#  - the constant-init evidence (load_imm Cnt, K) must likewise be
+#    unconditional.
+
+--- |
+  target datalayout = "e-m:e-p:32:32-i64:32-f64:32-n32-S32"
+  define void @guard_eu(ptr %p, i32 %n) { entry: ret void }
+  define void @guard_predicated(ptr %p, i32 %n) { entry: ret void }
+  define void @guard_cnt_redef(ptr %p, i32 %n, i32 %m) { entry: ret void }
+  define void @guard_taken_path(ptr %p, i32 %n) { entry: ret void }
+  define void @guard_separate_exit(ptr %p, i32 %n) { entry: ret void }
+  define void @init_eu(ptr %p) { entry: ret void }
+  define void @init_predicated(ptr %p) { entry: ret void }
+...
+---
+# An unconditional compare-with-zero guard, reached by fall-through: n >= 1
+# is proven and the loop converts.
+# CHECK-LABEL: name: guard_eu
+# CHECK: TIGHT_LOOP
+# CHECK-NOT: GOTO_CC %bb.1
+name:            guard_eu
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r0' }
+  - { reg: '$r1' }
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1
+    dead $r3 = SUB_IMM_s $r1, 0, 0, implicit-def $cfs
+    GOTO_CC %bb.2, 1, implicit $cfs
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1
+    $r3 = LOAD_IMM 5, 0
+    STR killed $r3, $r0, 0, 0 :: (store (s32))
+    $r0 = ADD_IMM killed $r0, 4, 0
+    dead $r1 = ADD_IMM_s killed $r1, -1, 0, implicit-def $cfs
+    GOTO_CC %bb.1, 2, implicit $cfs
+  bb.2:
+    RET implicit $ra
+...
+---
+# The same guard with a PREDICATED compare: only conditionally executed, so
+# its flags prove nothing about the counter -- no conversion.
+# CHECK-LABEL: name: guard_predicated
+# CHECK-NOT: TIGHT_LOOP
+# CHECK: GOTO_CC %bb.1, 2
+name:            guard_predicated
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r0' }
+  - { reg: '$r1' }
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1
+    dead $r3 = SUB_IMM_s $r1, 0, 1, implicit-def $cfs, implicit $cfs
+    GOTO_CC %bb.2, 1, implicit $cfs
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1
+    $r3 = LOAD_IMM 5, 0
+    STR killed $r3, $r0, 0, 0 :: (store (s32))
+    $r0 = ADD_IMM killed $r0, 4, 0
+    dead $r1 = ADD_IMM_s killed $r1, -1, 0, implicit-def $cfs
+    GOTO_CC %bb.1, 2, implicit $cfs
+  bb.2:
+    RET implicit $ra
+...
+---
+# The counter is REDEFINED between the compare and the guard branch (the
+# spot where phi-elimination places init copies): the guard tested a stale
+# value -- no conversion.
+# CHECK-LABEL: name: guard_cnt_redef
+# CHECK-NOT: TIGHT_LOOP
+# CHECK: GOTO_CC %bb.1, 2
+name:            guard_cnt_redef
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r0' }
+  - { reg: '$r1' }
+  - { reg: '$r2' }
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1, $r2
+    dead $r3 = SUB_IMM_s $r1, 0, 0, implicit-def $cfs
+    $r1 = MOV killed $r2, 0
+    GOTO_CC %bb.2, 1, implicit $cfs
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1
+    $r3 = LOAD_IMM 5, 0
+    STR killed $r3, $r0, 0, 0 :: (store (s32))
+    $r0 = ADD_IMM killed $r0, 4, 0
+    dead $r1 = ADD_IMM_s killed $r1, -1, 0, implicit-def $cfs
+    GOTO_CC %bb.1, 2, implicit $cfs
+  bb.2:
+    RET implicit $ra
+...
+---
+# The loop chain is reached via the guard's TAKEN zero-branch (the guard
+# falls through elsewhere): on this path the counter IS zero-or-below -- no
+# conversion. NOTE the printer RENUMBERS blocks (input bb.3 -> output bb.2,
+# loop bb.2 -> output bb.3): the check below pins the loop BACKEDGE (pred
+# imm 2) so the CHECK-NOT region spans the whole body -- matching the guard
+# branch instead would end the region before TIGHT_LOOP could appear.
+# CHECK-LABEL: name: guard_taken_path
+# CHECK-NOT: TIGHT_LOOP
+# CHECK: GOTO_CC %bb.3, 2
+name:            guard_taken_path
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r0' }
+  - { reg: '$r1' }
+body: |
+  bb.0:
+    successors: %bb.3, %bb.1
+    liveins: $r0, $r1
+    dead $r3 = SUB_IMM_s $r1, 0, 0, implicit-def $cfs
+    GOTO_CC %bb.3, 1, implicit $cfs
+  bb.1:
+    liveins: $r0
+    RET implicit $ra
+  bb.3:
+    successors: %bb.2
+    liveins: $r0, $r1
+    GOTO %bb.2
+  bb.2:
+    successors: %bb.2, %bb.4
+    liveins: $r0, $r1
+    $r3 = LOAD_IMM 5, 0
+    STR killed $r3, $r0, 0, 0 :: (store (s32))
+    $r0 = ADD_IMM killed $r0, 4, 0
+    dead $r1 = ADD_IMM_s killed $r1, -1, 0, implicit-def $cfs
+    GOTO_CC %bb.2, 2, implicit $cfs
+  bb.4:
+    RET implicit $ra
+...
+---
+# The guard branches to a SEPARATE zero-path block rather than the loop's own
+# exit (tail-duplicated or split epilogues produce this; the selftest's sum
+# regressed exactly here when an earlier rule required the guard to target
+# the loop exit). Arriving via the fall-through still proves n >= 1 --
+# converts.
+# CHECK-LABEL: name: guard_separate_exit
+# CHECK: TIGHT_LOOP
+# CHECK-NOT: GOTO_CC %bb.1
+name:            guard_separate_exit
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r0' }
+  - { reg: '$r1' }
+body: |
+  bb.0:
+    successors: %bb.1, %bb.3
+    liveins: $r0, $r1
+    dead $r3 = SUB_IMM_s $r1, 0, 0, implicit-def $cfs
+    GOTO_CC %bb.3, 1, implicit $cfs
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1
+    $r3 = LOAD_IMM 5, 0
+    STR killed $r3, $r0, 0, 0 :: (store (s32))
+    $r0 = ADD_IMM killed $r0, 4, 0
+    dead $r1 = ADD_IMM_s killed $r1, -1, 0, implicit-def $cfs
+    GOTO_CC %bb.1, 2, implicit $cfs
+  bb.2:
+    RET implicit $ra
+  bb.3:
+    RET implicit $ra
+...
+---
+# An unconditional constant init >= 1 also proves the count -- converts.
+# CHECK-LABEL: name: init_eu
+# CHECK: TIGHT_LOOP
+name:            init_eu
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r0' }
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r0
+    $r1 = LOAD_IMM 5, 0
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1
+    $r3 = LOAD_IMM 7, 0
+    STR killed $r3, $r0, 0, 0 :: (store (s32))
+    $r0 = ADD_IMM killed $r0, 4, 0
+    dead $r1 = ADD_IMM_s killed $r1, -1, 0, implicit-def $cfs
+    GOTO_CC %bb.1, 2, implicit $cfs
+  bb.2:
+    RET implicit $ra
+...
+---
+# A PREDICATED constant init (raw non-EU predicate on the base opcode; the
+# defensive case behind the materializer split) proves nothing -- no
+# conversion.
+# CHECK-LABEL: name: init_predicated
+# CHECK-NOT: TIGHT_LOOP
+# CHECK: GOTO_CC %bb.1, 2
+name:            init_predicated
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r0' }
+  - { reg: '$r1' }
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r0, $r1
+    $r1 = LOAD_IMM 5, 1, implicit $cfs, implicit $r1
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r1
+    $r3 = LOAD_IMM 7, 0
+    STR killed $r3, $r0, 0, 0 :: (store (s32))
+    $r0 = ADD_IMM killed $r0, 4, 0
+    dead $r1 = ADD_IMM_s killed $r1, -1, 0, implicit-def $cfs
+    GOTO_CC %bb.1, 2, implicit $cfs
+  bb.2:
+    RET implicit $ra
+...

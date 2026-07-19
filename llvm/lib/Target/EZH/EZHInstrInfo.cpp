@@ -31,9 +31,13 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
+#include "EZHSubtarget.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
+#include "llvm/CodeGen/MachineOutliner.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/Alignment.h"
@@ -81,11 +85,18 @@ void EZHInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   if (!EZH::GPRRegClass.hasSubClassEq(RegisterClass)) {
     llvm_unreachable("Can't store this register to stack slot");
   }
+  MachineFunction &MF = *MBB.getParent();
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  MachineMemOperand *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, FrameIndex),
+      MachineMemOperand::MOStore, MFI.getObjectSize(FrameIndex),
+      MFI.getObjectAlign(FrameIndex));
   BuildMI(MBB, Position, DL, get(EZH::STR))
       .addReg(SourceRegister, getKillRegState(IsKill))
       .addFrameIndex(FrameIndex)
       .addImm(0)
       .addImm(EZHCC::ICC_EU)
+      .addMemOperand(MMO)
       .setMIFlags(Flags);
 }
 
@@ -102,14 +113,28 @@ void EZHInstrInfo::loadRegFromStackSlot(
   if (!EZH::GPRRegClass.hasSubClassEq(RegisterClass)) {
     llvm_unreachable("Can't load this register from stack slot");
   }
+  MachineFunction &MF = *MBB.getParent();
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  MachineMemOperand *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, FrameIndex),
+      MachineMemOperand::MOLoad, MFI.getObjectSize(FrameIndex),
+      MFI.getObjectAlign(FrameIndex));
   BuildMI(MBB, Position, DL, get(EZH::LDR), DestinationRegister)
       .addFrameIndex(FrameIndex)
       .addImm(0)
       .addImm(EZHCC::ICC_EU)
+      .addMemOperand(MMO)
       .setMIFlags(Flags);
 }
 
-bool EZHInstrInfo::expandPostRAPseudo(MachineInstr &MI) const { return false; }
+bool EZHInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
+  // The receiver clobber has done its job once registers are allocated.
+  if (MI.getOpcode() == EZH::SJLJ_RECEIVER_CLOBBER) {
+    MI.eraseFromParent();
+    return true;
+  }
+  return false;
+}
 
 bool EZHInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
                                  MachineBasicBlock *&TrueBlock,
@@ -137,33 +162,27 @@ bool EZHInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
 
     ++NumTerminatorsSeen;
 
-    if (I->getOpcode() == EZH::GOTO) {
+    if (I->getOpcode() == EZH::GOTO_CC) {
       if (!I->getOperand(0).isMBB())
         return true;
-
-      unsigned CC = I->getOperand(1).getImm();
-      if (CC != EZHCC::ICC_EU) {
-        // Conditional Branch
-        if (!Condition.empty())
-          return true; // Only support one conditional branch
-
-        FalseBlock = TrueBlock;
-        TrueBlock = I->getOperand(0).getMBB();
-        Condition.push_back(MachineOperand::CreateImm(CC));
-      } else {
-        // Unconditional Branch
-        if (NumTerminatorsSeen > 1) {
-          // We already saw a branch (which must be conditional, since we scan
-          // upwards and we don't support multiple unconditional branches). If
-          // we see an unconditional branch before a conditional one, it is
-          // invalid CFG.
-          return true;
-        }
-
-        TrueBlock = I->getOperand(0).getMBB();
-        Condition.clear();
-        FalseBlock = nullptr;
+      // Conditional Branch
+      if (!Condition.empty())
+        return true; // Only support one conditional branch
+      FalseBlock = TrueBlock;
+      TrueBlock = I->getOperand(0).getMBB();
+      Condition.push_back(MachineOperand::CreateImm(I->getOperand(1).getImm()));
+    } else if (I->getOpcode() == EZH::GOTO) {
+      if (!I->getOperand(0).isMBB())
+        return true;
+      // Unconditional Branch
+      if (NumTerminatorsSeen > 1) {
+        // We already saw a (conditional) branch; an unconditional branch
+        // before it is invalid CFG.
+        return true;
       }
+      TrueBlock = I->getOperand(0).getMBB();
+      Condition.clear();
+      FalseBlock = nullptr;
     } else {
       // Unrecognized terminator.
       return true;
@@ -171,8 +190,7 @@ bool EZHInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
 
     // Cleanup code - only for unconditional branches that are the last
     // instruction.
-    if (I->getOpcode() == EZH::GOTO &&
-        I->getOperand(1).getImm() == EZHCC::ICC_EU) {
+    if (I->getOpcode() == EZH::GOTO) {
       if (NumTerminatorsSeen > 1) {
         if (AllowModify) {
           MachineBasicBlock::iterator DI = std::next(I);
@@ -208,19 +226,19 @@ unsigned EZHInstrInfo::insertBranch(MachineBasicBlock &MBB,
     *BytesAdded = 0;
 
   if (Condition.empty()) {
-    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(TrueBlock).addImm(EZHCC::ICC_EU);
+    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(TrueBlock);
     if (BytesAdded)
       *BytesAdded += 4;
     return 1;
   }
 
   unsigned CC = Condition[0].getImm();
-  BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(TrueBlock).addImm(CC);
+  BuildMI(&MBB, DL, get(EZH::GOTO_CC)).addMBB(TrueBlock).addImm(CC);
   if (BytesAdded)
     *BytesAdded += 4;
 
   if (FalseBlock) {
-    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(FalseBlock).addImm(EZHCC::ICC_EU);
+    BuildMI(&MBB, DL, get(EZH::GOTO)).addMBB(FalseBlock);
     if (BytesAdded)
       *BytesAdded += 4;
     return 2;
@@ -292,6 +310,29 @@ bool EZHInstrInfo::isPredicated(const MachineInstr &MI) const {
   return (MCID.TSFlags & EZHII::IsPredicated) != 0;
 }
 
+// The rematerializable immediate materializers (load_imm/load_simm families,
+// LOAD_CONSTANT). Only the unpredicated base opcodes appear here: predicating
+// one rewrites it to its *_CC twin (PredicateInstruction), which carries
+// hasSideEffects=1 and is not in this list, so a predicated instance is never
+// treated as rematerializable. The isPredicated guard is now defensive -- the
+// base opcodes only ever hold the unconditional EU form -- but is kept cheap.
+bool EZHInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
+  if (isPredicated(MI))
+    return false;
+  switch (MI.getOpcode()) {
+  case EZH::LOAD_IMM:
+  case EZH::LOAD_IMMN:
+  case EZH::LOAD_SIMM:
+  case EZH::LOAD_SIMMN:
+    // Pure, flag-transparent value producers; their descriptors clear
+    // hasSideEffects (LiveRangeEdit gates remat on isSafeToMove, which rejects
+    // unmodelled side effects with no target override).
+    return true;
+  default:
+    return TargetInstrInfo::isReMaterializableImpl(MI);
+  }
+}
+
 bool EZHInstrInfo::isPredicable(const MachineInstr &MI) const {
   return (MI.getDesc().TSFlags & EZHII::IsPredicable) != 0;
 }
@@ -300,10 +341,93 @@ bool EZHInstrInfo::canPredicatePredicatedInstr(const MachineInstr &MI) const {
   return false;
 }
 
+// Any instruction that writes the condition flags (defs CFS -- the S-forms,
+// WRITE_CFS, and the compare pseudos that lower to them) clobbers the
+// predicate. Without this hook the if-converter believed nothing clobbered
+// the predicate and would happily predicate a block CONTAINING an S-form:
+// e.g. an i64 add in a triangle arm became "sub_imms; adds_ze; adc_ze",
+// where the executed adds_ze overwrites the flags and the following adc_ze
+// tests the condition on the ADDITION's flags instead of the compare's -- a
+// silent wrong-code bug. With the flags modelled as CFS, the honest answer
+// is one query.
+//
+// Deliberately IGNORE SkipDead: the contract allows skipping a dead
+// predicate def only when the instruction is guaranteed to be removed after
+// PredicateInstruction, and EZH removes nothing -- a predicated CFS writer
+// still executes and still writes the flags. A def that was correctly dead
+// BEFORE if-conversion (e.g. "mov cfs, x" from llvm.ezh.write.cfs whose
+// flags nothing read yet) gains readers DURING predication: every following
+// predicated instruction in the merged region evaluates its condition
+// against the clobbered flags ("sub_imms; mov_ze cfs; add_ze" tests the
+// user-written flags instead of the compare's).
+bool EZHInstrInfo::ClobbersPredicate(MachineInstr &MI,
+                                     std::vector<MachineOperand> &Pred,
+                                     bool /*SkipDead*/) const {
+  bool Found = false;
+  for (const MachineOperand &MO : MI.operands()) {
+    if (!MO.isReg() || !MO.isDef() || MO.getReg() != EZH::CFS)
+      continue;
+    Pred.push_back(MO);
+    Found = true;
+  }
+  return Found;
+}
+
 bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
                                         ArrayRef<MachineOperand> Pred) const {
   assert(!Pred.empty() && "Empty predicate!");
   EZHCC::CondCode CC = static_cast<EZHCC::CondCode>(Pred[0].getImm());
+
+  // An unconditional GOTO has no predicate operand; predicating it turns it
+  // into the conditional GOTO_CC (which carries the condition and, unlike
+  // GOTO, is not a barrier).
+  if (MI.getOpcode() == EZH::GOTO) {
+    MI.setDesc(get(EZH::GOTO_CC));
+    MI.addOperand(MachineOperand::CreateImm(CC));
+    // GOTO_CC's descriptor carries Uses=[CFS] (the predicate reads the
+    // condition flags); setDesc does not materialize the new descriptor's
+    // implicit operands, so add the flag use by hand.
+    MI.addOperand(MachineOperand::CreateReg(EZH::CFS, /*isDef=*/false,
+                                            /*isImp=*/true));
+    return true;
+  }
+
+  // Predicating a rematerializable immediate materializer switches it to its
+  // *_CC twin (hasSideEffects=1, not rematerializable), so its honest movable
+  // descriptor is never carried by a predicated instance. The operand layout
+  // is identical, so the generic predicate rewrite below then fills the
+  // condition and the value-preserving implicit use.
+  switch (MI.getOpcode()) {
+  case EZH::LOAD_IMM:
+    MI.setDesc(get(EZH::LOAD_IMM_CC));
+    break;
+  case EZH::LOAD_IMMN:
+    MI.setDesc(get(EZH::LOAD_IMMN_CC));
+    break;
+  case EZH::LOAD_SIMM:
+    MI.setDesc(get(EZH::LOAD_SIMM_CC));
+    break;
+  case EZH::LOAD_SIMMN:
+    MI.setDesc(get(EZH::LOAD_SIMMN_CC));
+    break;
+  // A predicated tail call keeps a fall-through successor, so switch it to its
+  // _CC twin (not a barrier, not an unconditional return) rather than only
+  // setting the predicate on the barrier descriptor.
+  case EZH::TCRETURN:
+    MI.setDesc(get(EZH::TCRETURN_CC));
+    break;
+  case EZH::TCRETURNExt:
+    MI.setDesc(get(EZH::TCRETURNExt_CC));
+    break;
+  case EZH::TCRETURN_REG:
+    MI.setDesc(get(EZH::TCRETURN_REG_CC));
+    break;
+  case EZH::TCRETURN_MEM:
+    MI.setDesc(get(EZH::TCRETURN_MEM_CC));
+    break;
+  default:
+    break;
+  }
 
   const MCInstrDesc &MCID = MI.getDesc();
   int PIdx = -1;
@@ -326,6 +450,14 @@ bool EZHInstrInfo::PredicateInstruction(MachineInstr &MI,
         MI.addOperand(
             MachineOperand::CreateReg(RdReg, /*isDef=*/false, /*isImp=*/true));
       }
+      // A predicated instance reads the condition flags: add an implicit use
+      // of CFS so schedulers see the dependence on the flag-setting (S-form)
+      // producer. For the opcodes rewritten to a *_CC twin above this also
+      // materializes the twin's static Uses=[CFS], which setDesc alone does
+      // not (skip the add if a CFS use is somehow already present).
+      if (!MI.readsRegister(EZH::CFS, /*TRI=*/nullptr))
+        MI.addOperand(MachineOperand::CreateReg(EZH::CFS, /*isDef=*/false,
+                                                /*isImp=*/true));
       return true;
     }
     return false; // Malformed instruction, cannot predicate
@@ -376,4 +508,184 @@ int EZHInstrInfo::getJumpTableIndex(const MachineInstr &MI) const {
     }
   }
   return -1;
+}
+
+//===----------------------------------------------------------------------===//
+// MachineOutliner
+//===----------------------------------------------------------------------===//
+
+// The one frame/call construction EZH supports: call the outlined function
+// with a gosub, return with goto ra. There is no alternate link register,
+// so no tail-call or register-save variant exists.
+namespace {
+enum EZHOutlinerConstructionID { EZHOutlinerDefault };
+} // namespace
+
+// An instruction is outlinable only if it is a pure, position-independent,
+// state-free value computation: no control transfer, no memory, no side
+// effects, no flag production or consumption, no position-dependent
+// operand, and no reserved/special register. Relocating such an
+// instruction into a shared function cannot change its behavior.
+//
+// This is a rejection over an EXHAUSTIVE enumeration of EZH's danger
+// classes, not a positive opcode list -- which is both safer (no danger
+// class can be forgotten by omitting an opcode) and more complete (it
+// admits the fused shifted-ALU forms without a fragile 60-entry table).
+// The completeness argument, class by class:
+//  - control transfer -> isBranch/isCall/isReturn/isTerminator/indirect
+//  - memory, incl. pc-relative pool loads (LOAD_CONSTANT has mayLoad) ->
+//    mayLoadOrStore
+//  - peripheral/event/GPIO/CFM/hold/trigger/tight_loop -> every one is
+//    hasUnmodeledSideEffects
+//  - flag PRODUCED -> the _s suffix is exactly how the by-construction flag
+//    model marks a producer
+//  - flag/carry CONSUMED -> isPredicated (pred operand != ICC_EU) or an ADC
+//    / SBC carry lane anywhere in the mnemonic
+//  - position-dependent operand (CPI/JTI/MBB/global/blockaddress/symbol/
+//    frame index) -> the operand loop admits only reg and plain imm
+//  - reserved/special register, explicit OR implicit -> reads/modifies
+//    check over RA/SP/PC/GPO/GPD/CFS/CFM/GPI
+bool EZHInstrInfo::isOutlineWhitelisted(const MachineInstr &MI) const {
+  if (MI.isBranch() || MI.isCall() || MI.isReturn() || MI.isTerminator() ||
+      MI.isIndirectBranch() || MI.isInlineAsm())
+    return false;
+  if (MI.mayLoadOrStore() || MI.hasUnmodeledSideEffects())
+    return false;
+
+  // Flags: no producer (_s), no consumer (predicated), no carry lane.
+  if (isPredicated(MI))
+    return false;
+  StringRef Name = getName(MI.getOpcode());
+  if (Name.ends_with("_s") || Name.contains("ADC") || Name.contains("SBC"))
+    return false;
+
+  // Operands: register or plain immediate only.
+  for (const MachineOperand &MO : MI.operands())
+    if (!MO.isReg() && !MO.isImm())
+      return false;
+
+  // No reserved/special register (covers implicit uses/defs too).
+  const EZHRegisterInfo *TRI = &getRegisterInfo();
+  for (Register R : {EZH::RA, EZH::SP, EZH::PC, EZH::GPO, EZH::GPD, EZH::CFS,
+                     EZH::CFM, EZH::GPI})
+    if (MI.readsRegister(R, TRI) || MI.modifiesRegister(R, TRI))
+      return false;
+
+  // Must produce a value (a pure computation), never a bare pseudo/meta.
+  return MI.getNumExplicitDefs() >= 1 && !MI.isPseudo();
+}
+
+outliner::InstrType
+EZHInstrInfo::getOutliningTypeImpl(const MachineModuleInfo &, /*MMI*/
+                                   MachineBasicBlock::iterator &MIT,
+                                   unsigned Flags) const {
+  MachineInstr &MI = *MIT;
+
+  if (MI.isDebugInstr() || MI.getOpcode() == TargetOpcode::IMPLICIT_DEF ||
+      MI.isKill())
+    return outliner::InstrType::Invisible;
+
+  // CFI runs would split unwind state across two code regions; never
+  // outline them (the outlined function carries no CFA).
+  if (MI.isCFIInstruction())
+    return outliner::InstrType::Illegal;
+
+  return isOutlineWhitelisted(MI) ? outliner::InstrType::Legal
+                                  : outliner::InstrType::Illegal;
+}
+
+std::optional<std::unique_ptr<outliner::OutlinedFunction>>
+EZHInstrInfo::getOutliningCandidateInfo(
+    const MachineModuleInfo &MMI,
+    std::vector<outliner::Candidate> &RepeatedSequenceLocs,
+    unsigned MinRepeats) const {
+  // A single link register: the outlined call (gosub) clobbers RA, so a
+  // candidate is viable only where RA is dead across the sequence. Framed
+  // functions spilled RA in the prologue (dead across the body); frameless
+  // leaves keep the live return address in RA and are rejected. Require
+  // BOTH the liveness query and that the function actually spilled RA, so
+  // the gate never depends on pristine-register inference alone -- this is
+  // the sole guard against return-address corruption and has no backstop.
+  auto SpilledRA = [](const outliner::Candidate &C) {
+    for (const CalleeSavedInfo &CS :
+         C.getMF()->getFrameInfo().getCalleeSavedInfo())
+      if (CS.getReg() == EZH::RA)
+        return true;
+    return false;
+  };
+  const EZHRegisterInfo *TRI = &getRegisterInfo();
+  llvm::erase_if(RepeatedSequenceLocs, [&](outliner::Candidate &C) {
+    return !SpilledRA(C) || !C.isAvailableAcrossAndOutOfSeq(EZH::RA, *TRI);
+  });
+
+  if (RepeatedSequenceLocs.size() < MinRepeats)
+    return std::nullopt;
+
+  unsigned SequenceSize = 0;
+  for (const MachineInstr &MI : RepeatedSequenceLocs[0])
+    SequenceSize += getInstSizeInBytes(MI);
+
+  // gosub is 4 bytes; under bitslice interrupts BitSliceInjection (which
+  // runs after the outliner) will prepend a 4-byte gotol_bs poll to each
+  // new gosub site. FrameOverhead is the single trailing RET (4 bytes); no
+  // poll is added to RET (not a branch or call) and there is no prologue.
+  bool Bitslice = RepeatedSequenceLocs[0]
+                      .getMF()
+                      ->getSubtarget<EZHSubtarget>()
+                      .hasBitSliceInterrupts();
+  unsigned CallOverhead = Bitslice ? 8 : 4;
+  for (outliner::Candidate &C : RepeatedSequenceLocs)
+    C.setCallInfo(EZHOutlinerDefault, CallOverhead);
+
+  return std::make_unique<outliner::OutlinedFunction>(
+      RepeatedSequenceLocs, SequenceSize, /*FrameOverhead=*/4,
+      EZHOutlinerDefault);
+}
+
+bool EZHInstrInfo::isFunctionSafeToOutlineFrom(
+    MachineFunction &MF, bool OutlineFromLinkOnceODRs) const {
+  const Function &F = MF.getFunction();
+  // The interrupt handler must never be restructured; and never outline
+  // across a section boundary or from a naked function.
+  if (MF.getName() == "bitslice_handler")
+    return false;
+  if (F.hasSection() || F.hasFnAttribute(Attribute::Naked))
+    return false;
+  if (!OutlineFromLinkOnceODRs && F.hasLinkOnceODRLinkage())
+    return false;
+  return true;
+}
+
+bool EZHInstrInfo::shouldOutlineFromFunctionByDefault(
+    MachineFunction &MF) const {
+  // Default-on only at -Oz, matching the upstream AArch64/RISC-V
+  // convention: outlining captures just intra-module repetition, which is
+  // sparse in typical single-module EZH firmware (measured ~0.004% of
+  // .text across the 3078-test corpus), so it is not worth the pass cost by
+  // default at -Os. It stays available at any level via
+  // -mllvm -enable-machine-outliner and is fully correct when enabled
+  // (validated across the whole -Os corpus).
+  return MF.getFunction().hasMinSize();
+}
+
+void EZHInstrInfo::buildOutlinedFrame(
+    MachineBasicBlock &MBB, MachineFunction &MF,
+    const outliner::OutlinedFunction &OF) const {
+  // The caller's gosub left the return address in RA; the body is a strict
+  // leaf (no whitelisted instruction is a branch or call), so nothing
+  // clobbers it. Declare RA live-in for the verifier and append the return.
+  MBB.addLiveIn(EZH::RA);
+  MBB.insert(MBB.end(), BuildMI(MF, DebugLoc(), get(EZH::RET)));
+}
+
+MachineBasicBlock::iterator EZHInstrInfo::insertOutlinedCall(
+    Module &M, MachineBasicBlock &MBB, MachineBasicBlock::iterator &It,
+    MachineFunction &MF, outliner::Candidate &C) const {
+  // MF is the outlined function being called (the pass passes it here);
+  // gosub to its symbol. No call-frame setup: gosub does not touch SP and
+  // the outlined body is stack-neutral, so every SP+imm access in the
+  // caller still hits the same offset.
+  It = MBB.insert(It, BuildMI(MF, DebugLoc(), get(EZH::OUTLINE_CALL))
+                          .addGlobalAddress(M.getNamedValue(MF.getName())));
+  return It;
 }

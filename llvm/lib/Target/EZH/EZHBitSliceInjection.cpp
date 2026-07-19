@@ -28,6 +28,7 @@
 #include "MCTargetDesc/EZHMCTargetDesc.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
 
@@ -58,7 +59,58 @@ public:
 
         bool IsBranchOrCall = MI.isBranch() || MI.isCall();
 
+        // A predicated (conditional) tail call must never reach this pass in
+        // bitslice mode: it keeps RA live across a fall-through, so RA has no
+        // safe stack slot for the poll to hide in. The codegen invariant is
+        // that bitslice mode force-saves RA (determineCalleeSaves) and lowers a
+        // conditional tail call to popd_cc pc + an unconditional goto instead,
+        // so only the unconditional TCRETURN* forms (handled below) appear
+        // here. Enforce it unconditionally (not just an assert): a violation
+        // would otherwise silently inject a gotol_bs that clobbers the live
+        // RA -- a wrong-return-address miscompile. The IsBranchOrCall gate
+        // keeps the four compares off ordinary instructions without losing
+        // coverage (every _CC twin is isCall). report_fatal_error keeps
+        // release compilers loud too.
+        if (IsBranchOrCall && (MI.getOpcode() == EZH::TCRETURN_CC ||
+                               MI.getOpcode() == EZH::TCRETURNExt_CC ||
+                               MI.getOpcode() == EZH::TCRETURN_REG_CC ||
+                               MI.getOpcode() == EZH::TCRETURN_MEM_CC))
+          report_fatal_error(
+              "EZH: predicated tail call in a bitslice-interrupt function");
+
+        // A tail call still needs its poll -- a cycle of unconditional
+        // tail calls would otherwise never enter the handler -- but the
+        // injection cannot go directly before it: the epilogue has already
+        // restored the live return address into RA and gotol_bs writes RA.
+        // Instead, inject before the epilogue (the contiguous FrameDestroy
+        // run ending at the tail call), where RA's value still sits safely
+        // in its stack slot. determineCalleeSaves guarantees that a
+        // bitslice-mode function containing a tail call saves RA, so that
+        // slot always exists.
+        if (MI.getOpcode() == EZH::TCRETURN ||
+            MI.getOpcode() == EZH::TCRETURNExt ||
+            MI.getOpcode() == EZH::TCRETURN_REG ||
+            MI.getOpcode() == EZH::TCRETURN_MEM) {
+          MachineBasicBlock::iterator InsertPt = MI.getIterator();
+          while (InsertPt != MBB.begin() &&
+                 std::prev(InsertPt)->getFlag(MachineInstr::FrameDestroy))
+            --InsertPt;
+          BuildMI(MBB, InsertPt, MI.getDebugLoc(), TII->get(EZH::GOTOL))
+              .addExternalSymbol("bitslice_handler")
+              .addImm(EZHCC::ICC_BS);
+          Changed = true;
+          continue;
+        }
+
         if (IsBranchOrCall) {
+          // A block-ending run of terminators (a conditional GOTO_CC then
+          // the fall-through GOTO) needs only one poll, before the first of
+          // them; injecting before a later branch would wedge the poll (a
+          // non-terminator conditional call) between two terminators. So
+          // skip a branch whose predecessor is already a terminator.
+          if (MI.isBranch() && MI.getIterator() != MBB.begin() &&
+              std::prev(MI.getIterator())->isTerminator())
+            continue;
           BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(EZH::GOTOL))
               .addExternalSymbol("bitslice_handler")
               .addImm(EZHCC::ICC_BS);

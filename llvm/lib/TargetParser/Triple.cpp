@@ -353,6 +353,9 @@ StringRef Triple::getArchTypePrefix(ArchType Kind) {
 
   case xtensa:
     return "xtensa";
+
+  case ezh:
+    return "ezh";
   }
 }
 

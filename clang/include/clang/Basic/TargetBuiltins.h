@@ -110,6 +110,17 @@ namespace clang {
   };
   }
 
+  /// EZH builtins
+  namespace EZH {
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+#define GET_BUILTIN_ENUMERATORS
+#include "clang/Basic/BuiltinsEZH.inc"
+#undef GET_BUILTIN_ENUMERATORS
+    LastTSBuiltin
+  };
+  }
+
   /// PPC builtins
   namespace PPC {
     enum {
@@ -478,10 +489,11 @@ namespace clang {
 
   static constexpr uint64_t LargestBuiltinID = std::max<uint64_t>(
       {ARM::LastTSBuiltin, AArch64::LastTSBuiltin, BPF::LastTSBuiltin,
-       PPC::LastTSBuiltin, NVPTX::LastTSBuiltin, AMDGPU::LastTSBuiltin,
-       X86::LastTSBuiltin, VE::LastTSBuiltin, RISCV::LastTSBuiltin,
-       Hexagon::LastTSBuiltin, Mips::LastTSBuiltin, XCore::LastTSBuiltin,
-       SystemZ::LastTSBuiltin, WebAssembly::LastTSBuiltin});
+       EZH::LastTSBuiltin, PPC::LastTSBuiltin, NVPTX::LastTSBuiltin,
+       AMDGPU::LastTSBuiltin, X86::LastTSBuiltin, VE::LastTSBuiltin,
+       RISCV::LastTSBuiltin, Hexagon::LastTSBuiltin, Mips::LastTSBuiltin,
+       XCore::LastTSBuiltin, SystemZ::LastTSBuiltin,
+       WebAssembly::LastTSBuiltin});
 
 } // end namespace clang.
 

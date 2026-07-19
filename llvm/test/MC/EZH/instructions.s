@@ -79425,773 +79425,773 @@
 # CHECK: encoding: [0xfc,0xb5,0x00,0x00]
 # DISASM: hold_ex
 
-    vectored_hold r0
+    vectored_hold r0, r0
 # CHECK: encoding: [0x1c,0x00,0x00,0x00]
-# DISASM: vectored_hold r0
+# DISASM: vectored_hold r0, r0
 
-    vectored_hold r2
+    vectored_hold r2, r2
 # CHECK: encoding: [0x1c,0x08,0x20,0x00]
-# DISASM: vectored_hold r2
+# DISASM: vectored_hold r2, r2
 
-    vectored_hold r5
+    vectored_hold r5, r5
 # CHECK: encoding: [0x1c,0x14,0x50,0x00]
-# DISASM: vectored_hold r5
+# DISASM: vectored_hold r5, r5
 
-    vectored_hold r7
+    vectored_hold r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x70,0x00]
-# DISASM: vectored_hold r7
+# DISASM: vectored_hold r7, r7
 
-    vectored_hold r1
+    vectored_hold r1, r1
 # CHECK: encoding: [0x1c,0x04,0x10,0x00]
-# DISASM: vectored_hold r1
+# DISASM: vectored_hold r1, r1
 
-    vectored_hold r0
+    vectored_hold r0, r0
 # CHECK: encoding: [0x1c,0x00,0x00,0x00]
-# DISASM: vectored_hold r0
+# DISASM: vectored_hold r0, r0
 
-    vectored_hold r2
+    vectored_hold r2, r2
 # CHECK: encoding: [0x1c,0x08,0x20,0x00]
-# DISASM: vectored_hold r2
+# DISASM: vectored_hold r2, r2
 
-    vectored_hold r5
+    vectored_hold r5, r5
 # CHECK: encoding: [0x1c,0x14,0x50,0x00]
-# DISASM: vectored_hold r5
+# DISASM: vectored_hold r5, r5
 
-    vectored_hold r7
+    vectored_hold r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x70,0x00]
-# DISASM: vectored_hold r7
+# DISASM: vectored_hold r7, r7
 
-    vectored_hold r1
+    vectored_hold r1, r1
 # CHECK: encoding: [0x1c,0x04,0x10,0x00]
-# DISASM: vectored_hold r1
+# DISASM: vectored_hold r1, r1
 
-    vectored_hold r0
+    vectored_hold r0, r0
 # CHECK: encoding: [0x1c,0x00,0x00,0x00]
-# DISASM: vectored_hold r0
+# DISASM: vectored_hold r0, r0
 
-    vectored_hold r2
+    vectored_hold r2, r2
 # CHECK: encoding: [0x1c,0x08,0x20,0x00]
-# DISASM: vectored_hold r2
+# DISASM: vectored_hold r2, r2
 
-    vectored_hold r5
+    vectored_hold r5, r5
 # CHECK: encoding: [0x1c,0x14,0x50,0x00]
-# DISASM: vectored_hold r5
+# DISASM: vectored_hold r5, r5
 
-    vectored_hold r7
+    vectored_hold r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x70,0x00]
-# DISASM: vectored_hold r7
+# DISASM: vectored_hold r7, r7
 
-    vectored_hold r1
+    vectored_hold r1, r1
 # CHECK: encoding: [0x1c,0x04,0x10,0x00]
-# DISASM: vectored_hold r1
+# DISASM: vectored_hold r1, r1
 
-    vectored_hold r0
+    vectored_hold r0, r0
 # CHECK: encoding: [0x1c,0x00,0x00,0x00]
-# DISASM: vectored_hold r0
+# DISASM: vectored_hold r0, r0
 
-    vectored_hold_ze r0
+    vectored_hold_ze r0, r0
 # CHECK: encoding: [0x3c,0x00,0x00,0x00]
-# DISASM: vectored_hold_ze r0
+# DISASM: vectored_hold_ze r0, r0
 
-    vectored_hold_nz r2
+    vectored_hold_nz r2, r2
 # CHECK: encoding: [0x5c,0x08,0x20,0x00]
-# DISASM: vectored_hold_nz r2
+# DISASM: vectored_hold_nz r2, r2
 
-    vectored_hold_po r5
+    vectored_hold_po r5, r5
 # CHECK: encoding: [0x7c,0x14,0x50,0x00]
-# DISASM: vectored_hold_po r5
+# DISASM: vectored_hold_po r5, r5
 
-    vectored_hold_ne r7
+    vectored_hold_ne r7, r7
 # CHECK: encoding: [0x9c,0x1c,0x70,0x00]
-# DISASM: vectored_hold_ne r7
+# DISASM: vectored_hold_ne r7, r7
 
-    vectored_hold r1
+    vectored_hold r1, r1
 # CHECK: encoding: [0x1c,0x04,0x10,0x00]
-# DISASM: vectored_hold r1
+# DISASM: vectored_hold r1, r1
 
-    vectored_hold_az r0
+    vectored_hold_az r0, r0
 # CHECK: encoding: [0xbc,0x00,0x00,0x00]
-# DISASM: vectored_hold_az r0
+# DISASM: vectored_hold_az r0, r0
 
-    vectored_hold_zb r2
+    vectored_hold_zb r2, r2
 # CHECK: encoding: [0xdc,0x08,0x20,0x00]
-# DISASM: vectored_hold_zb r2
+# DISASM: vectored_hold_zb r2, r2
 
-    vectored_hold_ca r5
+    vectored_hold_ca r5, r5
 # CHECK: encoding: [0xfc,0x14,0x50,0x00]
-# DISASM: vectored_hold_ca r5
+# DISASM: vectored_hold_ca r5, r5
 
-    vectored_hold_nc r7
+    vectored_hold_nc r7, r7
 # CHECK: encoding: [0x1c,0x1d,0x70,0x00]
-# DISASM: vectored_hold_nc r7
+# DISASM: vectored_hold_nc r7, r7
 
-    vectored_hold_cz r1
+    vectored_hold_cz r1, r1
 # CHECK: encoding: [0x3c,0x05,0x10,0x00]
-# DISASM: vectored_hold_cz r1
+# DISASM: vectored_hold_cz r1, r1
 
-    vectored_hold_spo r0
+    vectored_hold_spo r0, r0
 # CHECK: encoding: [0x5c,0x01,0x00,0x00]
-# DISASM: vectored_hold_spo r0
+# DISASM: vectored_hold_spo r0, r0
 
-    vectored_hold_sne r2
+    vectored_hold_sne r2, r2
 # CHECK: encoding: [0x7c,0x09,0x20,0x00]
-# DISASM: vectored_hold_sne r2
+# DISASM: vectored_hold_sne r2, r2
 
-    vectored_hold_nbs r5
+    vectored_hold_nbs r5, r5
 # CHECK: encoding: [0x9c,0x15,0x50,0x00]
-# DISASM: vectored_hold_nbs r5
+# DISASM: vectored_hold_nbs r5, r5
 
-    vectored_hold_nex r7
+    vectored_hold_nex r7, r7
 # CHECK: encoding: [0xbc,0x1d,0x70,0x00]
-# DISASM: vectored_hold_nex r7
+# DISASM: vectored_hold_nex r7, r7
 
-    vectored_hold_bs r1
+    vectored_hold_bs r1, r1
 # CHECK: encoding: [0xdc,0x05,0x10,0x00]
-# DISASM: vectored_hold_bs r1
+# DISASM: vectored_hold_bs r1, r1
 
-    vectored_hold_ex r0
+    vectored_hold_ex r0, r0
 # CHECK: encoding: [0xfc,0x01,0x00,0x00]
-# DISASM: vectored_hold_ex r0
+# DISASM: vectored_hold_ex r0, r0
 
-    vectored_hold_nra r0
+    vectored_hold_nra r0, r0
 # CHECK: encoding: [0x1c,0x00,0x04,0x00]
-# DISASM: vectored_hold_nra r0
+# DISASM: vectored_hold_nra r0, r0
 
-    vectored_hold_nra r2
+    vectored_hold_nra r2, r2
 # CHECK: encoding: [0x1c,0x08,0x24,0x00]
-# DISASM: vectored_hold_nra r2
+# DISASM: vectored_hold_nra r2, r2
 
-    vectored_hold_nra r5
+    vectored_hold_nra r5, r5
 # CHECK: encoding: [0x1c,0x14,0x54,0x00]
-# DISASM: vectored_hold_nra r5
+# DISASM: vectored_hold_nra r5, r5
 
-    vectored_hold_nra r7
+    vectored_hold_nra r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x74,0x00]
-# DISASM: vectored_hold_nra r7
+# DISASM: vectored_hold_nra r7, r7
 
-    vectored_hold_nra r1
+    vectored_hold_nra r1, r1
 # CHECK: encoding: [0x1c,0x04,0x14,0x00]
-# DISASM: vectored_hold_nra r1
+# DISASM: vectored_hold_nra r1, r1
 
-    vectored_hold_nra r0
+    vectored_hold_nra r0, r0
 # CHECK: encoding: [0x1c,0x00,0x04,0x00]
-# DISASM: vectored_hold_nra r0
+# DISASM: vectored_hold_nra r0, r0
 
-    vectored_hold_nra r2
+    vectored_hold_nra r2, r2
 # CHECK: encoding: [0x1c,0x08,0x24,0x00]
-# DISASM: vectored_hold_nra r2
+# DISASM: vectored_hold_nra r2, r2
 
-    vectored_hold_nra r5
+    vectored_hold_nra r5, r5
 # CHECK: encoding: [0x1c,0x14,0x54,0x00]
-# DISASM: vectored_hold_nra r5
+# DISASM: vectored_hold_nra r5, r5
 
-    vectored_hold_nra r7
+    vectored_hold_nra r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x74,0x00]
-# DISASM: vectored_hold_nra r7
+# DISASM: vectored_hold_nra r7, r7
 
-    vectored_hold_nra r1
+    vectored_hold_nra r1, r1
 # CHECK: encoding: [0x1c,0x04,0x14,0x00]
-# DISASM: vectored_hold_nra r1
+# DISASM: vectored_hold_nra r1, r1
 
-    vectored_hold_nra r0
+    vectored_hold_nra r0, r0
 # CHECK: encoding: [0x1c,0x00,0x04,0x00]
-# DISASM: vectored_hold_nra r0
+# DISASM: vectored_hold_nra r0, r0
 
-    vectored_hold_nra r2
+    vectored_hold_nra r2, r2
 # CHECK: encoding: [0x1c,0x08,0x24,0x00]
-# DISASM: vectored_hold_nra r2
+# DISASM: vectored_hold_nra r2, r2
 
-    vectored_hold_nra r5
+    vectored_hold_nra r5, r5
 # CHECK: encoding: [0x1c,0x14,0x54,0x00]
-# DISASM: vectored_hold_nra r5
+# DISASM: vectored_hold_nra r5, r5
 
-    vectored_hold_nra r7
+    vectored_hold_nra r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x74,0x00]
-# DISASM: vectored_hold_nra r7
+# DISASM: vectored_hold_nra r7, r7
 
-    vectored_hold_nra r1
+    vectored_hold_nra r1, r1
 # CHECK: encoding: [0x1c,0x04,0x14,0x00]
-# DISASM: vectored_hold_nra r1
+# DISASM: vectored_hold_nra r1, r1
 
-    vectored_hold_nra r0
+    vectored_hold_nra r0, r0
 # CHECK: encoding: [0x1c,0x00,0x04,0x00]
-# DISASM: vectored_hold_nra r0
+# DISASM: vectored_hold_nra r0, r0
 
-    vectored_hold_lv r0
+    vectored_hold_lv r0, r0
 # CHECK: encoding: [0x1c,0x00,0x08,0x00]
-# DISASM: vectored_hold_lv r0
+# DISASM: vectored_hold_lv r0, r0
 
-    vectored_hold_lv r2
+    vectored_hold_lv r2, r2
 # CHECK: encoding: [0x1c,0x08,0x28,0x00]
-# DISASM: vectored_hold_lv r2
+# DISASM: vectored_hold_lv r2, r2
 
-    vectored_hold_lv r5
+    vectored_hold_lv r5, r5
 # CHECK: encoding: [0x1c,0x14,0x58,0x00]
-# DISASM: vectored_hold_lv r5
+# DISASM: vectored_hold_lv r5, r5
 
-    vectored_hold_lv r7
+    vectored_hold_lv r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x78,0x00]
-# DISASM: vectored_hold_lv r7
+# DISASM: vectored_hold_lv r7, r7
 
-    vectored_hold_lv r1
+    vectored_hold_lv r1, r1
 # CHECK: encoding: [0x1c,0x04,0x18,0x00]
-# DISASM: vectored_hold_lv r1
+# DISASM: vectored_hold_lv r1, r1
 
-    vectored_hold_lv r0
+    vectored_hold_lv r0, r0
 # CHECK: encoding: [0x1c,0x00,0x08,0x00]
-# DISASM: vectored_hold_lv r0
+# DISASM: vectored_hold_lv r0, r0
 
-    vectored_hold_lv r2
+    vectored_hold_lv r2, r2
 # CHECK: encoding: [0x1c,0x08,0x28,0x00]
-# DISASM: vectored_hold_lv r2
+# DISASM: vectored_hold_lv r2, r2
 
-    vectored_hold_lv r5
+    vectored_hold_lv r5, r5
 # CHECK: encoding: [0x1c,0x14,0x58,0x00]
-# DISASM: vectored_hold_lv r5
+# DISASM: vectored_hold_lv r5, r5
 
-    vectored_hold_lv r7
+    vectored_hold_lv r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x78,0x00]
-# DISASM: vectored_hold_lv r7
+# DISASM: vectored_hold_lv r7, r7
 
-    vectored_hold_lv r1
+    vectored_hold_lv r1, r1
 # CHECK: encoding: [0x1c,0x04,0x18,0x00]
-# DISASM: vectored_hold_lv r1
+# DISASM: vectored_hold_lv r1, r1
 
-    vectored_hold_lv r0
+    vectored_hold_lv r0, r0
 # CHECK: encoding: [0x1c,0x00,0x08,0x00]
-# DISASM: vectored_hold_lv r0
+# DISASM: vectored_hold_lv r0, r0
 
-    vectored_hold_lv r2
+    vectored_hold_lv r2, r2
 # CHECK: encoding: [0x1c,0x08,0x28,0x00]
-# DISASM: vectored_hold_lv r2
+# DISASM: vectored_hold_lv r2, r2
 
-    vectored_hold_lv r5
+    vectored_hold_lv r5, r5
 # CHECK: encoding: [0x1c,0x14,0x58,0x00]
-# DISASM: vectored_hold_lv r5
+# DISASM: vectored_hold_lv r5, r5
 
-    vectored_hold_lv r7
+    vectored_hold_lv r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x78,0x00]
-# DISASM: vectored_hold_lv r7
+# DISASM: vectored_hold_lv r7, r7
 
-    vectored_hold_lv r1
+    vectored_hold_lv r1, r1
 # CHECK: encoding: [0x1c,0x04,0x18,0x00]
-# DISASM: vectored_hold_lv r1
+# DISASM: vectored_hold_lv r1, r1
 
-    vectored_hold_lv r0
+    vectored_hold_lv r0, r0
 # CHECK: encoding: [0x1c,0x00,0x08,0x00]
-# DISASM: vectored_hold_lv r0
+# DISASM: vectored_hold_lv r0, r0
 
-    vectored_hold_lv_ze r0
+    vectored_hold_lv_ze r0, r0
 # CHECK: encoding: [0x3c,0x00,0x08,0x00]
-# DISASM: vectored_hold_lv_ze r0
+# DISASM: vectored_hold_lv_ze r0, r0
 
-    vectored_hold_lv_nz r2
+    vectored_hold_lv_nz r2, r2
 # CHECK: encoding: [0x5c,0x08,0x28,0x00]
-# DISASM: vectored_hold_lv_nz r2
+# DISASM: vectored_hold_lv_nz r2, r2
 
-    vectored_hold_lv_po r5
+    vectored_hold_lv_po r5, r5
 # CHECK: encoding: [0x7c,0x14,0x58,0x00]
-# DISASM: vectored_hold_lv_po r5
+# DISASM: vectored_hold_lv_po r5, r5
 
-    vectored_hold_lv_ne r7
+    vectored_hold_lv_ne r7, r7
 # CHECK: encoding: [0x9c,0x1c,0x78,0x00]
-# DISASM: vectored_hold_lv_ne r7
+# DISASM: vectored_hold_lv_ne r7, r7
 
-    vectored_hold_lv r1
+    vectored_hold_lv r1, r1
 # CHECK: encoding: [0x1c,0x04,0x18,0x00]
-# DISASM: vectored_hold_lv r1
+# DISASM: vectored_hold_lv r1, r1
 
-    vectored_hold_lv_az r0
+    vectored_hold_lv_az r0, r0
 # CHECK: encoding: [0xbc,0x00,0x08,0x00]
-# DISASM: vectored_hold_lv_az r0
+# DISASM: vectored_hold_lv_az r0, r0
 
-    vectored_hold_lv_zb r2
+    vectored_hold_lv_zb r2, r2
 # CHECK: encoding: [0xdc,0x08,0x28,0x00]
-# DISASM: vectored_hold_lv_zb r2
+# DISASM: vectored_hold_lv_zb r2, r2
 
-    vectored_hold_lv_ca r5
+    vectored_hold_lv_ca r5, r5
 # CHECK: encoding: [0xfc,0x14,0x58,0x00]
-# DISASM: vectored_hold_lv_ca r5
+# DISASM: vectored_hold_lv_ca r5, r5
 
-    vectored_hold_lv_nc r7
+    vectored_hold_lv_nc r7, r7
 # CHECK: encoding: [0x1c,0x1d,0x78,0x00]
-# DISASM: vectored_hold_lv_nc r7
+# DISASM: vectored_hold_lv_nc r7, r7
 
-    vectored_hold_lv_cz r1
+    vectored_hold_lv_cz r1, r1
 # CHECK: encoding: [0x3c,0x05,0x18,0x00]
-# DISASM: vectored_hold_lv_cz r1
+# DISASM: vectored_hold_lv_cz r1, r1
 
-    vectored_hold_lv_spo r0
+    vectored_hold_lv_spo r0, r0
 # CHECK: encoding: [0x5c,0x01,0x08,0x00]
-# DISASM: vectored_hold_lv_spo r0
+# DISASM: vectored_hold_lv_spo r0, r0
 
-    vectored_hold_lv_sne r2
+    vectored_hold_lv_sne r2, r2
 # CHECK: encoding: [0x7c,0x09,0x28,0x00]
-# DISASM: vectored_hold_lv_sne r2
+# DISASM: vectored_hold_lv_sne r2, r2
 
-    vectored_hold_lv_nbs r5
+    vectored_hold_lv_nbs r5, r5
 # CHECK: encoding: [0x9c,0x15,0x58,0x00]
-# DISASM: vectored_hold_lv_nbs r5
+# DISASM: vectored_hold_lv_nbs r5, r5
 
-    vectored_hold_lv_nex r7
+    vectored_hold_lv_nex r7, r7
 # CHECK: encoding: [0xbc,0x1d,0x78,0x00]
-# DISASM: vectored_hold_lv_nex r7
+# DISASM: vectored_hold_lv_nex r7, r7
 
-    vectored_hold_lv_bs r1
+    vectored_hold_lv_bs r1, r1
 # CHECK: encoding: [0xdc,0x05,0x18,0x00]
-# DISASM: vectored_hold_lv_bs r1
+# DISASM: vectored_hold_lv_bs r1, r1
 
-    vectored_hold_lv_ex r0
+    vectored_hold_lv_ex r0, r0
 # CHECK: encoding: [0xfc,0x01,0x08,0x00]
-# DISASM: vectored_hold_lv_ex r0
+# DISASM: vectored_hold_lv_ex r0, r0
 
-    vectored_hold_lv_nra r0
+    vectored_hold_lv_nra r0, r0
 # CHECK: encoding: [0x1c,0x00,0x0c,0x00]
-# DISASM: vectored_hold_lv_nra r0
+# DISASM: vectored_hold_lv_nra r0, r0
 
-    vectored_hold_lv_nra r2
+    vectored_hold_lv_nra r2, r2
 # CHECK: encoding: [0x1c,0x08,0x2c,0x00]
-# DISASM: vectored_hold_lv_nra r2
+# DISASM: vectored_hold_lv_nra r2, r2
 
-    vectored_hold_lv_nra r5
+    vectored_hold_lv_nra r5, r5
 # CHECK: encoding: [0x1c,0x14,0x5c,0x00]
-# DISASM: vectored_hold_lv_nra r5
+# DISASM: vectored_hold_lv_nra r5, r5
 
-    vectored_hold_lv_nra r7
+    vectored_hold_lv_nra r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x7c,0x00]
-# DISASM: vectored_hold_lv_nra r7
+# DISASM: vectored_hold_lv_nra r7, r7
 
-    vectored_hold_lv_nra r1
+    vectored_hold_lv_nra r1, r1
 # CHECK: encoding: [0x1c,0x04,0x1c,0x00]
-# DISASM: vectored_hold_lv_nra r1
+# DISASM: vectored_hold_lv_nra r1, r1
 
-    vectored_hold_lv_nra r0
+    vectored_hold_lv_nra r0, r0
 # CHECK: encoding: [0x1c,0x00,0x0c,0x00]
-# DISASM: vectored_hold_lv_nra r0
+# DISASM: vectored_hold_lv_nra r0, r0
 
-    vectored_hold_lv_nra r2
+    vectored_hold_lv_nra r2, r2
 # CHECK: encoding: [0x1c,0x08,0x2c,0x00]
-# DISASM: vectored_hold_lv_nra r2
+# DISASM: vectored_hold_lv_nra r2, r2
 
-    vectored_hold_lv_nra r5
+    vectored_hold_lv_nra r5, r5
 # CHECK: encoding: [0x1c,0x14,0x5c,0x00]
-# DISASM: vectored_hold_lv_nra r5
+# DISASM: vectored_hold_lv_nra r5, r5
 
-    vectored_hold_lv_nra r7
+    vectored_hold_lv_nra r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x7c,0x00]
-# DISASM: vectored_hold_lv_nra r7
+# DISASM: vectored_hold_lv_nra r7, r7
 
-    vectored_hold_lv_nra r1
+    vectored_hold_lv_nra r1, r1
 # CHECK: encoding: [0x1c,0x04,0x1c,0x00]
-# DISASM: vectored_hold_lv_nra r1
+# DISASM: vectored_hold_lv_nra r1, r1
 
-    vectored_hold_lv_nra r0
+    vectored_hold_lv_nra r0, r0
 # CHECK: encoding: [0x1c,0x00,0x0c,0x00]
-# DISASM: vectored_hold_lv_nra r0
+# DISASM: vectored_hold_lv_nra r0, r0
 
-    vectored_hold_lv_nra r2
+    vectored_hold_lv_nra r2, r2
 # CHECK: encoding: [0x1c,0x08,0x2c,0x00]
-# DISASM: vectored_hold_lv_nra r2
+# DISASM: vectored_hold_lv_nra r2, r2
 
-    vectored_hold_lv_nra r5
+    vectored_hold_lv_nra r5, r5
 # CHECK: encoding: [0x1c,0x14,0x5c,0x00]
-# DISASM: vectored_hold_lv_nra r5
+# DISASM: vectored_hold_lv_nra r5, r5
 
-    vectored_hold_lv_nra r7
+    vectored_hold_lv_nra r7, r7
 # CHECK: encoding: [0x1c,0x1c,0x7c,0x00]
-# DISASM: vectored_hold_lv_nra r7
+# DISASM: vectored_hold_lv_nra r7, r7
 
-    vectored_hold_lv_nra r1
+    vectored_hold_lv_nra r1, r1
 # CHECK: encoding: [0x1c,0x04,0x1c,0x00]
-# DISASM: vectored_hold_lv_nra r1
+# DISASM: vectored_hold_lv_nra r1, r1
 
-    vectored_hold_lv_nra r0
+    vectored_hold_lv_nra r0, r0
 # CHECK: encoding: [0x1c,0x00,0x0c,0x00]
-# DISASM: vectored_hold_lv_nra r0
+# DISASM: vectored_hold_lv_nra r0, r0
 
-    acc_vectored_hold r0, 0x0
+    acc_vectored_hold r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x00,0x00]
-# DISASM: acc_vectored_hold r0, 0
+# DISASM: acc_vectored_hold r0, r0, 0
 
-    acc_vectored_hold r2, 0x7f
+    acc_vectored_hold r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x20,0x7f]
-# DISASM: acc_vectored_hold r2, 127
+# DISASM: acc_vectored_hold r2, r2, 127
 
-    acc_vectored_hold r5, 0xff
+    acc_vectored_hold r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold r5, -1
+# DISASM: acc_vectored_hold r5, r5, 255
 
-    acc_vectored_hold r7, 0x40
+    acc_vectored_hold r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x70,0x40]
-# DISASM: acc_vectored_hold r7, 64
+# DISASM: acc_vectored_hold r7, r7, 64
 
-    acc_vectored_hold r1, 0xa
+    acc_vectored_hold r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x10,0x0a]
-# DISASM: acc_vectored_hold r1, 10
+# DISASM: acc_vectored_hold r1, r1, 10
 
-    acc_vectored_hold r0, 0x0
+    acc_vectored_hold r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x00,0x00]
-# DISASM: acc_vectored_hold r0, 0
+# DISASM: acc_vectored_hold r0, r0, 0
 
-    acc_vectored_hold r2, 0x7f
+    acc_vectored_hold r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x20,0x7f]
-# DISASM: acc_vectored_hold r2, 127
+# DISASM: acc_vectored_hold r2, r2, 127
 
-    acc_vectored_hold r5, 0xff
+    acc_vectored_hold r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold r5, -1
+# DISASM: acc_vectored_hold r5, r5, 255
 
-    acc_vectored_hold r7, 0x40
+    acc_vectored_hold r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x70,0x40]
-# DISASM: acc_vectored_hold r7, 64
+# DISASM: acc_vectored_hold r7, r7, 64
 
-    acc_vectored_hold r1, 0xa
+    acc_vectored_hold r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x10,0x0a]
-# DISASM: acc_vectored_hold r1, 10
+# DISASM: acc_vectored_hold r1, r1, 10
 
-    acc_vectored_hold r0, 0x0
+    acc_vectored_hold r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x00,0x00]
-# DISASM: acc_vectored_hold r0, 0
+# DISASM: acc_vectored_hold r0, r0, 0
 
-    acc_vectored_hold r2, 0x7f
+    acc_vectored_hold r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x20,0x7f]
-# DISASM: acc_vectored_hold r2, 127
+# DISASM: acc_vectored_hold r2, r2, 127
 
-    acc_vectored_hold r5, 0xff
+    acc_vectored_hold r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold r5, -1
+# DISASM: acc_vectored_hold r5, r5, 255
 
-    acc_vectored_hold r7, 0x40
+    acc_vectored_hold r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x70,0x40]
-# DISASM: acc_vectored_hold r7, 64
+# DISASM: acc_vectored_hold r7, r7, 64
 
-    acc_vectored_hold r1, 0xa
+    acc_vectored_hold r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x10,0x0a]
-# DISASM: acc_vectored_hold r1, 10
+# DISASM: acc_vectored_hold r1, r1, 10
 
-    acc_vectored_hold r0, 0x0
+    acc_vectored_hold r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x00,0x00]
-# DISASM: acc_vectored_hold r0, 0
+# DISASM: acc_vectored_hold r0, r0, 0
 
-    acc_vectored_hold_ze r0, 0x0
+    acc_vectored_hold_ze r0, r0, 0x0
 # CHECK: encoding: [0x3c,0x02,0x00,0x00]
-# DISASM: acc_vectored_hold_ze r0, 0
+# DISASM: acc_vectored_hold_ze r0, r0, 0
 
-    acc_vectored_hold_nz r2, 0x7f
+    acc_vectored_hold_nz r2, r2, 0x7f
 # CHECK: encoding: [0x5c,0x0a,0x20,0x7f]
-# DISASM: acc_vectored_hold_nz r2, 127
+# DISASM: acc_vectored_hold_nz r2, r2, 127
 
-    acc_vectored_hold_po r5, 0xff
+    acc_vectored_hold_po r5, r5, 0xff
 # CHECK: encoding: [0x7c,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold_po r5, -1
+# DISASM: acc_vectored_hold_po r5, r5, 255
 
-    acc_vectored_hold_ne r7, 0x40
+    acc_vectored_hold_ne r7, r7, 0x40
 # CHECK: encoding: [0x9c,0x1e,0x70,0x40]
-# DISASM: acc_vectored_hold_ne r7, 64
+# DISASM: acc_vectored_hold_ne r7, r7, 64
 
-    acc_vectored_hold r1, 0xa
+    acc_vectored_hold r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x10,0x0a]
-# DISASM: acc_vectored_hold r1, 10
+# DISASM: acc_vectored_hold r1, r1, 10
 
-    acc_vectored_hold_az r0, 0x0
+    acc_vectored_hold_az r0, r0, 0x0
 # CHECK: encoding: [0xbc,0x02,0x00,0x00]
-# DISASM: acc_vectored_hold_az r0, 0
+# DISASM: acc_vectored_hold_az r0, r0, 0
 
-    acc_vectored_hold_zb r2, 0x7f
+    acc_vectored_hold_zb r2, r2, 0x7f
 # CHECK: encoding: [0xdc,0x0a,0x20,0x7f]
-# DISASM: acc_vectored_hold_zb r2, 127
+# DISASM: acc_vectored_hold_zb r2, r2, 127
 
-    acc_vectored_hold_ca r5, 0xff
+    acc_vectored_hold_ca r5, r5, 0xff
 # CHECK: encoding: [0xfc,0x16,0x50,0xff]
-# DISASM: acc_vectored_hold_ca r5, -1
+# DISASM: acc_vectored_hold_ca r5, r5, 255
 
-    acc_vectored_hold_nc r7, 0x40
+    acc_vectored_hold_nc r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1f,0x70,0x40]
-# DISASM: acc_vectored_hold_nc r7, 64
+# DISASM: acc_vectored_hold_nc r7, r7, 64
 
-    acc_vectored_hold_cz r1, 0xa
+    acc_vectored_hold_cz r1, r1, 0xa
 # CHECK: encoding: [0x3c,0x07,0x10,0x0a]
-# DISASM: acc_vectored_hold_cz r1, 10
+# DISASM: acc_vectored_hold_cz r1, r1, 10
 
-    acc_vectored_hold_spo r0, 0x0
+    acc_vectored_hold_spo r0, r0, 0x0
 # CHECK: encoding: [0x5c,0x03,0x00,0x00]
-# DISASM: acc_vectored_hold_spo r0, 0
+# DISASM: acc_vectored_hold_spo r0, r0, 0
 
-    acc_vectored_hold_sne r2, 0x7f
+    acc_vectored_hold_sne r2, r2, 0x7f
 # CHECK: encoding: [0x7c,0x0b,0x20,0x7f]
-# DISASM: acc_vectored_hold_sne r2, 127
+# DISASM: acc_vectored_hold_sne r2, r2, 127
 
-    acc_vectored_hold_nbs r5, 0xff
+    acc_vectored_hold_nbs r5, r5, 0xff
 # CHECK: encoding: [0x9c,0x17,0x50,0xff]
-# DISASM: acc_vectored_hold_nbs r5, -1
+# DISASM: acc_vectored_hold_nbs r5, r5, 255
 
-    acc_vectored_hold_nex r7, 0x40
+    acc_vectored_hold_nex r7, r7, 0x40
 # CHECK: encoding: [0xbc,0x1f,0x70,0x40]
-# DISASM: acc_vectored_hold_nex r7, 64
+# DISASM: acc_vectored_hold_nex r7, r7, 64
 
-    acc_vectored_hold_bs r1, 0xa
+    acc_vectored_hold_bs r1, r1, 0xa
 # CHECK: encoding: [0xdc,0x07,0x10,0x0a]
-# DISASM: acc_vectored_hold_bs r1, 10
+# DISASM: acc_vectored_hold_bs r1, r1, 10
 
-    acc_vectored_hold_ex r0, 0x0
+    acc_vectored_hold_ex r0, r0, 0x0
 # CHECK: encoding: [0xfc,0x03,0x00,0x00]
-# DISASM: acc_vectored_hold_ex r0, 0
+# DISASM: acc_vectored_hold_ex r0, r0, 0
 
-    acc_vectored_hold_nra r0, 0x0
+    acc_vectored_hold_nra r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x04,0x00]
-# DISASM: acc_vectored_hold_nra r0, 0
+# DISASM: acc_vectored_hold_nra r0, r0, 0
 
-    acc_vectored_hold_nra r2, 0x7f
+    acc_vectored_hold_nra r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x24,0x7f]
-# DISASM: acc_vectored_hold_nra r2, 127
+# DISASM: acc_vectored_hold_nra r2, r2, 127
 
-    acc_vectored_hold_nra r5, 0xff
+    acc_vectored_hold_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x54,0xff]
-# DISASM: acc_vectored_hold_nra r5, -1
+# DISASM: acc_vectored_hold_nra r5, r5, 255
 
-    acc_vectored_hold_nra r7, 0x40
+    acc_vectored_hold_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x74,0x40]
-# DISASM: acc_vectored_hold_nra r7, 64
+# DISASM: acc_vectored_hold_nra r7, r7, 64
 
-    acc_vectored_hold_nra r1, 0xa
+    acc_vectored_hold_nra r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x14,0x0a]
-# DISASM: acc_vectored_hold_nra r1, 10
+# DISASM: acc_vectored_hold_nra r1, r1, 10
 
-    acc_vectored_hold_nra r0, 0x0
+    acc_vectored_hold_nra r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x04,0x00]
-# DISASM: acc_vectored_hold_nra r0, 0
+# DISASM: acc_vectored_hold_nra r0, r0, 0
 
-    acc_vectored_hold_nra r2, 0x7f
+    acc_vectored_hold_nra r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x24,0x7f]
-# DISASM: acc_vectored_hold_nra r2, 127
+# DISASM: acc_vectored_hold_nra r2, r2, 127
 
-    acc_vectored_hold_nra r5, 0xff
+    acc_vectored_hold_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x54,0xff]
-# DISASM: acc_vectored_hold_nra r5, -1
+# DISASM: acc_vectored_hold_nra r5, r5, 255
 
-    acc_vectored_hold_nra r7, 0x40
+    acc_vectored_hold_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x74,0x40]
-# DISASM: acc_vectored_hold_nra r7, 64
+# DISASM: acc_vectored_hold_nra r7, r7, 64
 
-    acc_vectored_hold_nra r1, 0xa
+    acc_vectored_hold_nra r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x14,0x0a]
-# DISASM: acc_vectored_hold_nra r1, 10
+# DISASM: acc_vectored_hold_nra r1, r1, 10
 
-    acc_vectored_hold_nra r0, 0x0
+    acc_vectored_hold_nra r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x04,0x00]
-# DISASM: acc_vectored_hold_nra r0, 0
+# DISASM: acc_vectored_hold_nra r0, r0, 0
 
-    acc_vectored_hold_nra r2, 0x7f
+    acc_vectored_hold_nra r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x24,0x7f]
-# DISASM: acc_vectored_hold_nra r2, 127
+# DISASM: acc_vectored_hold_nra r2, r2, 127
 
-    acc_vectored_hold_nra r5, 0xff
+    acc_vectored_hold_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x54,0xff]
-# DISASM: acc_vectored_hold_nra r5, -1
+# DISASM: acc_vectored_hold_nra r5, r5, 255
 
-    acc_vectored_hold_nra r7, 0x40
+    acc_vectored_hold_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x74,0x40]
-# DISASM: acc_vectored_hold_nra r7, 64
+# DISASM: acc_vectored_hold_nra r7, r7, 64
 
-    acc_vectored_hold_nra r1, 0xa
+    acc_vectored_hold_nra r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x14,0x0a]
-# DISASM: acc_vectored_hold_nra r1, 10
+# DISASM: acc_vectored_hold_nra r1, r1, 10
 
-    acc_vectored_hold_nra r0, 0x0
+    acc_vectored_hold_nra r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x04,0x00]
-# DISASM: acc_vectored_hold_nra r0, 0
+# DISASM: acc_vectored_hold_nra r0, r0, 0
 
-    acc_vectored_hold_lv r0, 0x0
+    acc_vectored_hold_lv r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x08,0x00]
-# DISASM: acc_vectored_hold_lv r0, 0
+# DISASM: acc_vectored_hold_lv r0, r0, 0
 
-    acc_vectored_hold_lv r2, 0x7f
+    acc_vectored_hold_lv r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x28,0x7f]
-# DISASM: acc_vectored_hold_lv r2, 127
+# DISASM: acc_vectored_hold_lv r2, r2, 127
 
-    acc_vectored_hold_lv r5, 0xff
+    acc_vectored_hold_lv r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv r5, -1
+# DISASM: acc_vectored_hold_lv r5, r5, 255
 
-    acc_vectored_hold_lv r7, 0x40
+    acc_vectored_hold_lv r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x78,0x40]
-# DISASM: acc_vectored_hold_lv r7, 64
+# DISASM: acc_vectored_hold_lv r7, r7, 64
 
-    acc_vectored_hold_lv r1, 0xa
+    acc_vectored_hold_lv r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x18,0x0a]
-# DISASM: acc_vectored_hold_lv r1, 10
+# DISASM: acc_vectored_hold_lv r1, r1, 10
 
-    acc_vectored_hold_lv r0, 0x0
+    acc_vectored_hold_lv r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x08,0x00]
-# DISASM: acc_vectored_hold_lv r0, 0
+# DISASM: acc_vectored_hold_lv r0, r0, 0
 
-    acc_vectored_hold_lv r2, 0x7f
+    acc_vectored_hold_lv r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x28,0x7f]
-# DISASM: acc_vectored_hold_lv r2, 127
+# DISASM: acc_vectored_hold_lv r2, r2, 127
 
-    acc_vectored_hold_lv r5, 0xff
+    acc_vectored_hold_lv r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv r5, -1
+# DISASM: acc_vectored_hold_lv r5, r5, 255
 
-    acc_vectored_hold_lv r7, 0x40
+    acc_vectored_hold_lv r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x78,0x40]
-# DISASM: acc_vectored_hold_lv r7, 64
+# DISASM: acc_vectored_hold_lv r7, r7, 64
 
-    acc_vectored_hold_lv r1, 0xa
+    acc_vectored_hold_lv r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x18,0x0a]
-# DISASM: acc_vectored_hold_lv r1, 10
+# DISASM: acc_vectored_hold_lv r1, r1, 10
 
-    acc_vectored_hold_lv r0, 0x0
+    acc_vectored_hold_lv r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x08,0x00]
-# DISASM: acc_vectored_hold_lv r0, 0
+# DISASM: acc_vectored_hold_lv r0, r0, 0
 
-    acc_vectored_hold_lv r2, 0x7f
+    acc_vectored_hold_lv r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x28,0x7f]
-# DISASM: acc_vectored_hold_lv r2, 127
+# DISASM: acc_vectored_hold_lv r2, r2, 127
 
-    acc_vectored_hold_lv r5, 0xff
+    acc_vectored_hold_lv r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv r5, -1
+# DISASM: acc_vectored_hold_lv r5, r5, 255
 
-    acc_vectored_hold_lv r7, 0x40
+    acc_vectored_hold_lv r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x78,0x40]
-# DISASM: acc_vectored_hold_lv r7, 64
+# DISASM: acc_vectored_hold_lv r7, r7, 64
 
-    acc_vectored_hold_lv r1, 0xa
+    acc_vectored_hold_lv r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x18,0x0a]
-# DISASM: acc_vectored_hold_lv r1, 10
+# DISASM: acc_vectored_hold_lv r1, r1, 10
 
-    acc_vectored_hold_lv r0, 0x0
+    acc_vectored_hold_lv r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x08,0x00]
-# DISASM: acc_vectored_hold_lv r0, 0
+# DISASM: acc_vectored_hold_lv r0, r0, 0
 
-    acc_vectored_hold_lv_ze r0, 0x0
+    acc_vectored_hold_lv_ze r0, r0, 0x0
 # CHECK: encoding: [0x3c,0x02,0x08,0x00]
-# DISASM: acc_vectored_hold_lv_ze r0, 0
+# DISASM: acc_vectored_hold_lv_ze r0, r0, 0
 
-    acc_vectored_hold_lv_nz r2, 0x7f
+    acc_vectored_hold_lv_nz r2, r2, 0x7f
 # CHECK: encoding: [0x5c,0x0a,0x28,0x7f]
-# DISASM: acc_vectored_hold_lv_nz r2, 127
+# DISASM: acc_vectored_hold_lv_nz r2, r2, 127
 
-    acc_vectored_hold_lv_po r5, 0xff
+    acc_vectored_hold_lv_po r5, r5, 0xff
 # CHECK: encoding: [0x7c,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv_po r5, -1
+# DISASM: acc_vectored_hold_lv_po r5, r5, 255
 
-    acc_vectored_hold_lv_ne r7, 0x40
+    acc_vectored_hold_lv_ne r7, r7, 0x40
 # CHECK: encoding: [0x9c,0x1e,0x78,0x40]
-# DISASM: acc_vectored_hold_lv_ne r7, 64
+# DISASM: acc_vectored_hold_lv_ne r7, r7, 64
 
-    acc_vectored_hold_lv r1, 0xa
+    acc_vectored_hold_lv r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x18,0x0a]
-# DISASM: acc_vectored_hold_lv r1, 10
+# DISASM: acc_vectored_hold_lv r1, r1, 10
 
-    acc_vectored_hold_lv_az r0, 0x0
+    acc_vectored_hold_lv_az r0, r0, 0x0
 # CHECK: encoding: [0xbc,0x02,0x08,0x00]
-# DISASM: acc_vectored_hold_lv_az r0, 0
+# DISASM: acc_vectored_hold_lv_az r0, r0, 0
 
-    acc_vectored_hold_lv_zb r2, 0x7f
+    acc_vectored_hold_lv_zb r2, r2, 0x7f
 # CHECK: encoding: [0xdc,0x0a,0x28,0x7f]
-# DISASM: acc_vectored_hold_lv_zb r2, 127
+# DISASM: acc_vectored_hold_lv_zb r2, r2, 127
 
-    acc_vectored_hold_lv_ca r5, 0xff
+    acc_vectored_hold_lv_ca r5, r5, 0xff
 # CHECK: encoding: [0xfc,0x16,0x58,0xff]
-# DISASM: acc_vectored_hold_lv_ca r5, -1
+# DISASM: acc_vectored_hold_lv_ca r5, r5, 255
 
-    acc_vectored_hold_lv_nc r7, 0x40
+    acc_vectored_hold_lv_nc r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1f,0x78,0x40]
-# DISASM: acc_vectored_hold_lv_nc r7, 64
+# DISASM: acc_vectored_hold_lv_nc r7, r7, 64
 
-    acc_vectored_hold_lv_cz r1, 0xa
+    acc_vectored_hold_lv_cz r1, r1, 0xa
 # CHECK: encoding: [0x3c,0x07,0x18,0x0a]
-# DISASM: acc_vectored_hold_lv_cz r1, 10
+# DISASM: acc_vectored_hold_lv_cz r1, r1, 10
 
-    acc_vectored_hold_lv_spo r0, 0x0
+    acc_vectored_hold_lv_spo r0, r0, 0x0
 # CHECK: encoding: [0x5c,0x03,0x08,0x00]
-# DISASM: acc_vectored_hold_lv_spo r0, 0
+# DISASM: acc_vectored_hold_lv_spo r0, r0, 0
 
-    acc_vectored_hold_lv_sne r2, 0x7f
+    acc_vectored_hold_lv_sne r2, r2, 0x7f
 # CHECK: encoding: [0x7c,0x0b,0x28,0x7f]
-# DISASM: acc_vectored_hold_lv_sne r2, 127
+# DISASM: acc_vectored_hold_lv_sne r2, r2, 127
 
-    acc_vectored_hold_lv_nbs r5, 0xff
+    acc_vectored_hold_lv_nbs r5, r5, 0xff
 # CHECK: encoding: [0x9c,0x17,0x58,0xff]
-# DISASM: acc_vectored_hold_lv_nbs r5, -1
+# DISASM: acc_vectored_hold_lv_nbs r5, r5, 255
 
-    acc_vectored_hold_lv_nex r7, 0x40
+    acc_vectored_hold_lv_nex r7, r7, 0x40
 # CHECK: encoding: [0xbc,0x1f,0x78,0x40]
-# DISASM: acc_vectored_hold_lv_nex r7, 64
+# DISASM: acc_vectored_hold_lv_nex r7, r7, 64
 
-    acc_vectored_hold_lv_bs r1, 0xa
+    acc_vectored_hold_lv_bs r1, r1, 0xa
 # CHECK: encoding: [0xdc,0x07,0x18,0x0a]
-# DISASM: acc_vectored_hold_lv_bs r1, 10
+# DISASM: acc_vectored_hold_lv_bs r1, r1, 10
 
-    acc_vectored_hold_lv_ex r0, 0x0
+    acc_vectored_hold_lv_ex r0, r0, 0x0
 # CHECK: encoding: [0xfc,0x03,0x08,0x00]
-# DISASM: acc_vectored_hold_lv_ex r0, 0
+# DISASM: acc_vectored_hold_lv_ex r0, r0, 0
 
-    acc_vectored_hold_lv_nra r0, 0x0
+    acc_vectored_hold_lv_nra r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x0c,0x00]
-# DISASM: acc_vectored_hold_lv_nra r0, 0
+# DISASM: acc_vectored_hold_lv_nra r0, r0, 0
 
-    acc_vectored_hold_lv_nra r2, 0x7f
+    acc_vectored_hold_lv_nra r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x2c,0x7f]
-# DISASM: acc_vectored_hold_lv_nra r2, 127
+# DISASM: acc_vectored_hold_lv_nra r2, r2, 127
 
-    acc_vectored_hold_lv_nra r5, 0xff
+    acc_vectored_hold_lv_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x5c,0xff]
-# DISASM: acc_vectored_hold_lv_nra r5, -1
+# DISASM: acc_vectored_hold_lv_nra r5, r5, 255
 
-    acc_vectored_hold_lv_nra r7, 0x40
+    acc_vectored_hold_lv_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x7c,0x40]
-# DISASM: acc_vectored_hold_lv_nra r7, 64
+# DISASM: acc_vectored_hold_lv_nra r7, r7, 64
 
-    acc_vectored_hold_lv_nra r1, 0xa
+    acc_vectored_hold_lv_nra r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x1c,0x0a]
-# DISASM: acc_vectored_hold_lv_nra r1, 10
+# DISASM: acc_vectored_hold_lv_nra r1, r1, 10
 
-    acc_vectored_hold_lv_nra r0, 0x0
+    acc_vectored_hold_lv_nra r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x0c,0x00]
-# DISASM: acc_vectored_hold_lv_nra r0, 0
+# DISASM: acc_vectored_hold_lv_nra r0, r0, 0
 
-    acc_vectored_hold_lv_nra r2, 0x7f
+    acc_vectored_hold_lv_nra r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x2c,0x7f]
-# DISASM: acc_vectored_hold_lv_nra r2, 127
+# DISASM: acc_vectored_hold_lv_nra r2, r2, 127
 
-    acc_vectored_hold_lv_nra r5, 0xff
+    acc_vectored_hold_lv_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x5c,0xff]
-# DISASM: acc_vectored_hold_lv_nra r5, -1
+# DISASM: acc_vectored_hold_lv_nra r5, r5, 255
 
-    acc_vectored_hold_lv_nra r7, 0x40
+    acc_vectored_hold_lv_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x7c,0x40]
-# DISASM: acc_vectored_hold_lv_nra r7, 64
+# DISASM: acc_vectored_hold_lv_nra r7, r7, 64
 
-    acc_vectored_hold_lv_nra r1, 0xa
+    acc_vectored_hold_lv_nra r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x1c,0x0a]
-# DISASM: acc_vectored_hold_lv_nra r1, 10
+# DISASM: acc_vectored_hold_lv_nra r1, r1, 10
 
-    acc_vectored_hold_lv_nra r0, 0x0
+    acc_vectored_hold_lv_nra r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x0c,0x00]
-# DISASM: acc_vectored_hold_lv_nra r0, 0
+# DISASM: acc_vectored_hold_lv_nra r0, r0, 0
 
-    acc_vectored_hold_lv_nra r2, 0x7f
+    acc_vectored_hold_lv_nra r2, r2, 0x7f
 # CHECK: encoding: [0x1c,0x0a,0x2c,0x7f]
-# DISASM: acc_vectored_hold_lv_nra r2, 127
+# DISASM: acc_vectored_hold_lv_nra r2, r2, 127
 
-    acc_vectored_hold_lv_nra r5, 0xff
+    acc_vectored_hold_lv_nra r5, r5, 0xff
 # CHECK: encoding: [0x1c,0x16,0x5c,0xff]
-# DISASM: acc_vectored_hold_lv_nra r5, -1
+# DISASM: acc_vectored_hold_lv_nra r5, r5, 255
 
-    acc_vectored_hold_lv_nra r7, 0x40
+    acc_vectored_hold_lv_nra r7, r7, 0x40
 # CHECK: encoding: [0x1c,0x1e,0x7c,0x40]
-# DISASM: acc_vectored_hold_lv_nra r7, 64
+# DISASM: acc_vectored_hold_lv_nra r7, r7, 64
 
-    acc_vectored_hold_lv_nra r1, 0xa
+    acc_vectored_hold_lv_nra r1, r1, 0xa
 # CHECK: encoding: [0x1c,0x06,0x1c,0x0a]
-# DISASM: acc_vectored_hold_lv_nra r1, 10
+# DISASM: acc_vectored_hold_lv_nra r1, r1, 10
 
-    acc_vectored_hold_lv_nra r0, 0x0
+    acc_vectored_hold_lv_nra r0, r0, 0x0
 # CHECK: encoding: [0x1c,0x02,0x0c,0x00]
-# DISASM: acc_vectored_hold_lv_nra r0, 0
+# DISASM: acc_vectored_hold_lv_nra r0, r0, 0
 
     ldr_reg r0, r0, r0
 # CHECK: encoding: [0x1d,0x00,0x04,0x00]
@@ -80322,67 +80322,67 @@
 # DISASM: ldr_regb r0, r0, r0
 
     ldr_regbs r0, r0, r0
-# CHECK: encoding: [0x1d,0x00,0x20,0x00]
+# CHECK: encoding: [0x1d,0x00,0x00,0x20]
 # DISASM: ldr_regbs r0, r0, r0
 
     ldr_regbs r2, r2, r2
-# CHECK: encoding: [0x1d,0x88,0x20,0x02]
+# CHECK: encoding: [0x1d,0x88,0x00,0x22]
 # DISASM: ldr_regbs r2, r2, r2
 
     ldr_regbs r5, r5, r5
-# CHECK: encoding: [0x1d,0x54,0x21,0x05]
+# CHECK: encoding: [0x1d,0x54,0x01,0x25]
 # DISASM: ldr_regbs r5, r5, r5
 
     ldr_regbs r7, r7, r7
-# CHECK: encoding: [0x1d,0xdc,0x21,0x07]
+# CHECK: encoding: [0x1d,0xdc,0x01,0x27]
 # DISASM: ldr_regbs r7, r7, r7
 
     ldr_regbs r1, r1, r1
-# CHECK: encoding: [0x1d,0x44,0x20,0x01]
+# CHECK: encoding: [0x1d,0x44,0x00,0x21]
 # DISASM: ldr_regbs r1, r1, r1
 
     ldr_regbs r0, r0, r0
-# CHECK: encoding: [0x1d,0x00,0x20,0x00]
+# CHECK: encoding: [0x1d,0x00,0x00,0x20]
 # DISASM: ldr_regbs r0, r0, r0
 
     ldr_regbs r2, r2, r2
-# CHECK: encoding: [0x1d,0x88,0x20,0x02]
+# CHECK: encoding: [0x1d,0x88,0x00,0x22]
 # DISASM: ldr_regbs r2, r2, r2
 
     ldr_regbs r5, r5, r5
-# CHECK: encoding: [0x1d,0x54,0x21,0x05]
+# CHECK: encoding: [0x1d,0x54,0x01,0x25]
 # DISASM: ldr_regbs r5, r5, r5
 
     ldr_regbs r7, r7, r7
-# CHECK: encoding: [0x1d,0xdc,0x21,0x07]
+# CHECK: encoding: [0x1d,0xdc,0x01,0x27]
 # DISASM: ldr_regbs r7, r7, r7
 
     ldr_regbs r1, r1, r1
-# CHECK: encoding: [0x1d,0x44,0x20,0x01]
+# CHECK: encoding: [0x1d,0x44,0x00,0x21]
 # DISASM: ldr_regbs r1, r1, r1
 
     ldr_regbs r0, r0, r0
-# CHECK: encoding: [0x1d,0x00,0x20,0x00]
+# CHECK: encoding: [0x1d,0x00,0x00,0x20]
 # DISASM: ldr_regbs r0, r0, r0
 
     ldr_regbs r2, r2, r2
-# CHECK: encoding: [0x1d,0x88,0x20,0x02]
+# CHECK: encoding: [0x1d,0x88,0x00,0x22]
 # DISASM: ldr_regbs r2, r2, r2
 
     ldr_regbs r5, r5, r5
-# CHECK: encoding: [0x1d,0x54,0x21,0x05]
+# CHECK: encoding: [0x1d,0x54,0x01,0x25]
 # DISASM: ldr_regbs r5, r5, r5
 
     ldr_regbs r7, r7, r7
-# CHECK: encoding: [0x1d,0xdc,0x21,0x07]
+# CHECK: encoding: [0x1d,0xdc,0x01,0x27]
 # DISASM: ldr_regbs r7, r7, r7
 
     ldr_regbs r1, r1, r1
-# CHECK: encoding: [0x1d,0x44,0x20,0x01]
+# CHECK: encoding: [0x1d,0x44,0x00,0x21]
 # DISASM: ldr_regbs r1, r1, r1
 
     ldr_regbs r0, r0, r0
-# CHECK: encoding: [0x1d,0x00,0x20,0x00]
+# CHECK: encoding: [0x1d,0x00,0x00,0x20]
 # DISASM: ldr_regbs r0, r0, r0
 
     ldr_reg_ze r0, r0, r0
@@ -80514,67 +80514,67 @@
 # DISASM: ldr_regb_ex r0, r0, r0
 
     ldr_regbs_ze r0, r0, r0
-# CHECK: encoding: [0x3d,0x00,0x20,0x00]
+# CHECK: encoding: [0x3d,0x00,0x00,0x20]
 # DISASM: ldr_regbs_ze r0, r0, r0
 
     ldr_regbs_nz r2, r2, r2
-# CHECK: encoding: [0x5d,0x88,0x20,0x02]
+# CHECK: encoding: [0x5d,0x88,0x00,0x22]
 # DISASM: ldr_regbs_nz r2, r2, r2
 
     ldr_regbs_po r5, r5, r5
-# CHECK: encoding: [0x7d,0x54,0x21,0x05]
+# CHECK: encoding: [0x7d,0x54,0x01,0x25]
 # DISASM: ldr_regbs_po r5, r5, r5
 
     ldr_regbs_ne r7, r7, r7
-# CHECK: encoding: [0x9d,0xdc,0x21,0x07]
+# CHECK: encoding: [0x9d,0xdc,0x01,0x27]
 # DISASM: ldr_regbs_ne r7, r7, r7
 
     ldr_regbs r1, r1, r1
-# CHECK: encoding: [0x1d,0x44,0x20,0x01]
+# CHECK: encoding: [0x1d,0x44,0x00,0x21]
 # DISASM: ldr_regbs r1, r1, r1
 
     ldr_regbs_az r0, r0, r0
-# CHECK: encoding: [0xbd,0x00,0x20,0x00]
+# CHECK: encoding: [0xbd,0x00,0x00,0x20]
 # DISASM: ldr_regbs_az r0, r0, r0
 
     ldr_regbs_zb r2, r2, r2
-# CHECK: encoding: [0xdd,0x88,0x20,0x02]
+# CHECK: encoding: [0xdd,0x88,0x00,0x22]
 # DISASM: ldr_regbs_zb r2, r2, r2
 
     ldr_regbs_ca r5, r5, r5
-# CHECK: encoding: [0xfd,0x54,0x21,0x05]
+# CHECK: encoding: [0xfd,0x54,0x01,0x25]
 # DISASM: ldr_regbs_ca r5, r5, r5
 
     ldr_regbs_nc r7, r7, r7
-# CHECK: encoding: [0x1d,0xdd,0x21,0x07]
+# CHECK: encoding: [0x1d,0xdd,0x01,0x27]
 # DISASM: ldr_regbs_nc r7, r7, r7
 
     ldr_regbs_cz r1, r1, r1
-# CHECK: encoding: [0x3d,0x45,0x20,0x01]
+# CHECK: encoding: [0x3d,0x45,0x00,0x21]
 # DISASM: ldr_regbs_cz r1, r1, r1
 
     ldr_regbs_spo r0, r0, r0
-# CHECK: encoding: [0x5d,0x01,0x20,0x00]
+# CHECK: encoding: [0x5d,0x01,0x00,0x20]
 # DISASM: ldr_regbs_spo r0, r0, r0
 
     ldr_regbs_sne r2, r2, r2
-# CHECK: encoding: [0x7d,0x89,0x20,0x02]
+# CHECK: encoding: [0x7d,0x89,0x00,0x22]
 # DISASM: ldr_regbs_sne r2, r2, r2
 
     ldr_regbs_nbs r5, r5, r5
-# CHECK: encoding: [0x9d,0x55,0x21,0x05]
+# CHECK: encoding: [0x9d,0x55,0x01,0x25]
 # DISASM: ldr_regbs_nbs r5, r5, r5
 
     ldr_regbs_nex r7, r7, r7
-# CHECK: encoding: [0xbd,0xdd,0x21,0x07]
+# CHECK: encoding: [0xbd,0xdd,0x01,0x27]
 # DISASM: ldr_regbs_nex r7, r7, r7
 
     ldr_regbs_bs r1, r1, r1
-# CHECK: encoding: [0xdd,0x45,0x20,0x01]
+# CHECK: encoding: [0xdd,0x45,0x00,0x21]
 # DISASM: ldr_regbs_bs r1, r1, r1
 
     ldr_regbs_ex r0, r0, r0
-# CHECK: encoding: [0xfd,0x01,0x20,0x00]
+# CHECK: encoding: [0xfd,0x01,0x00,0x20]
 # DISASM: ldr_regbs_ex r0, r0, r0
 
     str_reg r0, r0, r0
@@ -80843,7 +80843,7 @@
 
     modify_gpo_byte 0xff, 0xff, 0xff
 # CHECK: encoding: [0x1e,0xff,0xff,0xff]
-# DISASM: modify_gpo_byte -1, -1, -1
+# DISASM: modify_gpo_byte 255, 255, 255
 
     modify_gpo_byte 0x40, 0x40, 0x40
 # CHECK: encoding: [0x1e,0x40,0x40,0x40]
@@ -80863,7 +80863,7 @@
 
     modify_gpo_byte 0xff, 0xff, 0xff
 # CHECK: encoding: [0x1e,0xff,0xff,0xff]
-# DISASM: modify_gpo_byte -1, -1, -1
+# DISASM: modify_gpo_byte 255, 255, 255
 
     modify_gpo_byte 0x40, 0x40, 0x40
 # CHECK: encoding: [0x1e,0x40,0x40,0x40]
@@ -80883,7 +80883,7 @@
 
     modify_gpo_byte 0xff, 0xff, 0xff
 # CHECK: encoding: [0x1e,0xff,0xff,0xff]
-# DISASM: modify_gpo_byte -1, -1, -1
+# DISASM: modify_gpo_byte 255, 255, 255
 
     modify_gpo_byte 0x40, 0x40, 0x40
 # CHECK: encoding: [0x1e,0x40,0x40,0x40]
@@ -81201,3 +81201,59 @@
 # CHECK: encoding: [0x19,0x50,0x6d,0x7f]
 # DISASM: xorn_rror r4, r5, r6, r7
 
+
+# Special-register access forms (round-trip through the generic mov/bit-op
+# matcher; the isCodeGenOnly READ_*/WRITE_*/CFM_*/GPD_* defs share these
+# encodings). Pins both the matcher path and the field placement for the
+# reserved registers gpi/gpd/gpo/cfm/cfs.
+    mov r1, gpi
+# CHECK: encoding: [0x00,0x84,0x03,0x00]
+# DISASM: mov r1, gpi
+
+    mov r2, gpd
+# CHECK: encoding: [0x00,0x48,0x02,0x00]
+# DISASM: mov r2, gpd
+
+    mov r3, gpo
+# CHECK: encoding: [0x00,0x0c,0x02,0x00]
+# DISASM: mov r3, gpo
+
+    mov gpo, r4
+# CHECK: encoding: [0x00,0x20,0x01,0x00]
+# DISASM: mov gpo, r4
+
+    mov gpd, r5
+# CHECK: encoding: [0x00,0x64,0x01,0x00]
+# DISASM: mov gpd, r5
+
+    mov r6, cfm
+# CHECK: encoding: [0x00,0xd8,0x02,0x00]
+# DISASM: mov r6, cfm
+
+    mov cfm, r7
+# CHECK: encoding: [0x00,0xec,0x01,0x00]
+# DISASM: mov cfm, r7
+
+    mov r0, cfs
+# CHECK: encoding: [0x00,0x80,0x02,0x00]
+# DISASM: mov r0, cfs
+
+    mov cfs, r1
+# CHECK: encoding: [0x00,0x68,0x00,0x00]
+# DISASM: mov cfs, r1
+
+    bset_imm gpd, gpd, 29
+# CHECK: encoding: [0x18,0x64,0x02,0xdd]
+# DISASM: bset_imm gpd, gpd, 29
+
+    bclr_imm gpd, gpd, 30
+# CHECK: encoding: [0x18,0x64,0x02,0x3e]
+# DISASM: bclr_imm gpd, gpd, 30
+
+    bset_imm cfm, cfm, 0
+# CHECK: encoding: [0x18,0xec,0x02,0xc0]
+# DISASM: bset_imm cfm, cfm, 0
+
+    bclr_imm cfm, cfm, 7
+# CHECK: encoding: [0x18,0xec,0x02,0x27]
+# DISASM: bclr_imm cfm, cfm, 7

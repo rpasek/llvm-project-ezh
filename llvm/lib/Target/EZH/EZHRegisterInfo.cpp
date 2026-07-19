@@ -31,6 +31,7 @@
 #include "MCTargetDesc/EZHBaseInfo.h"
 #include "MCTargetDesc/EZHMCTargetDesc.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -101,6 +102,25 @@ bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
   int Offset = MI.getOperand(FIOperandNum + 1).getImm();
 
+  // The memory-form tail call executes after the epilogue has torn the
+  // frame down: SP is back at its entry value, so the slot sits at its raw
+  // (negative) object offset from SP -- just below the final stack pointer.
+  // The callee's own pushes land on that memory only after this load has
+  // consumed it. The slot is a fixed object pinned at the top of the frame
+  // (LowerCall places it just below the vararg save area), so this offset
+  // is a small constant regardless of the size of the locals; the range
+  // check is a safety net that cannot fire for compiler-generated frames.
+  if (MI.getOpcode() == EZH::TCRETURN_MEM ||
+      MI.getOpcode() == EZH::TCRETURN_MEM_CC) {
+    int PostOffset = MF.getFrameInfo().getObjectOffset(FrameIndex) + Offset;
+    if (PostOffset < -512 || PostOffset > 508 || (PostOffset & 3) != 0)
+      report_fatal_error(
+          "EZH musttail: tail-call target slot out of load range");
+    MI.getOperand(FIOperandNum).ChangeToRegister(EZH::SP, false);
+    MI.getOperand(FIOperandNum + 1).ChangeToImmediate(PostOffset);
+    return false;
+  }
+
   const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
   Register FrameReg = EZH::SP;
 
@@ -117,7 +137,7 @@ bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     const std::vector<CalleeSavedInfo> &CSI =
         MF.getFrameInfo().getCalleeSavedInfo();
     int FPFI = 0;
-    bool FoundFP = false;
+    [[maybe_unused]] bool FoundFP = false;
     for (const auto &Info : CSI) {
       if (Info.getReg() == EZH::R7) {
         FPFI = Info.getFrameIdx();
@@ -194,12 +214,29 @@ bool EZHRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     assert(FallbackReg != EZH::NoRegister &&
            "Could not find any fallback register!");
     ScratchReg = FallbackReg;
-    PushPopFallback = true;
+
+    // Only preserve the borrowed register if its current value is live past
+    // this instruction. If it is dead, we can clobber it as scratch directly:
+    // pushing/popping a dead register wastes two instructions, and marking the
+    // save as reading an undef value (to satisfy -verify-machineinstrs) instead
+    // lets a later pass delete the save/restore pair entirely -- which silently
+    // corrupts the value when the register is in fact live. Compute liveness at
+    // MI and decide.
+    LivePhysRegs LiveRegs(*this);
+    LiveRegs.addLiveOuts(MBB);
+    for (MachineInstr &Below : llvm::reverse(MBB)) {
+      if (&Below == &MI)
+        break;
+      LiveRegs.stepBackward(Below);
+    }
+    PushPopFallback = LiveRegs.contains(ScratchReg);
   }
 
   if (PushPopFallback) {
     if (FrameReg == EZH::SP)
       Offset += 4; // Compensate for SP decrement due to push when SP is base
+    // ScratchReg is live here, so its value has a reaching definition: read it
+    // normally (no undef) and let the matching pop below restore it.
     BuildMI(MBB, II, DL, TII->get(EZH::STR_PRE), EZH::SP)
         .addReg(ScratchReg)
         .addReg(EZH::SP)

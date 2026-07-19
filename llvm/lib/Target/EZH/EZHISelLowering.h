@@ -40,7 +40,16 @@ enum NodeType : unsigned {
   PER_WRITE,
   RET_GLUE_INTERNAL,
   CALL,
+  TC_RETURN,
   CMP,
+  // 64-bit carry chain: ADDS/SUBS set the carry (glue out), ADC/SBC
+  // consume it (glue in). The glue keeps each pair adjacent, and nothing
+  // that can be scheduled between them touches the flags.
+  ADDS,
+  SUBS,
+  ADC,
+  SBC,
+  SBCS, // subtract with borrow, setting flags (i64 ordered compares)
   BR_CC,
   SELECT_CC,
   BTOG,
@@ -72,6 +81,8 @@ public:
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerUSUBO(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerSETCCCARRY(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVAARG(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
 
@@ -108,6 +119,19 @@ public:
 
   EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
                          EVT VT) const override;
+
+  bool decomposeMulByConstant(LLVMContext &Context, EVT VT,
+                              SDValue C) const override;
+
+  SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const override;
+
+  bool mayBeEmittedAsTailCall(const CallInst *CI) const override;
+
+  bool isUsedByReturnOnly(SDNode *N, SDValue &Chain) const override;
+
+  bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
+                             Type *Ty, unsigned AS,
+                             Instruction *I = nullptr) const override;
 
   bool getPostIndexedAddressParts(SDNode *N, SDNode *Op, SDValue &Base,
                                   SDValue &Offset, ISD::MemIndexedMode &AM,

@@ -1,0 +1,10 @@
+# The Dockerfile clones LLVM fresh; it only needs check_ezh.py from the build
+# context. Keep the context tiny -- exclude the multi-GB test-suite checkout,
+# build trees, and generated output.
+llvm-test-suite/
+**/out/
+out_*/
+build*/
+*.elf
+*.o
+*.a

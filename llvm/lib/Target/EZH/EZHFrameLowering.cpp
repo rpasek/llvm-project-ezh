@@ -105,10 +105,19 @@ bool EZHFrameLowering::spillCalleeSavedRegisters(
 
   CFIInstBuilder CFI(MBB, MI, MachineInstr::FrameSetup);
   EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
-  int64_t CFAOffset = FuncInfo->getVarArgsSaveSize();
+  int64_t CFAOffset =
+      FuncInfo->getVarArgsSaveSize() + FuncInfo->getTailCallSlotSize();
 
   for (const CalleeSavedInfo &CS : CSI) {
     unsigned Reg = CS.getReg();
+    // The incoming (caller's) value of every callee-saved register is live into
+    // the entry block -- that is precisely what the spill preserves. Mark it so,
+    // as the default TargetFrameLowering::spillCalleeSavedRegisters does; without
+    // it -verify-machineinstrs reports the spill as using an undefined physreg
+    // for any CSR other than RA (which is already live-in). Skip regs the entry
+    // block already lists to avoid duplicates.
+    if (!MBB.isLiveIn(Reg))
+      MBB.addLiveIn(Reg);
     // Add instruction to push register (STR_PRE with -4 offset)
     BuildMI(MBB, MI, DL, TII.get(EZH::STR_PRE), EZH::SP)
         .addReg(Reg, getKillRegState(true))
@@ -148,8 +157,9 @@ bool EZHFrameLowering::restoreCalleeSavedRegisters(
     unsigned Reg = Info.getReg();
 
     if (Reg == EZH::RA && &Info == FirstCSI && MI != MBB.end() &&
-        MI->isReturn() &&
-        !MF.getInfo<EZHMachineFunctionInfo>()->getVarArgsSaveSize()) {
+        MI->isReturn() && !MI->isCall() &&
+        !MF.getInfo<EZHMachineFunctionInfo>()->getVarArgsSaveSize() &&
+        !MF.getInfo<EZHMachineFunctionInfo>()->getTailCallSlotSize()) {
       // Pop directly into PC to return in a single instruction!
       MachineInstrBuilder MIB =
           BuildMI(MBB, MI, DL, TII.get(EZH::LDR_POST), EZH::PC)
@@ -195,7 +205,11 @@ void EZHFrameLowering::emitPrologue(MachineFunction &MF,
   DebugLoc DL;
 
   EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
-  unsigned VarArgsSaveSize = FuncInfo->getVarArgsSaveSize();
+  // The frame's top block: the vararg save area plus the pinned
+  // memory-form tail-call slot, allocated before the CSR pushes so both
+  // keep small constant offsets from the entry SP.
+  unsigned VarArgsSaveSize =
+      FuncInfo->getVarArgsSaveSize() + FuncInfo->getTailCallSlotSize();
   const std::vector<CalleeSavedInfo> &CSI = MFI.getCalleeSavedInfo();
   unsigned CSRSize = CSI.size() * 4;
 
@@ -228,7 +242,7 @@ void EZHFrameLowering::emitPrologue(MachineFunction &MF,
   if (hasFP(MF)) {
     // Find FP spill frame index to get its offset
     int FPFI = 0;
-    bool FoundFP = false;
+    [[maybe_unused]] bool FoundFP = false;
     for (const auto &Info : CSI) {
       if (Info.getReg() == EZH::R7) {
         FPFI = Info.getFrameIdx();
@@ -320,7 +334,10 @@ void EZHFrameLowering::emitEpilogue(MachineFunction &MF,
   unsigned CSRSize = CSI.size() * 4;
 
   EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
-  unsigned VarArgsSaveSize = FuncInfo->getVarArgsSaveSize();
+  // Includes the pinned memory-form tail-call slot: deallocated together
+  // with the vararg save area, after the CSR pops.
+  unsigned VarArgsSaveSize =
+      FuncInfo->getVarArgsSaveSize() + FuncInfo->getTailCallSlotSize();
 
   unsigned StackSize = MFI.getStackSize();
   unsigned LocalSize = StackSize - VarArgsSaveSize - CSRSize;
@@ -342,7 +359,7 @@ void EZHFrameLowering::emitEpilogue(MachineFunction &MF,
   if (hasFP(MF)) {
     // Find FP spill frame index to get its offset
     int FPFI = 0;
-    bool FoundFP = false;
+    [[maybe_unused]] bool FoundFP = false;
     for (const auto &Info : CSI) {
       if (Info.getReg() == EZH::R7) {
         FPFI = Info.getFrameIdx();
@@ -511,7 +528,8 @@ bool EZHFrameLowering::assignCalleeSavedSpillSlots(
   EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
   const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
 
-  unsigned VarArgsSaveSize = FuncInfo->getVarArgsSaveSize();
+  unsigned VarArgsSaveSize =
+      FuncInfo->getVarArgsSaveSize() + FuncInfo->getTailCallSlotSize();
   unsigned CSRSize = CSI.size() * 4;
 
   MFI.setStackSize(MFI.getStackSize() + CSRSize + VarArgsSaveSize);
@@ -542,7 +560,24 @@ void EZHFrameLowering::determineCalleeSaves(MachineFunction &MF,
     SavedRegs.set(EZH::R7);
   }
 
-  if (STI.hasBitSliceInterrupts() || MF.getFrameInfo().hasCalls()) {
+  // RA must survive real calls (gosub writes it) and, with bitslice
+  // interrupts, any injected gotol_bs (which also writes it). The injector
+  // fires before every branch and call -- including tail calls, whose poll
+  // lands before the epilogue and therefore needs RA's stack slot to
+  // exist -- so only a single-block function containing no branch or call
+  // whatsoever has no injection points: there RA is never clobbered and
+  // need not be saved even in bitslice mode. Single-block only, because
+  // later layout passes may add branches to multi-block functions after
+  // this decision is made.
+  bool NeedsRASave = MF.getFrameInfo().hasCalls();
+  if (!NeedsRASave && STI.hasBitSliceInterrupts()) {
+    bool NoInjectionPoints =
+        MF.size() == 1 && llvm::none_of(MF.front(), [](const MachineInstr &MI) {
+          return MI.isBranch() || MI.isCall();
+        });
+    NeedsRASave = !NoInjectionPoints;
+  }
+  if (NeedsRASave) {
     SavedRegs.set(EZH::RA);
   }
 
@@ -554,12 +589,22 @@ void EZHFrameLowering::determineCalleeSaves(MachineFunction &MF,
 
   MachineFrameInfo &MFI = MF.getFrameInfo();
   if (RS) {
-    const TargetRegisterClass &RC = EZH::GPRRegClass;
-    unsigned Size = STI.getRegisterInfo()->getSpillSize(RC);
-    Align Alignment = STI.getRegisterInfo()->getSpillAlign(RC);
+    // The scavenging slot is only needed when eliminateFrameIndex may face an
+    // offset outside the memory-op immediate ranges (word [-512,508], byte
+    // [-128,127]) and must materialize the address in a scratch register.
+    // Small frames -- the common case on a 32KB-SRAM part -- can never need
+    // it; skipping the slot lets zero-local leaf functions drop their frame
+    // entirely. 32 bytes of headroom covers the callee-saved spills that are
+    // not yet part of the estimate; the 120 threshold keeps the worst case
+    // safely inside the tightest (byte) range.
+    if (MFI.estimateStackSize(MF) + 32 >= 120 || MFI.hasVarSizedObjects()) {
+      const TargetRegisterClass &RC = EZH::GPRRegClass;
+      unsigned Size = STI.getRegisterInfo()->getSpillSize(RC);
+      Align Alignment = STI.getRegisterInfo()->getSpillAlign(RC);
 
-    int FI = MFI.CreateSpillStackObject(Size, Alignment);
-    RS->addScavengingFrameIndex(FI);
+      int FI = MFI.CreateSpillStackObject(Size, Alignment);
+      RS->addScavengingFrameIndex(FI);
+    }
   }
 }
 

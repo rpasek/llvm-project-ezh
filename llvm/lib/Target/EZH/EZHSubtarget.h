@@ -32,6 +32,7 @@
 #include "EZHInstrInfo.h"
 #include "EZHSelectionDAGInfo.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/CodeGen.h"
@@ -62,6 +63,28 @@ public:
   void initSubtargetFeatures(StringRef CPU, StringRef FS);
 
   bool enableMachineScheduler() const override { return true; }
+
+  // Gates for the explicitly-placed post-RA list scheduler (see
+  // EZHPassConfig::addPreEmitPass). PostRAScheduler::run checks BOTH hooks:
+  // enablePostRAScheduler() AND OptLevel >= getOptLevelToEnablePostRAScheduler()
+  // (whose default, CodeGenOptLevel::Default, would silently no-op the pass at
+  // -O1 even though the pipeline adds it at every level above None). Match the
+  // pipeline's intent: schedule whenever the pass is added.
+  bool enablePostRAScheduler() const override { return true; }
+  CodeGenOptLevel getOptLevelToEnablePostRAScheduler() const override {
+    return CodeGenOptLevel::Less;
+  }
+
+  // Division of labor on an 8-GPR in-order core: the PRE-RA scheduler must
+  // optimize register pressure only -- letting it chase the SchedModel's
+  // LoadLatency hoists loads pre-RA, extends live ranges, and measurably
+  // grows spill code (+0.25% corpus size when it was allowed to). Latency
+  // hiding is the POST-RA scheduler's job, where the registers are already
+  // assigned and reordering is size-free.
+  void overrideSchedPolicy(MachineSchedPolicy &Policy,
+                           const SchedRegion &Region) const override {
+    Policy.DisableLatencyHeuristic = true;
+  }
 
   const EZHInstrInfo *getInstrInfo() const override { return &InstrInfo; }
 

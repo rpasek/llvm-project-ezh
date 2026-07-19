@@ -42,7 +42,9 @@
 
 namespace llvm {
 
-class PassManagerBase;
+// PassManagerBase comes from llvm/Target/TargetMachine.h (as `using
+// legacy::PassManagerBase`); a local forward declaration here conflicts with
+// that on current LLVM and makes createPassConfig's override ambiguous.
 
 /// TargetMachine implementation for the NXP EZH architecture.
 class EZHTargetMachine : public CodeGenTargetMachineImpl {
@@ -64,6 +66,26 @@ public:
 
   // Pass Pipeline Configuration
   TargetPassConfig *createPassConfig(PassManagerBase &pass_manager) override;
+
+  // Claim the generic pipeline's post-RA-scheduling insertion point so the
+  // TARGET owns the scheduler's placement. EZH does schedule post-RA -- the
+  // pass is added explicitly in EZHPassConfig::addPreEmitPass, AFTER
+  // EZHCompareFusion (so fusion sees the unscheduled adjacent compare pairs)
+  // and after final block placement. This override keeps the generic slot --
+  // including via the -post-RA-scheduler and -misched-postra options, which
+  // bypass a plain enablePostRAScheduler() -- from inserting a second
+  // scheduler at the generic point (right after the if-converter, BEFORE
+  // compare fusion), where it would erode fusion's adjacency window.
+  //
+  // History: this hook once deliberately scheduled NOTHING and was
+  // correctness-critical -- the condition flags were invisible to the machine
+  // layer, so predicated instances of the pure-descriptor formats had no
+  // modeled dependence on their S-form flag producers, and only pass
+  // ordering kept "SUB_IMM_s; LSL ..., 2, 1"-style pairs adjacent. The flags
+  // are now modeled as the reserved CFS register (S-forms Defs=[CFS];
+  // predicated instances and carry readers use it), which is what makes
+  // post-RA reordering sound. See ezh/OPT_BACKLOG.md.
+  bool targetSchedulesPostRAScheduling() const override { return true; }
 
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();

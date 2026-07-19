@@ -25,6 +25,7 @@
 #include "EZHBasicBlockInfo.h"
 #include "EZHCondCode.h"
 #include "EZHConstantPoolValue.h"
+#include "llvm/InitializePasses.h"
 #include "EZHInstrInfo.h"
 #include "EZHMachineFunctionInfo.h"
 #include "EZHSubtarget.h"
@@ -39,7 +40,6 @@
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
-#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -65,14 +65,16 @@
 
 using namespace llvm;
 
+namespace llvm {
+void initializeEZHConstantIslandsPass(PassRegistry &);
+} // end namespace llvm
+
 #define DEBUG_TYPE "ezh-cp-islands"
 
 #define EZH_CP_ISLANDS_OPT_NAME                                                \
   "EZH constant island placement and branch shortening pass"
 STATISTIC(NumCPEs, "Number of constpool entries");
 STATISTIC(NumSplit, "Number of uncond branches inserted");
-STATISTIC(NumCBrFixed, "Number of cond branches fixed");
-STATISTIC(NumUBrFixed, "Number of uncond branches fixed");
 
 
 static cl::opt<unsigned>
@@ -202,18 +204,18 @@ class EZHConstantIslands : public MachineFunctionPass {
   const EZHInstrInfo *TII;
   const EZHSubtarget *STI;
   EZHMachineFunctionInfo *AFI;
-  MachineDominatorTree *DT = nullptr;
   bool isPositionIndependentOrROPI;
 
 public:
   static char ID;
 
-  EZHConstantIslands() : MachineFunctionPass(ID) {}
+  EZHConstantIslands() : MachineFunctionPass(ID) {
+    initializeEZHConstantIslandsPass(*PassRegistry::getPassRegistry());
+  }
 
   bool runOnMachineFunction(MachineFunction &MF) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<MachineDominatorTreeWrapperPass>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 
@@ -324,7 +326,6 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   isPositionIndependentOrROPI =
       STI->getTargetLowering()->isPositionIndependent();
   AFI = MF->getInfo<EZHMachineFunctionInfo>();
-  DT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
 
   // Renumber all of the machine basic blocks in the function, guaranteeing
   // that the numbers agree with the position of the block in the function.
@@ -336,12 +337,118 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   //    (Load target block address from jump table into PC register)
   SmallVector<MachineInstr *, 4> JTPseudos;
   SmallVector<MachineInstr *, 4> BrindPseudos;
+  SmallVector<MachineInstr *, 4> TightLoops;
   for (auto &MBB : *MF) {
     for (auto &MI : MBB) {
       if (MI.getOpcode() == EZH::PseudoBR_JT) {
         JTPseudos.push_back(&MI);
       } else if (MI.getOpcode() == EZH::BRIND_LDR) {
         BrindPseudos.push_back(&MI);
+      } else if (MI.getOpcode() == EZH::TIGHT_LOOP) {
+        TightLoops.push_back(&MI);
+      }
+    }
+  }
+
+  // Register the COMPLETE repeated region of every TIGHT_LOOP as a no-water
+  // zone, not just the ones EZHTightLoopFormation created: a hand-written
+  // __builtin_ezh_tight_loop has the same layout contract (the hardware
+  // repeats everything from the instruction after the run-once slot up to
+  // the Rend address), but never registers itself. Silicon incident: an
+  // island plus its branch-around goto landed between a one-instruction
+  // hand-written body and its Rend label; the taken goto inside the
+  // repeated region killed the loop after a single iteration.
+  //
+  // INVARIANT: the marked set must be a SUPERSET of every possible legal
+  // repeated region. A legal region is straight-line by contract -- any
+  // branch inside it breaks the hardware loop -- so no legal region ever
+  // extends past a block that does not fall through. Two cases:
+  //
+  //  - Rend resolvable from the SAME-BLOCK reaching def (the nearest def
+  //    of the Rend register before the TIGHT_LOOP -- exact, no multi-def
+  //    ambiguity) as a constant-pool load of an exit MachineBasicBlock
+  //    (formation loops) or an IR blockaddress (intrinsic loops): mark
+  //    exactly [body .. Target). If the layout hits a non-fallthrough
+  //    block or the function end before reaching Target, the straight-line
+  //    contract is already broken -- fail loudly instead of leaving later
+  //    region blocks unmarked.
+  //
+  //  - Anything else (def hoisted out of the block, or not a recognizable
+  //    pool load): mark the body's entire maximal fall-through chain,
+  //    which contains every legal region by the invariant above. This
+  //    over-approximation only forfeits island spots past the real Rend.
+  //
+  // Neither walk is capped: both are bounded by the function's block list.
+  const TargetRegisterInfo *TRI = STI->getRegisterInfo();
+  for (MachineInstr *TL : TightLoops) {
+    MachineBasicBlock *Body = TL->getParent();
+    AFI->addTightLoopBody(Body);
+
+    const MachineInstr *Def = nullptr;
+    Register EndReg = TL->getOperand(0).getReg();
+    for (MachineBasicBlock::iterator I = TL->getIterator();
+         I != Body->begin();) {
+      --I;
+      if (I->definesRegister(EndReg, TRI)) {
+        Def = &*I;
+        break;
+      }
+    }
+
+    // Only the pool-load pseudo is a trustworthy Rend producer; any other
+    // defining opcode (or a future CPI-bearing instruction with different
+    // semantics) falls through to the chain over-approximation.
+    const MachineBasicBlock *Target = nullptr;
+    if (Def && Def->getOpcode() == EZH::LOAD_CONSTANT) {
+      for (const MachineOperand &MO : Def->operands()) {
+        if (!MO.isCPI())
+          continue;
+        const MachineConstantPoolEntry &E =
+            MCP->getConstants()[MO.getIndex()];
+        if (!E.isMachineConstantPoolEntry())
+          break;
+        const auto *CPV =
+            static_cast<const EZHConstantPoolValue *>(E.Val.MachineCPVal);
+        if (CPV->isMachineBasicBlock()) {
+          Target = CPV->getMachineBasicBlock();
+        } else if (CPV->isBlockAddress() &&
+                   CPV->getBlockAddress()->getFunction() ==
+                       &MF->getFunction()) {
+          const BasicBlock *BB = CPV->getBlockAddress()->getBasicBlock();
+          for (MachineBasicBlock &C : *MF)
+            if (C.getAddressTakenIRBlock() == BB) {
+              Target = &C;
+              break;
+            }
+        }
+        break;
+      }
+    }
+
+    if (Target && Target != Body) {
+      for (MachineBasicBlock *X = Body;;) {
+        if (!BBHasFallthrough(X))
+          report_fatal_error(
+              "EZH tight_loop: the layout between the loop and its Rend "
+              "label is not straight-line; the hardware-repeated region "
+              "cannot be protected (or executed)");
+        MachineFunction::iterator Next = std::next(X->getIterator());
+        if (Next == MF->end())
+          report_fatal_error(
+              "EZH tight_loop: Rend label not reachable by fall-through "
+              "from the loop");
+        if (&*Next == Target)
+          break;
+        X = &*Next;
+        AFI->addTightLoopBody(X);
+      }
+    } else if (!Target) {
+      for (MachineBasicBlock *X = Body; BBHasFallthrough(X);) {
+        MachineFunction::iterator Next = std::next(X->getIterator());
+        if (Next == MF->end())
+          break;
+        X = &*Next;
+        AFI->addTightLoopBody(X);
       }
     }
   }
@@ -444,7 +551,12 @@ bool EZHConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   for (CPUser &User : CPUsers) {
     if (!User.MI || !User.CPEMI) continue;
     MCSymbol *LitSym = User.CPEMI->getOperand(0).getMCSymbol();
-    User.MI->getOperand(1) = MachineOperand::CreateMCSymbol(LitSym);
+    // Mutate the operand in place. Copy-assigning a freshly built operand
+    // (CreateMCSymbol) would overwrite this operand's ParentMI with the
+    // temporary's null parent -- the implicit copy-assignment copies every
+    // field, ParentMI included -- which -verify-machineinstrs flags as
+    // "operand with wrong parent set". ChangeToMCSymbol leaves ParentMI alone.
+    User.MI->getOperand(1).ChangeToMCSymbol(LitSym);
   }
 
   // Clean up redundant branches created by splitting
@@ -668,7 +780,11 @@ void EZHConstantIslands::initializeFunctionInfo(
 
       unsigned Opc = I.getOpcode();
       if (I.isBranch()) {
-        if (Opc != EZH::GOTO)
+        // Both the unconditional GOTO and the conditional GOTO_CC are direct
+        // PC-relative branches that this pass may need to range-fix; the
+        // register-indirect forms are not tracked. isPredicated distinguishes
+        // them (GOTO has no predicate operand, GOTO_CC always carries one).
+        if (Opc != EZH::GOTO && Opc != EZH::GOTO_CC)
           continue;
         bool isCond = TII->isPredicated(I);
         unsigned MaxOffs = 8 * 1024 * 1024;
@@ -769,9 +885,7 @@ MachineBasicBlock *EZHConstantIslands::splitBlockBeforeInstr(MachineInstr *MI) {
         .addImm(EZHCC::ICC_EU);
   }
 
-  BuildMI(OrigBB, DebugLoc(), TII->get(EZH::GOTO))
-      .addMBB(NewBB)
-      .addImm(EZHCC::ICC_EU);
+  BuildMI(OrigBB, DebugLoc(), TII->get(EZH::GOTO)).addMBB(NewBB);
   ++NumSplit;
 
   // Update the CFG.  All succs of OrigBB are now succs of NewBB.
@@ -1019,12 +1133,6 @@ int EZHConstantIslands::findInRangeCPEntry(CPUser &U, unsigned UserOffset) {
   return 0;
 }
 
-/// getUnconditionalBrDisp - Returns the maximum displacement that can fit in
-/// the specific unconditional branch instruction.
-static inline unsigned getUnconditionalBrDisp(int Opc) {
-  return 8 * 1024 * 1024;
-}
-
 /// findAvailableWater - Look for an existing entry in the WaterList in which
 /// we can place the CPE referenced from U so it's within range of U's MI.
 /// Returns true if found, false if not. If it returns true, WaterIter
@@ -1110,6 +1218,50 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
   BBInfoVector &BBInfo = BBUtils->getBBInfo();
   const BasicBlockInfo &UserBBI = BBInfo[UserMBB->getNumber()];
 
+  // A tight_loop body must never gain an island at its end (the island's
+  // data and branch-around goto would sit inside the hardware-repeated
+  // region, which ends only at the next block's label) and must never be
+  // split. Make water immediately BEFORE the loop instead: the formation
+  // pass guarantees a layout predecessor that is not itself a loop body,
+  // and caps body size so this spot is always in range of the setup load.
+  if (MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(UserMBB)) {
+    // The repeated region may span several marked fall-through blocks (see
+    // the registration walk in runOnMachineFunction); water must go before
+    // the FIRST of them. Walk back over the consecutive marked run. A run
+    // reaching the entry block cannot be protected (an island at the
+    // function's first address would be executed): refuse loudly rather
+    // than fall into std::prev(begin()) in release builds.
+    MachineBasicBlock *First = UserMBB;
+    for (;;) {
+      if (First->getIterator() == MF->begin())
+        report_fatal_error(
+            "EZH tight_loop: constant-pool water needed before a tight_loop "
+            "region starting at the entry block; hoist the loop");
+      MachineBasicBlock *P = &*std::prev(First->getIterator());
+      if (!MF->getInfo<EZHMachineFunctionInfo>()->isTightLoopBody(P))
+        break;
+      First = P;
+    }
+    MachineBasicBlock *Prev = &*std::prev(First->getIterator());
+    if (BBHasFallthrough(Prev)) {
+      // The island will sit between Prev and First; Prev must branch
+      // around it (same bookkeeping as the split-at-end path below).
+      BuildMI(Prev, DebugLoc(), TII->get(EZH::GOTO)).addMBB(First);
+      unsigned MaxDisp = 8 * 1024 * 1024;
+      ImmBranches.push_back(
+          ImmBranch(&Prev->back(), MaxDisp, false, EZH::GOTO));
+      BBUtils->computeBlockSize(Prev);
+      BBUtils->adjustBBOffsetsAfter(Prev);
+    }
+    // handleConstantPoolUser inserts the island BEFORE NewMBB, so NewMBB is
+    // the block that FOLLOWS the water point: the first region block. (An
+    // earlier version returned Prev here, which put the island on the far
+    // side of Prev -- before a block whose fall-through was then unprotected
+    // -- and invoked UB when Prev was the entry block.)
+    NewMBB = First;
+    return;
+  }
+
   // If the block does not end in an unconditional branch already, and if the
   // end of the block is within range, make new water there by adding an
   // unconditional branch (4 bytes on EZH).
@@ -1122,9 +1274,7 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
       LLVM_DEBUG(dbgs() << "Split at end of " << printMBBReference(*UserMBB)
                         << format(", expected CPE offset %#x\n", CPEOffset));
       NewMBB = &*++UserMBB->getIterator();
-      BuildMI(UserMBB, DebugLoc(), TII->get(EZH::GOTO))
-          .addMBB(NewMBB)
-          .addImm(EZHCC::ICC_EU);
+      BuildMI(UserMBB, DebugLoc(), TII->get(EZH::GOTO)).addMBB(NewMBB);
       unsigned MaxDisp = 8 * 1024 * 1024;
       ImmBranches.push_back(
           ImmBranch(&UserMBB->back(), MaxDisp, false, EZH::GOTO));
@@ -1141,7 +1291,7 @@ void EZHConstantIslands::createNewWater(unsigned CPUserIndex,
   // insertion offset based on the user instruction's maximum reach,
   // allowing space for the 4-byte unconditional jump we will insert to
   // branch around the island.
-  const Align Align = MF->getAlignment();
+  [[maybe_unused]] const Align Align = MF->getAlignment();
   assert(Align >= CPEAlign && "Over-aligned constant pool entry");
   unsigned BaseInsertOffset = UserOffset + U.getMaxDisp();
 
@@ -1437,6 +1587,11 @@ bool EZHConstantIslands::fixupConditionalBr(ImmBranch &Br) {
   return true;
 }
 
+
+INITIALIZE_PASS_BEGIN(EZHConstantIslands, DEBUG_TYPE,
+                      "EZH constant island placement", false, false)
+INITIALIZE_PASS_END(EZHConstantIslands, DEBUG_TYPE,
+                    "EZH constant island placement", false, false)
 
 namespace llvm {
 FunctionPass *createEZHConstantIslandPass() {

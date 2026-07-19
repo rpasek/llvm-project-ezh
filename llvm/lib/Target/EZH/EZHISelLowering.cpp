@@ -59,7 +59,21 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   computeRegisterProperties(STI.getRegisterInfo());
   setStackPointerRegisterToSaveRestore(EZH::SP);
 
+  // Comparisons materialize as exactly 0 or 1 (SETCC expands to a
+  // select_cc of the constants 1 and 0), so downstream code never needs to
+  // re-mask a boolean with and_imm 1.
+  setBooleanContents(ZeroOrOneBooleanContent);
+
+  // Synthesize short shift-add chains for multiplies by constant that the
+  // generic combiner's shapes miss (see PerformDAGCombine).
+  setTargetDAGCombine(ISD::MUL);
+
   setOperationAction(ISD::LOAD, MVT::i64, Expand);
+
+  // 64-bit add/sub expand to a native adds/adc (subs/sbc) carry chain in
+  // ReplaceNodeResults instead of the generic boolean carry expansion.
+  setOperationAction(ISD::ADD, MVT::i64, Custom);
+  setOperationAction(ISD::SUB, MVT::i64, Custom);
   setOperationAction(ISD::STORE, MVT::i64, Expand);
 
   setOperationAction(ISD::CTLZ, MVT::i32, Custom);
@@ -261,6 +275,9 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
   setLoadExtAction(ISD::EXTLOAD, MVT::i32, MVT::i8, Legal);
   setLoadExtAction(ISD::ZEXTLOAD, MVT::i32, MVT::i8, Legal);
   setLoadExtAction(ISD::SEXTLOAD, MVT::i32, MVT::i8, Legal);
+  // A sign-extending i1 load (0/-1 from bit 0) has no native form; expand it
+  // to a zero-extending byte load plus a 1-bit sign fixup.
+  setLoadExtAction(ISD::SEXTLOAD, MVT::i32, MVT::i1, Expand);
   setTruncStoreAction(MVT::i32, MVT::i16, Custom);
   setTruncStoreAction(MVT::i32, MVT::i8, Legal);
 
@@ -289,9 +306,19 @@ EZHTargetLowering::EZHTargetLowering(const TargetMachine &TM,
     setIndexedStoreAction(ISD::PRE_DEC, VT, Legal);
   }
 
-  setOperationAction(ISD::SHL_PARTS, MVT::i32, Expand);
-  setOperationAction(ISD::SRA_PARTS, MVT::i32, Expand);
-  setOperationAction(ISD::SRL_PARTS, MVT::i32, Expand);
+  // 64-bit ordered compares take the subs/sbcs carry idiom via the
+  // SETCCCARRY expansion path instead of the generic hi/lo select chain.
+  setOperationAction(ISD::USUBO, MVT::i32, Custom);
+  setOperationAction(ISD::SETCCCARRY, MVT::i32, Custom);
+
+  // Variable 64-bit shifts inline as the branchless two-word sequence
+  // (~12 instructions with predicated selects) instead of the
+  // __ashldi3/__lshrdi3/__ashrdi3 libcalls and their RA save: about five
+  // times fewer cycles per shift. Constant-amount i64 shifts never came
+  // through here (the type legalizer resolves them directly).
+  setOperationAction(ISD::SHL_PARTS, MVT::i32, Custom);
+  setOperationAction(ISD::SRA_PARTS, MVT::i32, Custom);
+  setOperationAction(ISD::SRL_PARTS, MVT::i32, Custom);
 }
 
 bool EZHTargetLowering::getIndexedAddressParts(SDNode *N, SDValue Ptr,
@@ -402,8 +429,9 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     if (MemVT == MVT::i32) {
       if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Ptr)) {
         uint32_t Addr = C->getZExtValue();
-        if (Addr >= 0x40000000 && Addr <= 0x400FFFFF && (Addr & 3) == 0) {
-          uint32_t Offset = Addr - 0x40000000;
+        if (Addr >= EZHPeripheralBase && Addr <= EZHPeripheralEnd &&
+            (Addr & 3) == 0) {
+          uint32_t Offset = Addr - EZHPeripheralBase;
           SDValue OffsetVal = DAG.getTargetConstant(Offset, DL, MVT::i32);
           SDVTList VTs = DAG.getVTList(MVT::Other);
           SDValue Ops[] = {Chain, Val, OffsetVal};
@@ -455,8 +483,9 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     if (MemVT == MVT::i32) {
       if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Ptr)) {
         uint32_t Addr = C->getZExtValue();
-        if (Addr >= 0x40000000 && Addr <= 0x400FFFFF && (Addr & 3) == 0) {
-          uint32_t Offset = Addr - 0x40000000;
+        if (Addr >= EZHPeripheralBase && Addr <= EZHPeripheralEnd &&
+            (Addr & 3) == 0) {
+          uint32_t Offset = Addr - EZHPeripheralBase;
           SDValue OffsetVal = DAG.getTargetConstant(Offset, DL, MVT::i32);
           SDVTList VTs = DAG.getVTList(MVT::i32, MVT::Other);
           SDValue Ops[] = {Chain, OffsetVal};
@@ -521,6 +550,17 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::GlobalTLSAddress:
   case ISD::ExternalSymbol:
     return LowerGlobalAddress(Op, DAG);
+  case ISD::USUBO:
+    return LowerUSUBO(Op, DAG);
+  case ISD::SETCCCARRY:
+    return LowerSETCCCARRY(Op, DAG);
+  case ISD::SHL_PARTS:
+  case ISD::SRA_PARTS:
+  case ISD::SRL_PARTS: {
+    SDValue Lo, Hi;
+    expandShiftParts(Op.getNode(), Lo, Hi, DAG);
+    return DAG.getMergeValues({Lo, Hi}, SDLoc(Op));
+  }
   case ISD::SELECT_CC:
     return LowerSELECT_CC(Op, DAG);
   case ISD::VASTART:
@@ -562,7 +602,41 @@ SDValue EZHTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
 
 void EZHTargetLowering::ReplaceNodeResults(SDNode *N,
                                            SmallVectorImpl<SDValue> &Results,
-                                           SelectionDAG &DAG) const {}
+                                           SelectionDAG &DAG) const {
+  switch (N->getOpcode()) {
+  default:
+    return;
+  case ISD::ADD:
+  case ISD::SUB: {
+    // 64-bit add/sub as a native carry chain -- two instructions instead
+    // of the generic boolean expansion's nine-plus:
+    //
+    //     adds lo, a_lo, b_lo        subs lo, a_lo, b_lo
+    //     adc  hi, a_hi, b_hi        sbc  hi, a_hi, b_hi
+    //
+    // The carry travels as glue, which keeps each pair adjacent through
+    // scheduling; register allocation can only insert loads, stores and
+    // plain moves between them, none of which touch the flags, and there
+    // is no post-RA scheduler on this target.
+    if (N->getValueType(0) != MVT::i64)
+      return;
+    SDLoc DL(N);
+    SDValue LHSLo, LHSHi, RHSLo, RHSHi;
+    std::tie(LHSLo, LHSHi) =
+        DAG.SplitScalar(N->getOperand(0), DL, MVT::i32, MVT::i32);
+    std::tie(RHSLo, RHSHi) =
+        DAG.SplitScalar(N->getOperand(1), DL, MVT::i32, MVT::i32);
+    bool IsAdd = N->getOpcode() == ISD::ADD;
+    SDValue Lo =
+        DAG.getNode(IsAdd ? EZHISD::ADDS : EZHISD::SUBS, DL,
+                    DAG.getVTList(MVT::i32, MVT::Glue), LHSLo, RHSLo);
+    SDValue Hi = DAG.getNode(IsAdd ? EZHISD::ADC : EZHISD::SBC, DL, MVT::i32,
+                             LHSHi, RHSHi, Lo.getValue(1));
+    Results.push_back(DAG.getNode(ISD::BUILD_PAIR, DL, MVT::i64, Lo, Hi));
+    return;
+  }
+  }
+}
 static EZHCC::CondCode IntCCToEZHCC(ISD::CondCode CC);
 
 // Master helper function to preprocess a 32-bit comparison.
@@ -589,6 +663,31 @@ static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
   // Preprocess signed comparisons (convert to unsigned if unsafe)
   if (CC == ISD::SETGT || CC == ISD::SETGE || CC == ISD::SETLT ||
       CC == ISD::SETLE) {
+
+    // Canonicalize toward compare-with-zero, the shape a plain sub_imms
+    // handles with the sign-derived conditions (PO/NE/AZ/ZB) and no
+    // bias sequence: put a constant on the right, then fold +/-1 bounds
+    // into the zero bound.
+    if (isa<ConstantSDNode>(LHS) && !isa<ConstantSDNode>(RHS)) {
+      std::swap(LHS, RHS);
+      CC = ISD::getSetCCSwappedOperands(CC);
+    }
+    if (auto *C = dyn_cast<ConstantSDNode>(RHS)) {
+      int64_t V = C->getSExtValue();
+      if (V == 1 && CC == ISD::SETLT) { // x < 1  ->  x <= 0
+        RHS = DAG.getConstant(0, dl, MVT::i32);
+        CC = ISD::SETLE;
+      } else if (V == 1 && CC == ISD::SETGE) { // x >= 1  ->  x > 0
+        RHS = DAG.getConstant(0, dl, MVT::i32);
+        CC = ISD::SETGT;
+      } else if (V == -1 && CC == ISD::SETGT) { // x > -1  ->  x >= 0
+        RHS = DAG.getConstant(0, dl, MVT::i32);
+        CC = ISD::SETGE;
+      } else if (V == -1 && CC == ISD::SETLE) { // x <= -1  ->  x < 0
+        RHS = DAG.getConstant(0, dl, MVT::i32);
+        CC = ISD::SETLT;
+      }
+    }
 
     // Determine if both operands are guaranteed to fit in the signed 16-bit
     // range
@@ -621,13 +720,57 @@ static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
     bool IsSafe16Bit = (LHSExt && RHSExt) || (LHSExt && RHSConst) ||
                        (RHSExt && LHSConst) || (LHSConst && RHSConst);
 
+    // Comparing against zero subtracts zero: the result IS the left
+    // operand, so no overflow is possible and the sign-derived conditions
+    // are exact. This kills the whole bias sequence for the most common
+    // signed compares (x < 0, x >= 0, and the +/-1 forms canonicalized
+    // above), and the resulting sub_imms x, 0 is exactly the shape the
+    // compare-fusion pass folds into an ALU producer's S-twin.
+    if (auto *C = dyn_cast<ConstantSDNode>(RHS))
+      IsSafe16Bit |= C->isZero();
+
     if (!IsSafe16Bit) {
       // Toggle the sign bit (bit 31) of both operands to shift the signed range
       // monotonically into the unsigned range, enabling unsigned comparison.
-      LHS = DAG.getNode(EZHISD::BTOG, dl, MVT::i32, LHS,
-                        DAG.getConstant(31, dl, MVT::i32));
-      RHS = DAG.getNode(EZHISD::BTOG, dl, MVT::i32, RHS,
-                        DAG.getConstant(31, dl, MVT::i32));
+      // A constant operand absorbs the toggle at compile time: materializing
+      // C ^ 0x80000000 costs no more than materializing C, saving the
+      // btog_imm. ISD::Constant is custom-lowered and operands legalize
+      // before their users, so the constant may already be a LOAD_SIMM or
+      // LOAD_CONSTANT machine node here; recover the value from those too.
+      auto RecoverConstant = [](SDValue Op, uint32_t &Val) {
+        if (auto *C = dyn_cast<ConstantSDNode>(Op)) {
+          Val = static_cast<uint32_t>(C->getZExtValue());
+          return true;
+        }
+        if (Op->isMachineOpcode()) {
+          if ((Op->getMachineOpcode() == EZH::LOAD_SIMM ||
+               Op->getMachineOpcode() == EZH::LOAD_SIMMN) &&
+              Op->getConstantOperandVal(2) == EZHCC::ICC_EU) {
+            Val = static_cast<uint32_t>(Op->getConstantOperandVal(0))
+                  << Op->getConstantOperandVal(1);
+            if (Op->getMachineOpcode() == EZH::LOAD_SIMMN)
+              Val = ~Val;
+            return true;
+          }
+          if (Op->getMachineOpcode() == EZH::LOAD_CONSTANT)
+            if (auto *CP = dyn_cast<ConstantPoolSDNode>(Op->getOperand(0)))
+              if (!CP->isMachineConstantPoolEntry())
+                if (auto *CI = dyn_cast<ConstantInt>(CP->getConstVal())) {
+                  Val = static_cast<uint32_t>(CI->getZExtValue());
+                  return true;
+                }
+        }
+        return false;
+      };
+      auto BiasOperand = [&](SDValue Op) {
+        uint32_t Val;
+        if (RecoverConstant(Op, Val))
+          return DAG.getConstant(Val ^ 0x80000000u, dl, MVT::i32);
+        return DAG.getNode(EZHISD::BTOG, dl, MVT::i32, Op,
+                           DAG.getConstant(31, dl, MVT::i32));
+      };
+      LHS = BiasOperand(LHS);
+      RHS = BiasOperand(RHS);
 
       // Map the signed condition codes to their unsigned counterparts
       switch (CC) {
@@ -658,6 +801,93 @@ static void preprocessComparison(SDValue &LHS, SDValue &RHS, ISD::CondCode &CC,
     CC = ISD::SETUGE;
     std::swap(LHS, RHS);
   }
+}
+
+// Borrow-producing 32-bit subtract for the i64 compare expansion: the
+// difference comes from a flag-setting subtract, and the borrow
+// materializes as a 0/1 through the glued select machinery (CA = borrow
+// after subtraction on EZH).
+SDValue EZHTargetLowering::LowerUSUBO(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Diff =
+      DAG.getNode(EZHISD::SUBS, DL, DAG.getVTList(MVT::i32, MVT::Glue),
+                  Op.getOperand(0), Op.getOperand(1));
+  SDValue Ops[] = {DAG.getConstant(1, DL, MVT::i32),
+                   DAG.getConstant(0, DL, MVT::i32),
+                   DAG.getTargetConstant(ISD::SETULT, DL, MVT::i32),
+                   Diff.getValue(1)};
+  SDValue Borrow = DAG.getNode(EZHISD::SELECT_CC, DL, MVT::i32, Ops);
+  return DAG.getMergeValues({Diff, Borrow}, DL);
+}
+
+// True if V is the borrow materialization LowerUSUBO built: a glued
+// select of 1/0 on the unsigned-borrow condition.
+static bool isBorrowSelect(SDValue V) {
+  return V.getOpcode() == EZHISD::SELECT_CC &&
+         isOneConstant(V.getOperand(0)) && isNullConstant(V.getOperand(1)) &&
+         V.getConstantOperandVal(2) == ISD::SETULT &&
+         V.getOperand(3).getValueType() == MVT::Glue;
+}
+
+// SETCCCARRY(hi_a, hi_b, borrow, lt/ult/ge/uge): the high half of the
+// wide compare, consuming the low half's borrow. Signed conditions bias
+// the sign bit of both high words first (EZH has no overflow flag), then
+// everything reduces to subtract-with-borrow and a carry test:
+//
+//     subs lo_a, lo_b
+//     sbcs hi_a, hi_b
+//     load_imm    r, 0
+//     load_imm_ca r, 1
+SDValue EZHTargetLowering::LowerSETCCCARRY(SDValue Op,
+                                           SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue LHS = Op.getOperand(0);
+  SDValue RHS = Op.getOperand(1);
+  SDValue Carry = Op.getOperand(2);
+  ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(3))->get();
+
+  if (CC == ISD::SETLT || CC == ISD::SETGE) {
+    LHS = DAG.getNode(EZHISD::BTOG, DL, MVT::i32, LHS,
+                      DAG.getConstant(31, DL, MVT::i32));
+    RHS = DAG.getNode(EZHISD::BTOG, DL, MVT::i32, RHS,
+                      DAG.getConstant(31, DL, MVT::i32));
+    CC = CC == ISD::SETLT ? ISD::SETULT : ISD::SETUGE;
+  }
+  assert((CC == ISD::SETULT || CC == ISD::SETUGE) &&
+         "unexpected SETCCCARRY condition");
+
+  // Reach through the borrow to its flags. Depending on legalization
+  // order the carry operand is either the still-unlowered USUBO (reuse
+  // its operands for a direct flag-setting subtract and give its other
+  // users the difference) or the borrow materialization LowerUSUBO built
+  // (take its glue when this is the only user; the select then dies and
+  // the glue keeps one consumer). Otherwise re-derive the flag from the
+  // 0/1 value: adding all-ones carries out exactly when the value is 1.
+  SDValue Glue;
+  if (Carry.getOpcode() == ISD::USUBO && Carry.getResNo() == 1 &&
+      Carry.getNode()->hasNUsesOfValue(1, 1)) {
+    SDValue Sub =
+        DAG.getNode(EZHISD::SUBS, DL, DAG.getVTList(MVT::i32, MVT::Glue),
+                    Carry.getOperand(0), Carry.getOperand(1));
+    DAG.ReplaceAllUsesOfValueWith(SDValue(Carry.getNode(), 0),
+                                  Sub.getValue(0));
+    Glue = Sub.getValue(1);
+  } else if (isBorrowSelect(Carry) && Carry.hasOneUse()) {
+    Glue = Carry.getOperand(3);
+  } else {
+    SDValue Conv =
+        DAG.getNode(EZHISD::ADDS, DL, DAG.getVTList(MVT::i32, MVT::Glue),
+                    Carry, DAG.getSignedConstant(-1, DL, MVT::i32));
+    Glue = Conv.getValue(1);
+  }
+
+  SDValue Sub = DAG.getNode(EZHISD::SBCS, DL,
+                            DAG.getVTList(MVT::i32, MVT::Glue), LHS, RHS,
+                            Glue);
+  SDValue Ops[] = {DAG.getConstant(1, DL, MVT::i32),
+                   DAG.getConstant(0, DL, MVT::i32),
+                   DAG.getTargetConstant(CC, DL, MVT::i32), Sub.getValue(1)};
+  return DAG.getNode(EZHISD::SELECT_CC, DL, MVT::i32, Ops);
 }
 
 SDValue EZHTargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const {
@@ -745,6 +975,22 @@ SDValue EZHTargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
   return DAG.getMergeValues({ArgVal, ArgVal.getValue(1)}, dl);
 }
 
+// Build a LOAD_CONSTANT machine node with an invariant constant-pool MMO:
+// the MMO is what makes the load eligible for rematerialization and for
+// MachineCSE across blocks (a load without one is conservatively treated
+// as reading mutable memory).
+static SDValue getPoolLoad(SelectionDAG &DAG, const SDLoc &DL, SDValue CPIdx) {
+  MachineFunction &MF = DAG.getMachineFunction();
+  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
+  MachineSDNode *N =
+      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops);
+  MachineMemOperand *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getConstantPool(MF),
+      MachineMemOperand::MOLoad | MachineMemOperand::MOInvariant, 4, Align(4));
+  DAG.setNodeMemRefs(N, {MMO});
+  return SDValue(N, 0);
+}
+
 SDValue EZHTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   auto *JT = cast<JumpTableSDNode>(Op);
@@ -763,9 +1009,7 @@ SDValue EZHTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
       JT->getIndex(), Type::getInt32Ty(*DAG.getContext()));
   SDValue CPIdx =
       DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
-  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-  return SDValue(
-      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+  return getPoolLoad(DAG, DL, CPIdx);
 }
 
 SDValue EZHTargetLowering::LowerBR_JT(SDValue Op, SelectionDAG &DAG) const {
@@ -796,9 +1040,7 @@ SDValue EZHTargetLowering::LowerBlockAddress(SDValue Op,
       BA->getBlockAddress(), Type::getInt32Ty(*DAG.getContext()));
   SDValue CPIdx =
       DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
-  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-  return SDValue(
-      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+  return getPoolLoad(DAG, DL, CPIdx);
 }
 
 #define GET_REGISTER_MATCHER
@@ -847,9 +1089,7 @@ SDValue EZHTargetLowering::LowerConstantPool(SDValue Op,
       CPV, getPointerTy(DAG.getDataLayout()), CP->getAlign(), CP->getOffset(),
       CP->getTargetFlags());
 
-  SDValue Ops[] = {TargetCP, DAG.getEntryNode()};
-  return SDValue(
-      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+  return getPoolLoad(DAG, DL, TargetCP);
 }
 
 SDValue EZHTargetLowering::LowerConstant(SDValue Op, SelectionDAG &DAG) const {
@@ -876,14 +1116,27 @@ SDValue EZHTargetLowering::LowerConstant(SDValue Op, SelectionDAG &DAG) const {
     return HiNode;
   }
 
+  // The inverted form covers what load_simm cannot: low-ones masks and
+  // near-INT_MAX values (0xFFFF = ~(-1 << 16), 0x7FFFFFFF = ~(-1 << 31)),
+  // which otherwise all pay a constant-pool slot and a pc-relative load.
+  uint32_t NUVal = ~UVal;
+  unsigned NTZ = llvm::countr_zero(NUVal);
+  int32_t NMovedVal = static_cast<int32_t>(NUVal) >> NTZ;
+  if (isInt<11>(NMovedVal)) {
+    SDValue Hi =
+        DAG.getTargetConstant(static_cast<uint32_t>(NMovedVal), DL, MVT::i32);
+    SDValue Shift = DAG.getTargetConstant(NTZ, DL, MVT::i32);
+    SDValue Pred = DAG.getTargetConstant(EZHCC::ICC_EU, DL, MVT::i32);
+    return SDValue(
+        DAG.getMachineNode(EZH::LOAD_SIMMN, DL, MVT::i32, Hi, Shift, Pred), 0);
+  }
+
   // For large constants, use an inline literal pool (LOAD_CONSTANT)
   SDValue CPIdx = DAG.getTargetConstantPool(
       ConstantInt::get(Type::getInt32Ty(*DAG.getContext()), UVal),
       getPointerTy(DAG.getDataLayout()));
 
-  SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-  return SDValue(
-      DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops), 0);
+  return getPoolLoad(DAG, DL, CPIdx);
 }
 
 SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
@@ -891,20 +1144,28 @@ SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
   SDLoc DL(Op);
 
   if (auto *GV = dyn_cast<GlobalAddressSDNode>(Op)) {
+    // A small offset is added to the pooled base address instead of minting
+    // one pool entry per (global, offset): the bare-global load CSEs across
+    // every field/element access of the same object, and the add usually
+    // folds straight into a load/store offset or an add_imm. Only offsets
+    // outside the add_imm immediate range still pool the combined value.
+    int64_t Offset = GV->getOffset();
     SDValue CPIdx;
-    if (GV->getOffset() != 0) {
+    if (Offset != 0 && !isInt<11>(Offset)) {
       EZHConstantPoolValue *CPV =
-          new EZHConstantPoolValue(GV->getGlobal(), GV->getOffset(),
+          new EZHConstantPoolValue(GV->getGlobal(), Offset,
                                    Type::getInt32Ty(*DAG.getContext()));
       CPIdx = DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
+      Offset = 0;
     } else {
       CPIdx = DAG.getTargetConstantPool(GV->getGlobal(),
                                         getPointerTy(DAG.getDataLayout()));
     }
-    SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-    return SDValue(
-        DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops),
-        0);
+    SDValue Base = getPoolLoad(DAG, DL, CPIdx);
+    if (Offset != 0)
+      Base = DAG.getNode(ISD::ADD, DL, MVT::i32, Base,
+                         DAG.getConstant(Offset, DL, MVT::i32));
+    return Base;
   }
 
   if (auto *S = dyn_cast<ExternalSymbolSDNode>(Op)) {
@@ -912,10 +1173,7 @@ SDValue EZHTargetLowering::LowerGlobalAddress(SDValue Op,
         S->getSymbol(), Type::getInt32Ty(*DAG.getContext()));
     SDValue CPIdx =
         DAG.getTargetConstantPool(CPV, getPointerTy(DAG.getDataLayout()));
-    SDValue Ops[] = {CPIdx, DAG.getEntryNode()};
-    return SDValue(
-        DAG.getMachineNode(EZH::LOAD_CONSTANT, DL, MVT::i32, MVT::Other, Ops),
-        0);
+    return getPoolLoad(DAG, DL, CPIdx);
   }
 
   llvm_unreachable("Unhandled global address type");
@@ -1004,6 +1262,13 @@ SDValue EZHTargetLowering::LowerFormalArguments(
     int VarArgsFI;
     SmallVector<SDValue, 4> MemOps;
 
+    // In a function containing a musttail call, the tail call forwards the
+    // ellipsis: capture the entry values of the unnamed argument registers
+    // so LowerCall can reload them into the same registers at the goto.
+    SmallVectorImpl<ForwardedRegister> *Forwards = nullptr;
+    if (MF.getFrameInfo().hasMustTailInVarArgFunc())
+      Forwards = &FuncInfo->getForwardedMustTailRegParms();
+
     if (NumSpillBytes > 0) {
       FuncInfo->setVarArgsSaveSize(NumSpillBytes);
       int VaArgOffset = -static_cast<int>(NumSpillBytes);
@@ -1018,6 +1283,8 @@ SDValue EZHTargetLowering::LowerFormalArguments(
         Register VReg = RegInfo.createVirtualRegister(&EZH::GPRRegClass);
         RegInfo.addLiveIn(ArgRegs[i], VReg);
         SDValue Arg = DAG.getCopyFromReg(Chain, DL, VReg, MVT::i32);
+        if (Forwards)
+          Forwards->push_back(ForwardedRegister(VReg, ArgRegs[i], MVT::i32));
 
         unsigned StoreOffset = (i - Idx) * 4;
         SDValue Addr = DAG.getNode(ISD::ADD, DL, MVT::i32, FIN,
@@ -1050,8 +1317,8 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   CallingConv::ID CallConv = CLI.CallConv;
   bool IsVarArg = CLI.IsVarArg;
 
-  CLI.IsTailCall = false;
-
+  bool IsDirect = isa<GlobalAddressSDNode>(Callee) ||
+                  isa<ExternalSymbolSDNode>(Callee);
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
     Callee = DAG.getTargetGlobalAddress(G->getGlobal(), DL,
                                         getPointerTy(DAG.getDataLayout()));
@@ -1064,8 +1331,60 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
                  *DAG.getContext());
   CCInfo.AnalyzeCallOperands(Outs, CC_EZH);
 
+  // A tail call becomes a plain goto (or goto_reg) in return position.
+  // For an ordinary tail call nothing may live on the stack across it:
+  // every argument must fit in registers (no stack or byval arguments),
+  // both sides must use the one supported calling convention, and varargs
+  // (with their caller-side register save area) are out. A musttail call
+  // is guaranteed matching prototypes and calling conventions by the IR
+  // verifier, which makes those shapes mechanically forwardable: stack
+  // arguments are stored into the caller's own incoming argument slots
+  // (identical offsets from the entry SP, which the epilogue restores) and
+  // the ellipsis of a vararg pair is forwarded through the entry-captured
+  // unnamed argument registers. Only byval remains unimplemented.
+  bool IsMustTail = CLI.CB && CLI.CB->isMustTailCall();
+  bool HasByVal = false;
+  for (const ISD::OutputArg &Out : Outs)
+    HasByVal |= Out.Flags.isByVal();
+  unsigned NumRegArgs = 0;
+  for (const CCValAssign &VA : ArgLocs)
+    NumRegArgs += VA.isRegLoc();
+  if (IsVarArg)
+    NumRegArgs += DAG.getMachineFunction()
+                      .getInfo<EZHMachineFunctionInfo>()
+                      ->getForwardedMustTailRegParms()
+                      .size();
+  // The register form of an indirect tail call needs one epilogue-surviving
+  // register (GPRTC = r0-r3) free for the target. When the arguments occupy
+  // all four, an ordinary tail call simply falls back to a real call, and a
+  // musttail call takes the memory form below.
+  bool NeedsMemForm = !IsDirect && NumRegArgs >= 4;
+  if (CLI.IsTailCall) {
+    const Function &Caller = DAG.getMachineFunction().getFunction();
+    if (IsMustTail) {
+      CLI.IsTailCall = !HasByVal;
+      if (!CLI.IsTailCall)
+        report_fatal_error(
+            "musttail with a byval argument is not supported on EZH");
+    } else {
+      CLI.IsTailCall = CCInfo.getStackSize() == 0 && !HasByVal && !IsVarArg &&
+                       !Caller.isVarArg() && !NeedsMemForm &&
+                       CallConv == CallingConv::C &&
+                       Caller.getCallingConv() == CallingConv::C;
+    }
+  }
+  bool IsTailCall = CLI.IsTailCall;
+
   unsigned NumBytes = CCInfo.getStackSize();
-  Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
+  if (!IsTailCall)
+    Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
+
+  // A musttail call with stack arguments overwrites the caller's own
+  // incoming argument area. Order those stores after every pending load
+  // from that area, so swapped or shuffled arguments read their old values
+  // first.
+  if (IsTailCall && NumBytes != 0)
+    Chain = DAG.getStackArgumentTokenFactor(Chain);
 
   SmallVector<std::pair<unsigned, SDValue>, 4> RegsToPass;
   SmallVector<SDValue, 8> MemOpChains;
@@ -1099,6 +1418,19 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
     if (VA.isRegLoc()) {
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), Arg));
+    } else if (IsTailCall) {
+      // musttail: forward into the caller's own incoming argument slot,
+      // which sits at the same offset from the entry SP that the epilogue
+      // restores before the goto (matching prototypes guarantee the slot
+      // exists and lines up).
+      MachineFunction &MF = DAG.getMachineFunction();
+      int FI = MF.getFrameInfo().CreateFixedObject(
+          VA.getLocVT().getSizeInBits() / 8, VA.getLocMemOffset(),
+          /*IsImmutable=*/false);
+      SDValue FIN = DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
+      MemOpChains.push_back(
+          DAG.getStore(Chain, DL, Arg, FIN,
+                       MachinePointerInfo::getFixedStack(MF, FI)));
     } else {
       // Store to stack
       int32_t Offset = VA.getLocMemOffset();
@@ -1113,6 +1445,43 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   if (!MemOpChains.empty())
     Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, MemOpChains);
+
+  // Memory-form musttail: no register can carry the target across the
+  // epilogue, so park it in a stack slot; the terminator loads it straight
+  // into PC after the frame teardown (see TCRETURN_MEM). The slot is a
+  // fixed object pinned at the very top of the frame, just below the
+  // vararg save area, so its offset from the restored entry SP stays a
+  // small constant no matter how large the locals are (the frame lowering
+  // allocates and deallocates it alongside the vararg area). Handing the
+  // FrameIndex over as the callee makes ISel pick that form.
+  if (IsTailCall && NeedsMemForm) {
+    MachineFunction &MF = DAG.getMachineFunction();
+    EZHMachineFunctionInfo *FuncInfo = MF.getInfo<EZHMachineFunctionInfo>();
+    if (!FuncInfo->getTailCallSlotSize())
+      FuncInfo->setTailCallSlot(
+          MF.getFrameInfo().CreateFixedObject(
+              4, -(int64_t)FuncInfo->getVarArgsSaveSize() - 4,
+              /*IsImmutable=*/false),
+          4);
+    int FI = FuncInfo->getTailCallSlotFI();
+    SDValue Slot = DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
+    Chain = DAG.getStore(Chain, DL, Callee, Slot,
+                         MachinePointerInfo::getFixedStack(MF, FI));
+    Callee = Slot;
+  }
+
+  // A musttail call in a vararg function forwards the ellipsis: reload the
+  // entry values of the unnamed argument registers (captured by
+  // LowerFormalArguments) into the same registers for the callee, which
+  // re-spills them into its own save area.
+  if (IsTailCall && IsVarArg) {
+    const EZHMachineFunctionInfo *FuncInfo =
+        DAG.getMachineFunction().getInfo<EZHMachineFunctionInfo>();
+    for (const ForwardedRegister &F :
+         FuncInfo->getForwardedMustTailRegParms())
+      RegsToPass.push_back(std::make_pair(
+          F.PReg, DAG.getCopyFromReg(Chain, DL, F.VReg, F.VT)));
+  }
 
   SDValue InGlue;
   for (auto &Reg : RegsToPass) {
@@ -1131,6 +1500,11 @@ SDValue EZHTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   if (InGlue.getNode())
     Ops.push_back(InGlue);
+
+  // A tail call is the terminator: the callee returns to our caller, so
+  // there is no result to receive and no call sequence to tear down.
+  if (IsTailCall)
+    return DAG.getNode(EZHISD::TC_RETURN, DL, MVT::Other, Ops);
 
   Chain =
       DAG.getNode(EZHISD::CALL, DL, DAG.getVTList(MVT::Other, MVT::Glue), Ops);
@@ -1198,6 +1572,173 @@ EVT EZHTargetLowering::getSetCCResultType(const DataLayout &DL,
   return VT.changeVectorElementTypeToInteger();
 }
 
+// Minimal number of shift/add/sub instructions to synthesize a multiply by
+// the odd constant C, or a value > Budget if it cannot be done within
+// Budget. The EZH shifted-ALU forms make each step exactly one instruction:
+//   peel low bits:   a*C = a + (a*D << k)      (lsl_add)  C = (D << k) + 1
+//                    a*C = (a*D << k) - a      (lsl_sub)  C = (D << k) - 1
+//   odd factor:      a*C = t + (t << k)        (lsl_add)  C = D * (2^k + 1)
+//                    a*C = (t << k) - t        (lsl_sub)  C = D * (2^k - 1)
+// All identities hold in Z and therefore also mod 2^32.
+static unsigned mulChainCost(uint64_t C, unsigned Budget) {
+  assert((C & 1) && C && "expected an odd constant");
+  // Over-budget sentinel: must exceed any comparison a caller can make
+  // after adding its own +1 steps, so it can never alias a legal cost.
+  constexpr unsigned TooExpensive = 100;
+  if (C == 1)
+    return 0;
+  if (Budget == 0)
+    return TooExpensive;
+  unsigned Best = TooExpensive;
+  for (int Dir : {-1, +1}) {
+    uint64_t E = C + Dir; // C-1 / C+1, even and nonzero
+    unsigned K = llvm::countr_zero(E);
+    if (K < 32)
+      Best = std::min(Best, 1 + mulChainCost(E >> K, Budget - 1));
+  }
+  for (unsigned K = 2; K < 32 && Best > 1; ++K)
+    for (int Dir : {+1, -1}) {
+      uint64_t F = (uint64_t(1) << K) + Dir;
+      if (F <= C && C % F == 0)
+        Best = std::min(Best, 1 + mulChainCost(C / F, Budget - 1));
+    }
+  return Best;
+}
+
+// Emit the chain found by mulChainCost, mirroring its search order.
+static SDValue buildMulChain(SelectionDAG &DAG, const SDLoc &DL, SDValue A,
+                             uint64_t C, unsigned Budget) {
+  if (C == 1)
+    return A;
+  auto Shl = [&](SDValue V, unsigned K) {
+    return DAG.getNode(ISD::SHL, DL, MVT::i32, V,
+                       DAG.getConstant(K, DL, MVT::i32));
+  };
+  for (int Dir : {-1, +1}) {
+    uint64_t E = C + Dir;
+    unsigned K = llvm::countr_zero(E);
+    if (K < 32 && 1 + mulChainCost(E >> K, Budget - 1) <= Budget) {
+      SDValue T = Shl(buildMulChain(DAG, DL, A, E >> K, Budget - 1), K);
+      return DAG.getNode(Dir < 0 ? ISD::ADD : ISD::SUB, DL, MVT::i32, T, A);
+    }
+  }
+  for (unsigned K = 2; K < 32; ++K)
+    for (int Dir : {+1, -1}) {
+      uint64_t F = (uint64_t(1) << K) + Dir;
+      if (F <= C && C % F == 0 &&
+          1 + mulChainCost(C / F, Budget - 1) <= Budget) {
+        SDValue T = buildMulChain(DAG, DL, A, C / F, Budget - 1);
+        return DAG.getNode(Dir > 0 ? ISD::ADD : ISD::SUB, DL, MVT::i32,
+                           Shl(T, K), T);
+      }
+    }
+  llvm_unreachable("mulChainCost accepted a constant buildMulChain cannot");
+}
+
+SDValue EZHTargetLowering::PerformDAGCombine(SDNode *N,
+                                             DAGCombinerInfo &DCI) const {
+  // Multiplies are __mulsi3 libcalls. The generic combiner (via
+  // decomposeMulByConstant) already turns 2^N and sums/differences of two
+  // powers into shifts and adds; here we synthesize short shift-add chains
+  // for the remaining constants -- a * 100 is t = a + (a << 2); t + (t << 3);
+  // t << 2 -- whenever at most MaxChain shifted-ALU instructions suffice.
+  // That is never larger than the call site it replaces and dozens of
+  // cycles faster.
+  if (N->getOpcode() == ISD::MUL && N->getValueType(0) == MVT::i32) {
+    auto *C = dyn_cast<ConstantSDNode>(N->getOperand(1));
+    if (!C || C->isZero() || C->isOne())
+      return SDValue();
+    const unsigned MaxChain = 3;
+    uint64_t Val = C->getZExtValue();
+    unsigned K = llvm::countr_zero(Val);
+    uint64_t Odd = Val >> K;
+    unsigned ShiftCost = K ? 1 : 0;
+    if (Odd == 1 || mulChainCost(Odd, MaxChain - ShiftCost) + ShiftCost >
+                        MaxChain)
+      return SDValue();
+    SelectionDAG &DAG = DCI.DAG;
+    SDLoc DL(N);
+    SDValue Chain =
+        buildMulChain(DAG, DL, N->getOperand(0), Odd, MaxChain - ShiftCost);
+    if (K)
+      Chain = DAG.getNode(ISD::SHL, DL, MVT::i32, Chain,
+                          DAG.getConstant(K, DL, MVT::i32));
+    return Chain;
+  }
+  return SDValue();
+}
+
+// Let CodeGenPrepare duplicate returns into predecessors so conditionally
+// reached calls in tail position become sibling calls; without this a
+// function whose tail call sits behind a branch keeps its gosub and the
+// otherwise-unnecessary RA save.
+bool EZHTargetLowering::mayBeEmittedAsTailCall(const CallInst *CI) const {
+  return CI->isTailCall();
+}
+
+// A single-result call whose value flows only into the function's return is
+// in tail position -- notably a return-position libcall (return a / b), which
+// otherwise pays a gosub plus an RA save and pop. Enabling this lets those
+// forward straight to the helper (goto __divsi3). Only the single-value case
+// is handled; i64 returns (a register pair) fall back to a normal call.
+bool EZHTargetLowering::isUsedByReturnOnly(SDNode *N, SDValue &Chain) const {
+  if (N->getNumValues() != 1)
+    return false;
+  if (!N->hasNUsesOfValue(1, 0))
+    return false;
+
+  SDNode *Copy = *N->user_begin();
+  if (Copy->getOpcode() != ISD::CopyToReg)
+    return false;
+  // A glue operand on the copy means it is not safe to tail-call.
+  if (Copy->getOperand(Copy->getNumOperands() - 1).getValueType() == MVT::Glue)
+    return false;
+
+  // The copied value must feed only the return, nothing else.
+  bool HasRet = false;
+  for (SDNode *U : Copy->users()) {
+    if (U->getOpcode() != EZHISD::RET_GLUE_INTERNAL)
+      return false;
+    HasRet = true;
+  }
+  if (!HasRet)
+    return false;
+
+  Chain = Copy->getOperand(0);
+  return true;
+}
+
+// The truth about EZH addressing, so LSR and friends cost formulas
+// honestly: base register plus an immediate (word [-512, 508], byte
+// [-128, 127]), or base plus an unscaled index register with no offset
+// (ldr_reg/str_reg). No global-as-base folding, no scaling.
+bool EZHTargetLowering::isLegalAddressingMode(const DataLayout &DL,
+                                              const AddrMode &AM, Type *Ty,
+                                              unsigned AS,
+                                              Instruction *I) const {
+  if (AM.BaseGV)
+    return false;
+  if (AM.Scale != 0) {
+    // reg + reg, unscaled, no immediate on top.
+    return AM.Scale == 1 && AM.HasBaseReg && AM.BaseOffs == 0;
+  }
+  uint64_t Bits = Ty->isSized() ? DL.getTypeSizeInBits(Ty) : 32;
+  if (Bits >= 32)
+    return AM.BaseOffs >= -512 && AM.BaseOffs <= 508 && (AM.BaseOffs & 3) == 0;
+  return AM.BaseOffs >= -128 && AM.BaseOffs <= 127;
+}
+
+bool EZHTargetLowering::decomposeMulByConstant(LLVMContext &Context, EVT VT,
+                                               SDValue C) const {
+  // EZH multiplies through the __mulsi3 libcall (a software shift-add loop
+  // plus call overhead), while the shifted-ALU forms (lsl_add etc.) fold a
+  // shift and an add/sub into one instruction. Every constant shape the
+  // DAG combiner knows how to decompose (2^N, 2^N +/- 1 and their negated
+  // and shifted variants) therefore beats the call by an order of
+  // magnitude, so accept them all.
+  return VT == MVT::i32 && isa<ConstantSDNode>(C.getNode());
+}
+
 bool EZHTargetLowering::CanLowerReturn(
     CallingConv::ID CallConv, MachineFunction &MF, bool IsVarArg,
     const SmallVectorImpl<ISD::OutputArg> &Outs, LLVMContext &Context,
@@ -1219,8 +1760,20 @@ const char *EZHTargetLowering::getTargetNodeName(unsigned Opcode) const {
     return "EZHISD::RET_GLUE_INTERNAL";
   case EZHISD::CALL:
     return "EZHISD::CALL";
+  case EZHISD::TC_RETURN:
+    return "EZHISD::TC_RETURN";
   case EZHISD::CMP:
     return "EZHISD::CMP";
+  case EZHISD::ADDS:
+    return "EZHISD::ADDS";
+  case EZHISD::SUBS:
+    return "EZHISD::SUBS";
+  case EZHISD::ADC:
+    return "EZHISD::ADC";
+  case EZHISD::SBC:
+    return "EZHISD::SBC";
+  case EZHISD::SBCS:
+    return "EZHISD::SBCS";
   case EZHISD::BR_CC:
     return "EZHISD::BR_CC";
   case EZHISD::SELECT_CC:
@@ -1322,14 +1875,12 @@ EZHTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     }
 
     // Emit predicated GOTO (TrueBB)
-    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(TrueBB).addImm(CC);
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO_CC)).addMBB(TrueBB).addImm(CC);
 
     auto NextIT = next_nodbg(MachineBasicBlock::iterator(MI), BB->end());
     if (FalseBB && (NextIT == BB->end() || !NextIT->isBranch())) {
       // Emit unconditional GOTO (FalseBB) with ICC_EU (Always)
-      BuildMI(*BB, MI, DL, TII->get(EZH::GOTO))
-          .addMBB(FalseBB)
-          .addImm(EZHCC::ICC_EU);
+      BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(FalseBB);
     }
     MI.eraseFromParent();
     return BB;
@@ -1396,10 +1947,62 @@ EZHTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
       break;
     }
 
-    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(TrueBB).addImm(BranchCC);
-    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO))
-        .addMBB(DoneBB)
-        .addImm(EZHCC::ICC_EU);
+    // Fold a constant materialization into the predicated slot: cloning
+    // the load itself into TrueBB lets the if-converter later produce
+    // "load_imm_cc dst, K" instead of materialize-plus-mov_cc, saving an
+    // instruction and a register. If only the false side is a foldable
+    // materialization, swap the sides and invert the condition.
+    MachineRegisterInfo &MRI = F->getRegInfo();
+    auto FoldableMaterialization = [&](Register R) -> MachineInstr * {
+      MachineInstr *Def = MRI.getVRegDef(R);
+      if (!Def)
+        return nullptr;
+      switch (Def->getOpcode()) {
+      case EZH::LOAD_IMM:
+      case EZH::LOAD_IMMN:
+      case EZH::LOAD_SIMM:
+      case EZH::LOAD_SIMMN:
+        return TII->isPredicated(*Def) ? nullptr : Def;
+      default:
+        return nullptr;
+      }
+    };
+    auto InvertCC = [](EZHCC::CondCode C) -> EZHCC::CondCode {
+      switch (C) {
+      case EZHCC::ICC_ZE: return EZHCC::ICC_NZ;
+      case EZHCC::ICC_NZ: return EZHCC::ICC_ZE;
+      case EZHCC::ICC_PO: return EZHCC::ICC_NE;
+      case EZHCC::ICC_NE: return EZHCC::ICC_PO;
+      case EZHCC::ICC_AZ: return EZHCC::ICC_ZB;
+      case EZHCC::ICC_ZB: return EZHCC::ICC_AZ;
+      case EZHCC::ICC_CA: return EZHCC::ICC_NC;
+      case EZHCC::ICC_NC: return EZHCC::ICC_CA;
+      default: return EZHCC::ICC_EU; // not invertible here
+      }
+    };
+    MachineInstr *FoldDef = FoldableMaterialization(TrueReg);
+    if (!FoldDef) {
+      if (MachineInstr *FalseDef = FoldableMaterialization(FalseReg)) {
+        EZHCC::CondCode Inverted = InvertCC(BranchCC);
+        if (Inverted != EZHCC::ICC_EU) {
+          std::swap(TrueReg, FalseReg);
+          BranchCC = Inverted;
+          FoldDef = FalseDef;
+        }
+      }
+    }
+    Register OrigFoldReg;
+    if (FoldDef) {
+      OrigFoldReg = FoldDef->getOperand(0).getReg();
+      Register NewTrue = MRI.createVirtualRegister(&EZH::GPRRegClass);
+      MachineInstr *Clone = F->CloneMachineInstr(FoldDef);
+      Clone->getOperand(0).setReg(NewTrue);
+      TrueBB->push_back(Clone);
+      TrueReg = NewTrue;
+    }
+
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO_CC)).addMBB(TrueBB).addImm(BranchCC);
+    BuildMI(*BB, MI, DL, TII->get(EZH::GOTO)).addMBB(DoneBB);
 
     BuildMI(*DoneBB, DoneBB->begin(), DL, TII->get(EZH::PHI), DestReg)
         .addReg(TrueReg)
@@ -1408,6 +2011,11 @@ EZHTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
         .addMBB(BB);
 
     MI.eraseFromParent();
+    // If the select was the folded materialization's only user, it is dead
+    // now; erase it eagerly, since later cleanup passes have already run
+    // for shapes produced by earlier combines.
+    if (FoldDef && MRI.use_nodbg_empty(OrigFoldReg))
+      FoldDef->eraseFromParent();
     return DoneBB;
   }
   case EZH::EH_SjLj_SetJmp:
@@ -1519,28 +2127,25 @@ EZHTargetLowering::emitEHSjLjSetJmp(MachineInstr &MI,
       .addImm(EZHCC::ICC_EU);
 
   // Safety Goto from ThisMBB directly into MainMBB
-  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::GOTO))
-      .addMBB(MainMBB)
-      .addImm(EZHCC::ICC_EU);
+  BuildMI(*ThisMBB, MI, DL, TII->get(EZH::GOTO)).addMBB(MainMBB);
 
   // MainMBB returns 0 on initialization
   Register MainValReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
   BuildMI(MainMBB, DL, TII->get(EZH::LOAD_IMM), MainValReg)
       .addImm(0)
       .addImm(EZHCC::ICC_EU);
-  BuildMI(MainMBB, DL, TII->get(EZH::GOTO))
-      .addMBB(SinkMBB)
-      .addImm(EZHCC::ICC_EU);
+  BuildMI(MainMBB, DL, TII->get(EZH::GOTO)).addMBB(SinkMBB);
   MainMBB->addSuccessor(SinkMBB);
 
-  // RestoreMBB returns 1 on builtin longjmp return
+  // RestoreMBB returns 1 on builtin longjmp return. The abnormal entry
+  // provides no register contents: clobber everything first so no value
+  // can live through this block in a register (see SJLJ_RECEIVER_CLOBBER).
+  BuildMI(RestoreMBB, DL, TII->get(EZH::SJLJ_RECEIVER_CLOBBER));
   Register RestoreValReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
   BuildMI(RestoreMBB, DL, TII->get(EZH::LOAD_IMM), RestoreValReg)
       .addImm(1)
       .addImm(EZHCC::ICC_EU);
-  BuildMI(RestoreMBB, DL, TII->get(EZH::GOTO))
-      .addMBB(SinkMBB)
-      .addImm(EZHCC::ICC_EU);
+  BuildMI(RestoreMBB, DL, TII->get(EZH::GOTO)).addMBB(SinkMBB);
   RestoreMBB->addSuccessor(SinkMBB);
 
   // SinkMBB merges return statuses via PHI node
@@ -1675,10 +2280,7 @@ SDValue EZHTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
     SDValue CPAddr = DAG.getTargetConstantPool(CPV, VT, Align(4));
 
     // Load the address of the exception table from the constant pool
-    SDValue Ops[] = {CPAddr, DAG.getEntryNode()};
-    return SDValue(
-        DAG.getMachineNode(EZH::LOAD_CONSTANT, dl, MVT::i32, MVT::Other, Ops),
-        0);
+    return getPoolLoad(DAG, dl, CPAddr);
   }
   }
 }
@@ -1757,7 +2359,7 @@ EZHTargetLowering::emitSjLjDispatchBlock(MachineInstr &MI,
   }
 
   // TrapBB just loops forever.
-  BuildMI(TrapBB, DL, TII->get(EZH::GOTO)).addMBB(TrapBB).addImm(EZHCC::ICC_EU);
+  BuildMI(TrapBB, DL, TII->get(EZH::GOTO)).addMBB(TrapBB);
   TrapBB->addSuccessor(TrapBB);
 
   // Load the address of DispatchBB and store it to jbuf[0] (offset 32 of
@@ -1783,6 +2385,11 @@ EZHTargetLowering::emitSjLjDispatchBlock(MachineInstr &MI,
       .addFrameIndex(FI)
       .addImm(44) // Offset 44 is jbuf[3]
       .addImm(EZHCC::ICC_EU);
+
+  // DispatchBB is entered abnormally (the SjLj personality longjmps into
+  // it): no register survives, so clobber everything before anything else
+  // (see SJLJ_RECEIVER_CLOBBER).
+  BuildMI(DispatchBB, DL, TII->get(EZH::SJLJ_RECEIVER_CLOBBER));
 
   // In DispatchBB, load the call_site value.
   Register CSReg = MRI.createVirtualRegister(&EZH::GPRRegClass);
@@ -1819,7 +2426,7 @@ EZHTargetLowering::emitSjLjDispatchBlock(MachineInstr &MI,
       .addImm(MaxCSNum)
       .addImm(EZHCC::ICC_EU);
 
-  BuildMI(DispatchBB, DL, TII->get(EZH::GOTO))
+  BuildMI(DispatchBB, DL, TII->get(EZH::GOTO_CC))
       .addMBB(TrapBB)
       .addImm(EZHCC::ICC_NC);
   DispatchBB->addSuccessor(TrapBB);

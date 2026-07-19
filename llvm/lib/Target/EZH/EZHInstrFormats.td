@@ -412,9 +412,14 @@ class EZHInstMemReg<bits<5> op, bits<1> isStore, bits<1> wordSize, bits<1> signe
 
   let Inst{13-10} = !if(isStore, 0, Rd);
   let Inst{17-14} = Rn; // source/raddr
-  let Inst{23-20} = !if(isStore, Rd, {0, 0, signedAccess, 0}); // rdata for store
-  let Inst{27-24} = Rm; // roffset
   let Inst{18}    = wordSize;
+  let Inst{23-20} = !if(isStore, Rd, 0); // rdata for store; 0 for load
+  let Inst{27-24} = Rm; // roffset
+  // Sign-extend control for a byte load. Validated on silicon (EVK-MIMXRT595):
+  // for the 0x1D register-offset form this is Inst{29}, NOT Inst{21} as the
+  // 0x01 immediate-offset form (EZHInstMem) uses -- 0x1D ignores bit 21. Stores
+  // and word loads pass signedAccess = 0.
+  let Inst{29}    = signedAccess;
   let Inst{30}    = isStore;
   let Inst{9}     = 0; // Force S bit to 0
 
@@ -526,11 +531,20 @@ class EZHInstRegShiftALU<bits<3> alu_op, bits<2> sh_type, bits<1> is_post, bits<
   let Inst{31-29} = alu_op;
 }
 
+// Vectored-hold field roles (silicon-derived): bits[13:10] = Rd, the register
+// that RECEIVES the vector -- on a dispatching wake the hardware writes
+// Rd := table + 4 + 4*slice (with Rd = PC that write IS the dispatch; the
+// plain HOLD is exactly this shape with Rd = PC and bit15 = inline resume).
+// bits[23:20] = the jump-table base register. bits[31:24] = the per-slice
+// dispatch-enable mask ("vectors", ACC form, bit9 = 1); a wake won by a
+// masked-out slice resumes inline (spurious-wake path). The non-ACC forms
+// encode an empty mask and therefore never dispatch.
 class EZHInstVectoredHold<bits<1> is_nra, bits<1> is_lv, dag outs, dag ins, string asmstr, list<dag> pattern>
     : EZHCondInst<outs, ins, asmstr, pattern> {
   let Opcode = OP_HOLD;
+  bits<4> Rd;
   bits<4> table;
-  let Inst{13-10} = table;
+  let Inst{13-10} = Rd;
   let Inst{23-20} = table;
   let Inst{15} = 0;
   let Inst{18} = is_nra;
@@ -544,9 +558,10 @@ class EZHInstVectoredHold<bits<1> is_nra, bits<1> is_lv, dag outs, dag ins, stri
 class EZHInstAccVectoredHold<bits<1> is_nra, bits<1> is_lv, dag outs, dag ins, string asmstr, list<dag> pattern>
     : EZHCondInst<outs, ins, asmstr, pattern> {
   let Opcode = OP_HOLD;
+  bits<4> Rd;
   bits<4> table;
   bits<8> vectors;
-  let Inst{13-10} = table;
+  let Inst{13-10} = Rd;
   let Inst{23-20} = table;
   let Inst{31-24} = vectors;
   let Inst{15} = 0;
