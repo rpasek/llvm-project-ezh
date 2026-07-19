@@ -130,6 +130,25 @@ def run_lines(path, B, tmp):
 
 
 def main():
+    # Optional overrides for gating upstream-series tips: --tree points at a
+    # different source checkout (tests run from there), --manifest replaces
+    # the built-in TESTS list with the file's lines (the per-series subset;
+    # blank lines and # comments ignored). Defaults preserve the classic
+    # `check_ezh.py [build/bin]` invocation over the full list.
+    global REPO
+    tests = TESTS
+    args = sys.argv[1:]
+    if "--tree" in args:
+        i = args.index("--tree")
+        REPO = os.path.abspath(args[i + 1])
+        del args[i:i + 2]
+    if "--manifest" in args:
+        i = args.index("--manifest")
+        with open(args[i + 1]) as mf:
+            tests = [ln.strip() for ln in mf
+                     if ln.strip() and not ln.lstrip().startswith("#")]
+        del args[i:i + 2]
+    sys.argv = [sys.argv[0]] + args
     B = find_bin()
     for tool in ("clang", "llc", "llvm-mc", "FileCheck", "not"):
         if not os.path.exists(os.path.join(B, tool)):
@@ -138,7 +157,7 @@ def main():
     npass = 0
     fails = []
     with tempfile.TemporaryDirectory() as td:
-        for i, rel in enumerate(TESTS):
+        for i, rel in enumerate(tests):
             path = os.path.join(REPO, rel)
             if not os.path.exists(path):
                 print(f"  MISSING  {rel}"); fails.append(rel); continue
@@ -151,7 +170,7 @@ def main():
                 print(f"        cmd: {cmd}")
                 for l in out.strip().splitlines()[:6]:
                     print(f"        | {l}")
-    print(f"\n{npass}/{len(TESTS)} passed")
+    print(f"\n{npass}/{len(tests)} passed")
     if fails:
         print("FAILED: " + ", ".join(fails)); sys.exit(1)
     print(">>> all EZH compiler tests pass (no hardware needed) <<<")
