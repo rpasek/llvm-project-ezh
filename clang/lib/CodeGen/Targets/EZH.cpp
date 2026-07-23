@@ -59,15 +59,11 @@ RValue EZHABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
     return Slot.asRValue();
 
   CharUnits TySize = getContext().getTypeSizeInChars(Ty);
-  CharUnits TyAlignForABI = getContext().getTypeUnadjustedAlignInChars(Ty);
-
-  // Bound the type's ABI alignment.
-  TyAlignForABI = std::max(TyAlignForABI, CharUnits::fromQuantity(4));
-  TyAlignForABI = std::min(TyAlignForABI, CharUnits::fromQuantity(8));
+  CharUnits TyAlignForABI = CharUnits::fromQuantity(4);
 
   TypeInfoChars TyInfo(TySize, TyAlignForABI, AlignRequirementKind::None);
   return emitVoidPtrVAArg(CGF, VAListAddr, Ty, /*IsIndirect=*/false, TyInfo,
-                          SlotSize, /*AllowHigherAlign=*/true, Slot);
+                          SlotSize, /*AllowHigherAlign=*/false, Slot);
 }
 
 bool EZHABIInfo::isIllegalVectorType(QualType Ty) const {
@@ -109,13 +105,11 @@ ABIArgInfo EZHABIInfo::classifyArgumentType(QualType Ty) const {
   if (isEmptyRecord(getContext(), Ty, true))
     return ABIArgInfo::getIgnore();
 
-  // AAPCS rules for aggregate alignment and size.
-  // The ABI alignment for AAPCS is at least 4-byte and at most 8-byte.
-  // We realign the indirect argument if type alignment is bigger than ABI
-  // alignment.
+  // EZH rules for aggregate alignment and size.
+  // The ABI alignment for EZH is 4-byte.
   uint64_t TyAlign =
       getContext().getTypeUnadjustedAlignInChars(Ty).getQuantity();
-  uint64_t ABIAlign = std::clamp(TyAlign, (uint64_t)4, (uint64_t)8);
+  uint64_t ABIAlign = 4;
 
   // If size > 64 bytes, pass indirect byval.
   if (getContext().getTypeSizeInChars(Ty) > CharUnits::fromQuantity(64)) {
@@ -125,16 +119,9 @@ ABIArgInfo EZHABIInfo::classifyArgumentType(QualType Ty) const {
         /*ByVal=*/true, /*Realign=*/TyAlign > ABIAlign);
   }
 
-  // Otherwise, pass by coercing to a structure of the appropriate size.
-  llvm::Type *ElemTy;
-  unsigned SizeRegs;
-  if (TyAlign <= 4) {
-    ElemTy = llvm::Type::getInt32Ty(getVMContext());
-    SizeRegs = (getContext().getTypeSize(Ty) + 31) / 32;
-  } else {
-    ElemTy = llvm::Type::getInt64Ty(getVMContext());
-    SizeRegs = (getContext().getTypeSize(Ty) + 63) / 64;
-  }
+  // Otherwise, pass by coercing to a structure of i32 elements.
+  llvm::Type *ElemTy = llvm::Type::getInt32Ty(getVMContext());
+  unsigned SizeRegs = (getContext().getTypeSize(Ty) + 31) / 32;
 
   return ABIArgInfo::getDirect(llvm::ArrayType::get(ElemTy, SizeRegs));
 }
