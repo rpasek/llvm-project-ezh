@@ -31,8 +31,7 @@ def CC_EZH : CallingConv<[
   // i64/f64 (or >= 8-byte aligned types) are passed in even pairs of GPRs (R0/R1 or R2/R3)
   // We match >= 8-alignment i32 parts, shadowing R1 as a pad register!
   CCIfType<[i32], CCIfAlign<"8", CCAssignToRegWithShadow<[R0, R2], [R0, R1]>>>,
-  CCIfType<[i32], CCIf<"ArgFlags.getNonZeroOrigAlign() < Align(8)",
-                       CCAssignToReg<[R0, R1, R2, R3]>>>,
+  CCIfType<[i32], CCAssignToReg<[R0, R1, R2, R3]>>,
 
   // Stack allocations with strict 8-byte alignment support for spilled types!
   CCIfType<[i32], CCIfAlign<"8", CCAssignToStackWithShadow<4, 8, [R0, R1, R2, R3]>>>,
